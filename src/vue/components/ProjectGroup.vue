@@ -73,6 +73,7 @@
         :attention-sessions="attentionSessions"
         :response-ready-sessions="responseReadySessions"
         :search-match-ids="searchMatchIds"
+        :show-archived="showArchived"
         :show-starred-only="showStarredOnly"
         :show-running-only="showRunningOnly"
         :show-today-only="showTodayOnly"
@@ -108,6 +109,7 @@ const props = defineProps({
   attentionSessions: { type: Set, required: true },
   responseReadySessions: { type: Set, required: true },
   searchMatchIds: { type: Set, default: null },
+  showArchived: Boolean,
   showStarredOnly: Boolean,
   showRunningOnly: Boolean,
   showTodayOnly: Boolean,
@@ -138,6 +140,11 @@ const showOlder = ref(false);
 
 const allItems = computed(() => {
   let sessions = props.project.sessions || [];
+
+  // Hide archived sessions unless explicitly showing them
+  if (!props.showArchived && !props.searchMatchIds) {
+    sessions = sessions.filter(s => !s.archived);
+  }
 
   // Filters
   if (props.showStarredOnly) sessions = sessions.filter(s => s.starred);

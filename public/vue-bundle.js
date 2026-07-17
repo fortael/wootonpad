@@ -4525,6 +4525,7 @@
 				type: Set,
 				default: null
 			},
+			showArchived: Boolean,
 			showStarredOnly: Boolean,
 			showRunningOnly: Boolean,
 			showTodayOnly: Boolean,
@@ -4571,6 +4572,7 @@
 			const showOlder = /* @__PURE__ */ ref(false);
 			const allItems = computed(() => {
 				let sessions = props.project.sessions || [];
+				if (!props.showArchived && !props.searchMatchIds) sessions = sessions.filter((s) => !s.archived);
 				if (props.showStarredOnly) sessions = sessions.filter((s) => s.starred);
 				if (props.showRunningOnly) sessions = sessions.filter((s) => props.activePtyIds.has(s.sessionId));
 				if (props.showTodayOnly) {
@@ -4744,6 +4746,7 @@
 							"attention-sessions": __props.attentionSessions,
 							"response-ready-sessions": __props.responseReadySessions,
 							"search-match-ids": __props.searchMatchIds,
+							"show-archived": __props.showArchived,
 							"show-starred-only": __props.showStarredOnly,
 							"show-running-only": __props.showRunningOnly,
 							"show-today-only": __props.showTodayOnly,
@@ -4769,6 +4772,7 @@
 							"attention-sessions",
 							"response-ready-sessions",
 							"search-match-ids",
+							"show-archived",
 							"show-starred-only",
 							"show-running-only",
 							"show-today-only",
@@ -4810,7 +4814,6 @@
 			});
 			const visibleProjects = computed(() => {
 				let projects = store.projects;
-				if (!store.showArchived && store.searchMatchIds === null) {}
 				if (store.searchMatchIds !== null) projects = projects.map((p) => {
 					const hasMatchingSessions = p.sessions.some((s) => store.searchMatchIds.has(s.sessionId));
 					const projectMatched = store.searchMatchProjectPaths?.has(p.projectPath);
@@ -4821,6 +4824,9 @@
 						_projectMatchedOnly: projectMatched && !hasMatchingSessions
 					};
 				}).filter(Boolean);
+				else projects = projects.filter((p) => {
+					return (store.showArchived ? p.sessions : p.sessions.filter((s) => !s.archived)).length > 0;
+				});
 				return projects.filter((p) => !worktreeSet.value.has(p.projectPath));
 			});
 			function onOpen(session) {
@@ -4871,6 +4877,7 @@
 						"attention-sessions": unref(store).attentionSessions,
 						"response-ready-sessions": unref(store).responseReadySessions,
 						"search-match-ids": unref(store).searchMatchIds,
+						"show-archived": unref(store).showArchived,
 						"show-starred-only": unref(store).showStarredOnly,
 						"show-running-only": unref(store).showRunningOnly,
 						"show-today-only": unref(store).showTodayOnly,
@@ -4897,6 +4904,7 @@
 						"attention-sessions",
 						"response-ready-sessions",
 						"search-match-ids",
+						"show-archived",
 						"show-starred-only",
 						"show-running-only",
 						"show-today-only",

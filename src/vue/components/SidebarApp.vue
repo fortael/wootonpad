@@ -11,6 +11,7 @@
       :attention-sessions="store.attentionSessions"
       :response-ready-sessions="store.responseReadySessions"
       :search-match-ids="store.searchMatchIds"
+      :show-archived="store.showArchived"
       :show-starred-only="store.showStarredOnly"
       :show-running-only="store.showRunningOnly"
       :show-today-only="store.showTodayOnly"
@@ -66,10 +67,9 @@ const worktreeSet = computed(() => {
 
 const visibleProjects = computed(() => {
   let projects = store.projects;
-  if (!store.showArchived && store.searchMatchIds === null) {
-    // non-archived is already filtered server-side via cachedProjects vs cachedAllProjects
-  }
+
   if (store.searchMatchIds !== null) {
+    // Search: show all projects that match by session or by project name
     projects = projects
       .map(p => {
         const hasMatchingSessions = p.sessions.some(s => store.searchMatchIds.has(s.sessionId));
@@ -82,7 +82,16 @@ const visibleProjects = computed(() => {
         };
       })
       .filter(Boolean);
+  } else {
+    // Default: hide projects with no non-archived sessions
+    projects = projects.filter(p => {
+      const nonArchived = store.showArchived
+        ? p.sessions
+        : p.sessions.filter(s => !s.archived);
+      return nonArchived.length > 0;
+    });
   }
+
   return projects.filter(p => !worktreeSet.value.has(p.projectPath));
 });
 
