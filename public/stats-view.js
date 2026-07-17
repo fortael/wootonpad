@@ -2,27 +2,40 @@
 // Depends on globals: escapeHtml (utils.js), statsViewerBody (app.js)
 
 let cachedUsage = null;
+let cachedStats = null;
+let statsLoadedAt = 0;
+const STATS_TTL_MS = 60_000;
 
 async function loadStats() {
   statsViewerBody.innerHTML = '';
 
-  // Show spinner while refreshing
-  const spinner = document.createElement('div');
-  spinner.className = 'stats-spinner';
-  spinner.innerHTML = `<div class="stats-spinner-icon"></div><span>Updating stats\u2026</span>`;
-  statsViewerBody.appendChild(spinner);
-
-  // Refresh stats cache via PTY (/stats + /usage)
+  const age = Date.now() - statsLoadedAt;
   let stats, usage;
-  try {
-    const result = await window.api.refreshStats();
-    stats = result?.stats;
-    usage = result?.usage || {};
-    cachedUsage = usage;
-  } catch {
-    // Fallback to cached stats
-    stats = await window.api.getStats();
+
+  if (cachedStats && age < STATS_TTL_MS) {
+    // Cache still fresh \u2014 render immediately, no network call
+    stats = cachedStats;
     usage = cachedUsage || {};
+  } else {
+    // Show spinner only when actually fetching
+    const spinner = document.createElement('div');
+    spinner.className = 'stats-spinner';
+    spinner.innerHTML = `<div class="stats-spinner-icon"></div><span>Updating stats\u2026</span>`;
+    statsViewerBody.appendChild(spinner);
+
+    // Refresh stats cache via PTY (/stats + /usage)
+    try {
+      const result = await window.api.refreshStats();
+      stats = result?.stats;
+      usage = result?.usage || {};
+      cachedStats = stats;
+      cachedUsage = usage;
+      statsLoadedAt = Date.now();
+    } catch {
+      // Fallback to cached stats
+      stats = cachedStats || await window.api.getStats();
+      usage = cachedUsage || {};
+    }
   }
 
   statsViewerBody.innerHTML = '';
@@ -90,6 +103,7 @@ function buildUsageSection(usage) {
       const freshUsage = await window.api.getUsage();
       if (freshUsage && Object.keys(freshUsage).length) {
         cachedUsage = freshUsage;
+        statsLoadedAt = 0; // invalidate TTL so next tab-open does a full refresh
         buildUsageSection(freshUsage);
       }
     } catch {}

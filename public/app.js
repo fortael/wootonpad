@@ -455,6 +455,9 @@ function clearSearch() {
     renderPlans(cachedPlans);
   } else if (activeTab === 'memory') {
     renderMemories();
+  } else if (activeTab === 'projects') {
+    projectsSearchQuery = '';
+    renderProjectsPanel();
   }
 }
 
@@ -502,6 +505,9 @@ searchInput.addEventListener('input', () => {
         const results = await window.api.search('memory', query, searchTitlesOnly);
         const matchIds = new Set(results.map(r => r.id));
         renderMemories(matchIds);
+      } else if (activeTab === 'projects') {
+        projectsSearchQuery = query;
+        renderProjectsPanel();
       }
     } catch {
       if (activeTab === 'sessions') {
@@ -911,6 +917,9 @@ document.querySelectorAll('.sidebar-tab').forEach(tab => {
         refreshAccountUsage().then(() => renderAccountsPanel());
       }
     } else if (tabName === 'projects') {
+      searchBar.style.display = '';
+      searchInput.placeholder = 'Search projects…';
+      searchInput.value = projectsSearchQuery;
       if (projectsContent) {
         projectsContent.style.display = '';
         if (projectsChangedWhileAway) {
@@ -1290,58 +1299,123 @@ async function switchAccount(id) {
   if (activeTab === 'projects') loadProjects().then(() => renderProjectsPanel());
 }
 
+// makeGroup is defined in utils.js (loaded first)
+// Keep old name as alias for any remaining callers
 function makePanelHeader(titleText, btnLabel, onBtnClick) {
-  const wrap = document.createElement('div');
-  wrap.className = 'panel-section-header';
-  const title = document.createElement('span');
-  title.className = 'panel-section-title';
-  title.textContent = titleText;
-  wrap.appendChild(title);
-  if (btnLabel) {
-    const btn = document.createElement('button');
-    btn.className = 'panel-section-btn';
-    btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/></svg> ' + btnLabel;
-    btn.addEventListener('click', onBtnClick);
-    wrap.appendChild(btn);
-  }
-  return wrap;
+  return makeGroup(titleText, btnLabel, onBtnClick).group;
 }
 
 function renderAccountsPanel() {
   if (!accountsContent) return;
   accountsContent.innerHTML = '';
 
-  accountsContent.appendChild(makePanelHeader('Accounts'));
+  const { list: accountsList } = makeGroup('Accounts');
+  accountsContent.appendChild(accountsList.parentElement);
 
   for (const acc of accounts) {
-    const card = document.createElement('div');
-    card.className = 'account-card' + (acc.id === activeAccountId ? ' active-account' : '');
+    // Trailing: edit button + open button + delete button
+    const actions = document.createElement('div');
+    actions.className = 'account-card-actions';
 
-    // ── Header row: dot + name (editable) + actions ──
-    const header = document.createElement('div');
-    header.className = 'account-card-header';
+    const openBtn = document.createElement('button');
+    openBtn.className = 'account-open-btn';
+    openBtn.dataset.tooltip = 'Open Claude session in home directory';
+    openBtn.textContent = 'Open Claude';
+    openBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      if (acc.id !== activeAccountId) await switchAccount(acc.id);
+      await openAccountHomeSession(acc);
+    });
 
-    const dot = document.createElement('span');
-    dot.className = 'account-row-dot';
-
-    // Editable name
-    const nameWrap = document.createElement('div');
-    nameWrap.className = 'account-card-name-wrap';
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'account-card-name';
-    nameSpan.textContent = acc.name;
-    const nameEditInput = document.createElement('input');
-    nameEditInput.className = 'account-row-name-input';
-    nameEditInput.value = acc.name;
-    nameEditInput.style.display = 'none';
     const editBtn = document.createElement('button');
     editBtn.className = 'account-edit-btn';
     editBtn.dataset.tooltip = 'Rename';
     editBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
 
+    actions.appendChild(editBtn);
+    actions.appendChild(openBtn);
+
+    if (acc.id !== 'default') {
+      const del = document.createElement('button');
+      del.className = 'account-row-del';
+      del.dataset.tooltip = 'Remove account';
+      del.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>';
+      del.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm(`Remove account "${acc.name}"?`)) return;
+        if (activeAccountId === acc.id) await switchAccount('default');
+        accounts = accounts.filter(a => a.id !== acc.id);
+        await window.api.deleteAccount(acc.id);
+        updateAccountDropdown();
+        renderAccountsPanel();
+      });
+      actions.appendChild(del);
+    }
+
+    // ── Usage block (children slot) ──
+    const accUsage = accountsUsage[acc.id] || {};
+    const usageDefs = [
+      { key: 'session', resetInKey: 'sessionResetIn', label: '5h' },
+      { key: 'weekAll', resetInKey: 'weekAllResetIn', label: '7d' },
+    ];
+    const usageRows = usageDefs.filter(d => accUsage[d.key] != null);
+    let usageBlock = null;
+    if (usageRows.length) {
+      usageBlock = document.createElement('div');
+      usageBlock.className = 'account-usage-block';
+      for (const d of usageRows) {
+        const pct = accUsage[d.key];
+        const barPct = Math.min(pct, 100);
+        const usageRow = document.createElement('div');
+        usageRow.className = 'account-usage-row';
+
+        const label = document.createElement('span');
+        label.className = 'account-usage-label';
+        label.textContent = d.label;
+
+        const barWrap = document.createElement('div');
+        barWrap.className = 'account-usage-bar';
+        const barFill = document.createElement('div');
+        barFill.className = 'account-usage-bar-fill' + (barPct >= 90 ? ' danger' : barPct >= 70 ? ' warn' : '');
+        barFill.style.width = barPct + '%';
+        barWrap.appendChild(barFill);
+
+        const usageInfo = document.createElement('span');
+        usageInfo.className = 'account-usage-info';
+        const resetIn = accUsage[d.resetInKey];
+        usageInfo.textContent = `${pct}%` + (resetIn ? `  · resets in ${resetIn}~` : '');
+
+        usageRow.appendChild(label);
+        usageRow.appendChild(barWrap);
+        usageRow.appendChild(usageInfo);
+        usageBlock.appendChild(usageRow);
+      }
+      if (accUsage._cached) {
+        const stale = document.createElement('div');
+        stale.className = 'account-usage-cached-note';
+        stale.textContent = 'cached data';
+        usageBlock.appendChild(stale);
+      }
+    }
+
+    const { item: card, titleEl: nameEl } = buildListItem({
+      title: acc.name,
+      subtitle: acc.configDir || '~/.claude (default)',
+      trailing: actions,
+      classes: ['account-item', acc.id === activeAccountId ? 'active' : ''],
+      children: usageBlock,
+    });
+
+    // Inline name editing via dblclick on title
+    const nameEditInput = document.createElement('input');
+    nameEditInput.className = 'account-row-name-input';
+    nameEditInput.value = acc.name;
+    nameEditInput.style.display = 'none';
+    nameEl.after(nameEditInput);
+
     const startEdit = (e) => {
       e?.stopPropagation();
-      nameSpan.style.display = 'none';
+      nameEl.style.display = 'none';
       editBtn.style.display = 'none';
       nameEditInput.style.display = '';
       nameEditInput.focus();
@@ -1355,131 +1429,34 @@ function renderAccountsPanel() {
         updateAccountDropdown();
       }
       nameEditInput.style.display = 'none';
-      nameSpan.textContent = acc.name;
-      nameSpan.style.display = '';
+      nameEl.textContent = acc.name;
+      nameEl.style.display = '';
       editBtn.style.display = '';
     };
     editBtn.addEventListener('click', startEdit);
-    nameSpan.addEventListener('dblclick', startEdit);
+    nameEl.addEventListener('dblclick', startEdit);
     nameEditInput.addEventListener('blur', saveNameEdit);
     nameEditInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); nameEditInput.blur(); }
       if (e.key === 'Escape') { nameEditInput.value = acc.name; nameEditInput.blur(); }
     });
     nameEditInput.addEventListener('click', (e) => e.stopPropagation());
-    nameWrap.appendChild(nameSpan);
-    nameWrap.appendChild(nameEditInput);
-    nameWrap.appendChild(editBtn);
-
-    // Actions: open-session + delete
-    const actions = document.createElement('div');
-    actions.className = 'account-card-actions';
-
-    const openBtn = document.createElement('button');
-    openBtn.className = 'account-open-btn';
-    openBtn.dataset.tooltip = 'Open Claude session in home directory';
-    openBtn.textContent = 'Open Claude';
-    openBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      if (acc.id !== activeAccountId) await switchAccount(acc.id);
-      await openAccountHomeSession(acc);
-    });
-    actions.appendChild(openBtn);
-
-    if (acc.id !== 'default') {
-      const del = document.createElement('button');
-      del.className = 'account-row-del';
-      del.dataset.tooltip = 'Remove account';
-      del.textContent = '×';
-      del.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        if (!confirm(`Remove account "${acc.name}"?`)) return;
-        if (activeAccountId === acc.id) await switchAccount('default');
-        accounts = accounts.filter(a => a.id !== acc.id);
-        await window.api.deleteAccount(acc.id);
-        updateAccountDropdown();
-        renderAccountsPanel();
-      });
-      actions.appendChild(del);
-    }
-
-    header.appendChild(dot);
-    header.appendChild(nameWrap);
-    header.appendChild(actions);
-
-    // ── Meta row: dir ──
-    const meta = document.createElement('div');
-    meta.className = 'account-card-meta';
-    const dirEl = document.createElement('span');
-    dirEl.className = 'account-row-dir';
-    dirEl.textContent = acc.configDir || '~/.claude (default)';
-    meta.appendChild(dirEl);
-
-    card.appendChild(header);
-    card.appendChild(meta);
-
-    // ── Usage block: progress bars + reset times ──
-    const accUsage = accountsUsage[acc.id] || {};
-    const usageDefs = [
-      { key: 'session', resetInKey: 'sessionResetIn', label: '5h' },
-      { key: 'weekAll', resetInKey: 'weekAllResetIn', label: '7d' },
-    ];
-    const usageRows = usageDefs.filter(d => accUsage[d.key] != null);
-    if (usageRows.length) {
-      const block = document.createElement('div');
-      block.className = 'account-usage-block';
-      for (const d of usageRows) {
-        const pct = accUsage[d.key];
-        const barPct = Math.min(pct, 100);
-        const row = document.createElement('div');
-        row.className = 'account-usage-row';
-
-        const label = document.createElement('span');
-        label.className = 'account-usage-label';
-        label.textContent = d.label;
-
-        const barWrap = document.createElement('div');
-        barWrap.className = 'account-usage-bar';
-        const barFill = document.createElement('div');
-        barFill.className = 'account-usage-bar-fill' + (barPct >= 90 ? ' danger' : barPct >= 70 ? ' warn' : '');
-        barFill.style.width = barPct + '%';
-        barWrap.appendChild(barFill);
-
-        const info = document.createElement('span');
-        info.className = 'account-usage-info';
-        const resetIn = accUsage[d.resetInKey];
-        info.textContent = `${pct}%` + (resetIn ? `  · resets in ${resetIn}~` : '');
-
-        row.appendChild(label);
-        row.appendChild(barWrap);
-        row.appendChild(info);
-        block.appendChild(row);
-      }
-      if (accUsage._cached) {
-        const stale = document.createElement('div');
-        stale.className = 'account-usage-cached-note';
-        stale.textContent = 'cached data';
-        block.appendChild(stale);
-      }
-      card.appendChild(block);
-    }
 
     // Click card body = switch account (but not open session)
     card.addEventListener('click', async () => {
       if (acc.id !== activeAccountId) await switchAccount(acc.id);
     });
-    accountsContent.appendChild(card);
+    accountsList.appendChild(card);
   }
 
   // Add account section
-  const addSectionHeader = makePanelHeader('Add account');
-  addSectionHeader.style.marginTop = '16px';
-  accountsContent.appendChild(addSectionHeader);
+  const { list: addList } = makeGroup('Add account');
+  accountsContent.appendChild(addList.parentElement);
 
   const desc = document.createElement('p');
   desc.className = 'accounts-add-desc';
   desc.textContent = 'Each account uses its own Claude credentials and session history. Add a second account to switch between personal and work Claude Pro plans, or any two separate logins.';
-  accountsContent.appendChild(desc);
+  addList.appendChild(desc);
 
   const form = document.createElement('div');
   form.className = 'accounts-add-form';
@@ -1511,7 +1488,7 @@ function renderAccountsPanel() {
 
   form.appendChild(newNameInput);
   form.appendChild(addBtn);
-  accountsContent.appendChild(form);
+  addList.appendChild(form);
 }
 
 let projectsSearchQuery = '';
@@ -1695,21 +1672,12 @@ function renderProjectsPanel() {
 
   const allProjects = cachedAllProjects;
 
-  projectsContent.appendChild(makePanelHeader(`Projects (${allProjects.length})`, 'Add', () => showAddProjectDialog()));
+  const { group: projectsGroup, list: projectsList } = makeGroup(
+    `Projects (${allProjects.length})`, 'Add', () => showAddProjectDialog()
+  );
+  projectsContent.appendChild(projectsGroup);
 
-  // Search + sort row
-  const searchWrap = document.createElement('div');
-  searchWrap.className = 'projects-search-wrap';
-
-  const searchInput = document.createElement('input');
-  searchInput.className = 'projects-search-input';
-  searchInput.placeholder = 'Search projects…';
-  searchInput.value = projectsSearchQuery;
-  searchInput.addEventListener('input', () => {
-    projectsSearchQuery = searchInput.value;
-    renderProjectsList(searchInput.value);
-  });
-
+  // Sort buttons — inside project-header (next to the Add button)
   const sortWrap = document.createElement('div');
   sortWrap.className = 'projects-sort-wrap';
   for (const [key, label] of [['name', 'Name'], ['changes', 'Changes']]) {
@@ -1718,19 +1686,16 @@ function renderProjectsPanel() {
     btn.textContent = label;
     btn.addEventListener('click', () => {
       projectsSortOrder = key;
-      renderProjectsList(searchInput.value);
+      renderProjectsList(projectsSearchQuery);
       sortWrap.querySelectorAll('.projects-sort-btn').forEach(b => b.classList.toggle('active', b === btn));
     });
     sortWrap.appendChild(btn);
   }
-
-  searchWrap.appendChild(searchInput);
-  searchWrap.appendChild(sortWrap);
-  projectsContent.appendChild(searchWrap);
+  projectsGroup.querySelector('.project-header').appendChild(sortWrap);
 
   const listEl = document.createElement('div');
   listEl.id = 'projects-list';
-  projectsContent.appendChild(listEl);
+  projectsList.appendChild(listEl);
 
   function renderInfoEl(infoEl, info) {
     if (!info) return;
@@ -1738,8 +1703,8 @@ function renderProjectsPanel() {
     let hasContent = false;
 
     // Merge branch info into the card's meta row
-    const card = infoEl.closest('.project-card');
-    const metaEl = card && card.querySelector('.project-card-meta');
+    const card = infoEl.closest('.project-item');
+    const metaEl = card && card.querySelector('.session-meta');
     if (metaEl) {
       const base = metaEl.dataset.baseText || metaEl.textContent;
       metaEl.dataset.baseText = base;
@@ -1871,39 +1836,13 @@ function renderProjectsPanel() {
       const sessionCount = project.sessions.length;
       const { initials, color } = getProjectAvatar(project.projectPath);
 
-      const card = document.createElement('div');
-      card.className = 'project-card';
-
-      // Header row: avatar + text + actions
-      const cardHeader = document.createElement('div');
-      cardHeader.className = 'project-card-header';
-
+      // Leading: avatar
       const avatarEl = document.createElement('span');
       avatarEl.className = 'project-card-avatar';
       avatarEl.textContent = initials;
       avatarEl.style.background = color;
 
-      const info = document.createElement('div');
-      info.className = 'project-card-info';
-
-      const nameEl = document.createElement('div');
-      nameEl.className = 'project-card-name';
-      nameEl.textContent = name;
-
-      const pathEl = document.createElement('div');
-      pathEl.className = 'project-card-path';
-      pathEl.dataset.tooltip = project.projectPath;
-      pathEl.textContent = project.projectPath;
-
-      const metaEl = document.createElement('div');
-      metaEl.className = 'project-card-meta';
-      metaEl.dataset.baseText = `${sessionCount} session${sessionCount !== 1 ? 's' : ''} · ${lastActivity}`;
-      metaEl.textContent = metaEl.dataset.baseText;
-
-      info.appendChild(nameEl);
-      info.appendChild(pathEl);
-      info.appendChild(metaEl);
-
+      // Trailing: action buttons
       const cardActions = document.createElement('div');
       cardActions.className = 'project-card-actions';
 
@@ -1929,23 +1868,28 @@ function renderProjectsPanel() {
       cardActions.appendChild(newBtn);
       cardActions.appendChild(delBtn);
 
-      cardHeader.appendChild(avatarEl);
-      cardHeader.appendChild(info);
-      cardHeader.appendChild(cardActions);
+      // Env area (children slot) — spans full width below the row
+      const envEl = document.createElement('div');
+      envEl.className = 'project-card-env';
+      envEl.dataset.projectInfo = project.projectPath;
 
-      // Env area spans full card width below header
-      const infoEl = document.createElement('div');
-      infoEl.className = 'project-card-env';
-      infoEl.dataset.projectInfo = project.projectPath;
-      infoEl.dataset.metaRef = project.projectPath; // used to find metaEl
-
-      card.appendChild(cardHeader);
-      card.appendChild(infoEl);
+      const metaText = `${sessionCount} session${sessionCount !== 1 ? 's' : ''} · ${lastActivity}`;
+      const { item: card, subtitleEl: pathEl, metaEl } = buildListItem({
+        title: name,
+        subtitle: project.projectPath,
+        meta: metaText,
+        leading: avatarEl,
+        trailing: cardActions,
+        classes: ['project-item'],
+        children: envEl,
+      });
+      pathEl.dataset.tooltip = project.projectPath;
+      metaEl.dataset.baseText = metaText;
 
       card.addEventListener('click', (e) => {
         if (e.target.closest('.project-card-actions')) return;
-        listEl.querySelectorAll('.project-card.selected').forEach(c => c.classList.remove('selected'));
-        card.classList.add('selected');
+        listEl.querySelectorAll('.project-item.active').forEach(c => c.classList.remove('active'));
+        card.classList.add('active');
         openProjectViewer(project);
       });
 

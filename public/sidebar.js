@@ -29,7 +29,7 @@ function buildSlugGroup(slug, sessions) {
     const bTime = lastActivityTime.get(b.sessionId) || new Date(b.modified);
     return bTime > aTime ? b : a;
   });
-  const displayName = cleanDisplayName(mostRecent.name || mostRecent.aiTitle || mostRecent.summary || slug);
+  const displayName = cleanDisplayName(mostRecent.name || mostRecent.summary || slug);
   const mostRecentTime = lastActivityTime.get(mostRecent.sessionId) || new Date(mostRecent.modified);
   const timeStr = formatDate(mostRecentTime);
 
@@ -654,7 +654,7 @@ function buildSessionItem(session) {
 
   const modified = lastActivityTime.get(session.sessionId) || new Date(session.modified);
   const timeStr = formatDate(modified);
-  const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary);
+  const displayName = cleanDisplayName(session.name || session.summary);
 
   const row = document.createElement('div');
   row.className = 'session-row';
@@ -686,8 +686,7 @@ function buildSessionItem(session) {
   }
   info.appendChild(summaryEl);
 
-  // Show aiTitle as subtitle when it's not already used as the display name
-  if (session.aiTitle && session.aiTitle !== displayName) {
+  if (session.aiTitle) {
     const subtitleEl = document.createElement('div');
     subtitleEl.className = 'session-subtitle';
     subtitleEl.textContent = cleanDisplayName(session.aiTitle);
@@ -751,7 +750,7 @@ function startRename(summaryEl, session) {
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'session-rename-input';
-  const currentDisplay = session.name || session.aiTitle || session.summary;
+  const currentDisplay = session.name || session.summary;
   input.value = currentDisplay;
 
   summaryEl.replaceWith(input);
