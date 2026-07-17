@@ -59,8 +59,8 @@ function setActiveSession(id) {
   activeSessionId = id;
   if (id) sessionStorage.setItem('activeSessionId', id);
   else sessionStorage.removeItem('activeSessionId');
-  // Update file panel to show this session's open files/diffs
   if (typeof switchPanel === 'function') switchPanel(id);
+  window.vueSidebar?.setActiveSession(id);
 }
 // Persist slug group expand state across reloads
 function getExpandedSlugs() {
@@ -114,36 +114,24 @@ const attentionSessions = new Set(); // sessions needing user action (OSC 9)
 const responseReadySessions = new Set(); // Claude finished, user hasn't looked (terminal state)
 const sessionBusyState = new Map(); // sessionId → boolean (currently active)
 const lastActivityTime = new Map(); // sessionId → Date of last terminal output
+window.lastActivityTime = lastActivityTime; // exposed for Vue components
 
 // Noise patterns — these don't count as activity
 const activityNoiseRe = /file-history-snapshot|^\s*$/;
 
 // Central activity dispatcher
 function setActivity(sessionId, active) {
-  if (responseReadySessions.has(sessionId)) {
-    return;
-  }
+  if (responseReadySessions.has(sessionId)) return;
 
   const wasActive = sessionBusyState.get(sessionId) || false;
   sessionBusyState.set(sessionId, active);
 
-  if (wasActive && !active) {
-    // Activity ended → response-ready if user isn't looking at this session
-    if (sessionId !== activeSessionId) {
-      responseReadySessions.add(sessionId);
-      const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
-      if (item) {
-        item.classList.remove('cli-busy');
-        item.classList.add('response-ready');
-      }
-    }
+  if (wasActive && !active && sessionId !== activeSessionId) {
+    responseReadySessions.add(sessionId);
+    window.vueSidebar?.setResponseReady(sessionId);
   }
 
-  // Sync cli-busy class (only if not response-ready)
-  if (!responseReadySessions.has(sessionId)) {
-    const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
-    if (item) item.classList.toggle('cli-busy', active);
-  }
+  window.vueSidebar?.setBusy(sessionId, active);
 }
 
 // Terminal output activity — updates lastActivityTime only, busy state driven by backend
@@ -154,17 +142,13 @@ function trackActivity(sessionId, data) {
 
 function clearUnread(sessionId) {
   responseReadySessions.delete(sessionId);
-  const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
-  if (item) {
-    item.classList.remove('response-ready');
-  }
+  window.vueSidebar?.clearNotifications(sessionId);
 }
 
 function clearNotifications(sessionId) {
   clearUnread(sessionId);
   attentionSessions.delete(sessionId);
-  const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
-  if (item) item.classList.remove('needs-attention');
+  window.vueSidebar?.clearNotifications(sessionId);
 }
 // Terminal themes, utils (cleanDisplayName, formatDate, escapeHtml, shellEscape)
 // are defined in terminal-themes.js and utils.js (loaded before app.js).
@@ -283,6 +267,7 @@ window.api.onProcessExited((sessionId, exitCode) => {
   } else if (activeSessionId === sessionId) {
     setActiveSession(null);
     terminalHeader.style.display = 'none';
+    window.vueSidebar?.clearHeader();
     placeholder.style.display = '';
   }
 
@@ -326,8 +311,7 @@ window.api.onTerminalNotification((sessionId, message) => {
   // 4. "Claude Code wants to enter plan mode"         → wants to enter
   if (/attention|approval|permission|needs your|wants to enter/i.test(message) && sessionId !== activeSessionId) {
     attentionSessions.add(sessionId);
-    const item = document.querySelector(`.session-item[data-session-id="${sessionId}"]`);
-    if (item) item.classList.add('needs-attention');
+    window.vueSidebar?.addAttention(sessionId);
   } else if (/waiting for your input/i.test(message)) {
     // "Claude is waiting for your input" — delayed idle notification, mark response-ready
     setActivity(sessionId, false);
@@ -350,24 +334,14 @@ window.api.onCliBusyState((sessionId, busy) => {
 // resort=false (default): preserve existing DOM order, new items go to top
 function refreshSidebar({ resort = false } = {}) {
   // When searching, always use all projects (search ignores archive filter)
-  let projects = (searchMatchIds !== null)
+  const projects = (searchMatchIds !== null)
     ? cachedAllProjects
     : (showArchived ? cachedAllProjects : cachedProjects);
 
-  if (searchMatchIds !== null) {
-    projects = projects.map(p => {
-      const hasMatchingSessions = p.sessions.some(s => searchMatchIds.has(s.sessionId));
-      const projectMatched = searchMatchProjectPaths && searchMatchProjectPaths.has(p.projectPath);
-      if (!hasMatchingSessions && !projectMatched) return null;
-      return {
-        ...p,
-        sessions: hasMatchingSessions ? p.sessions.filter(s => searchMatchIds.has(s.sessionId)) : [],
-        _projectMatchedOnly: projectMatched && !hasMatchingSessions,
-      };
-    }).filter(Boolean);
-  }
-
-  renderProjects(projects, resort);
+  // Vue sidebar handles its own filtering; just pass the full project list
+  window.vueSidebar?.setProjects(projects);
+  window.vueSidebar?.setSearch(searchMatchIds, searchMatchProjectPaths);
+  window.vueSidebar?.setFilters({ showStarredOnly, showRunningOnly, showTodayOnly, showArchived });
 }
 
 // --- Archive toggle ---
@@ -519,7 +493,7 @@ searchInput.addEventListener('input', () => {
   }, 200);
 });
 
-// --- Stop session helper ---
+// --- Stop session helper (exposed globally for Vue components) ---
 async function confirmAndStopSession(sessionId) {
   if (!confirm('Stop this session?')) return;
   await window.api.stopSession(sessionId);
@@ -532,6 +506,8 @@ async function confirmAndStopSession(sessionId) {
   refreshSidebar();
 }
 
+window.confirmAndStopSession = (id) => confirmAndStopSession(id);
+
 // --- Terminal header controls ---
 terminalStopBtn.addEventListener('click', () => {
   if (activeSessionId) confirmAndStopSession(activeSessionId);
@@ -543,6 +519,7 @@ async function pollActiveSessions() {
   try {
     const ids = await window.api.getActiveSessions();
     activePtyIds = new Set(ids);
+    window.vueSidebar?.setActivePtyIds(ids);
     updateRunningIndicators();
     updateTerminalHeader();
   } catch {}
@@ -594,11 +571,15 @@ function updateTerminalHeader() {
 const terminalHeaderPtyTitle = document.getElementById('terminal-header-pty-title');
 
 function updatePtyTitle() {
-  if (!activeSessionId || !terminalHeaderPtyTitle) return;
+  if (!activeSessionId) return;
   const entry = openSessions.get(activeSessionId);
   const title = entry?.ptyTitle || '';
-  terminalHeaderPtyTitle.textContent = title;
-  terminalHeaderPtyTitle.style.display = title ? '' : 'none';
+  window.vueSidebar?.setHeaderPtyTitle(title || null);
+  // Legacy DOM fallback
+  if (terminalHeaderPtyTitle) {
+    terminalHeaderPtyTitle.textContent = title;
+    terminalHeaderPtyTitle.style.display = title ? '' : 'none';
+  }
 }
 
 setInterval(pollActiveSessions, 3000);
@@ -755,39 +736,34 @@ function openNewSession(project) {
 }
 
 async function showTerminalHeader(session) {
-  const displayName = cleanDisplayName(session.name || session.aiTitle || session.summary);
-  terminalHeaderName.textContent = displayName;
-  terminalHeaderId.textContent = session.sessionId;
-  terminalHeader.style.display = '';
-  updateTerminalHeader();
+  // Drive Vue header
+  window.vueSidebar?.setHeaderSession(session);
 
-  // Show account badge when there are multiple accounts (always identify which account)
-  if (terminalHeaderAccount) {
-    if (accounts.length > 1) {
-      const sessAccId = session.accountId || 'default';
-      const acc = getAccountById(sessAccId);
-      terminalHeaderAccount.textContent = acc.name;
-      terminalHeaderAccount.style.display = '';
-    } else {
-      terminalHeaderAccount.style.display = 'none';
-    }
+  // Account badge
+  if (accounts.length > 1) {
+    const acc = getAccountById(session.accountId || 'default');
+    window.vueSidebar?.setHeaderAccount(acc.name);
+  } else {
+    window.vueSidebar?.setHeaderAccount(null);
   }
 
-  // Show active shell profile
+  // Shell profile (async)
   try {
     const effective = await window.api.getEffectiveSettings(session.projectPath);
     const profileId = effective.shellProfile || 'auto';
-    if (profileId === 'auto') {
-      terminalHeaderShell.style.display = 'none';
-    } else {
+    if (profileId !== 'auto') {
       const profiles = await window.api.getShellProfiles();
       const profile = profiles.find(p => p.id === profileId);
-      terminalHeaderShell.textContent = profile ? profile.name : profileId;
-      terminalHeaderShell.style.display = '';
+      window.vueSidebar?.setHeaderShellProfile(profile ? profile.name : profileId);
+    } else {
+      window.vueSidebar?.setHeaderShellProfile(null);
     }
   } catch {
-    terminalHeaderShell.style.display = 'none';
+    window.vueSidebar?.setHeaderShellProfile(null);
   }
+
+  // Keep legacy DOM header hidden (Vue header renders instead)
+  terminalHeader.style.display = 'none';
 }
 
 // Terminal lifecycle (createTerminalEntry, destroySession, showSession, setupDragAndDrop) → terminal-manager.js
@@ -1970,3 +1946,80 @@ async function initAccounts() {
 }());
 
 initAccounts();
+
+// --- Mount Vue apps ---
+(function mountVue() {
+  const sidebarEl = document.getElementById('sidebar-content');
+  const headerEl = document.getElementById('vue-session-header');
+  if (!sidebarEl || !headerEl || !window.vueSidebar) return;
+
+  window.vueSidebar.mount(sidebarEl, headerEl, {
+    openSession: (session) => openSession(session),
+    stopSession: (id) => confirmAndStopSession(id),
+    toggleStar: async (id) => {
+      const { starred } = await window.api.toggleStar(id);
+      const s = sessionMap.get(id);
+      if (s) s.starred = starred;
+      refreshSidebar({ resort: true });
+    },
+    archiveSession: async (id) => {
+      const session = sessionMap.get(id);
+      if (!session) return;
+      const newVal = session.archived ? 0 : 1;
+      if (newVal && activePtyIds.has(id)) {
+        await window.api.stopSession(id);
+        pollActiveSessions();
+      }
+      await window.api.archiveSession(id, newVal);
+      session.archived = newVal;
+      loadProjects();
+    },
+    forkSession: (id) => {
+      const session = sessionMap.get(id);
+      const project = [...cachedAllProjects, ...cachedProjects].find(p =>
+        p.sessions.some(s => s.sessionId === id)
+      );
+      if (session && project && typeof forkSession === 'function') forkSession(session, project);
+    },
+    showJsonl: (id) => {
+      const session = sessionMap.get(id);
+      if (session && typeof showJsonlViewer === 'function') showJsonlViewer(session);
+    },
+    launchConfig: (id) => {
+      const session = sessionMap.get(id);
+      if (session && typeof showResumeSessionDialog === 'function') showResumeSessionDialog(session);
+    },
+    renameSession: async (id, name) => {
+      await window.api.renameSession(id, name);
+      const s = sessionMap.get(id);
+      if (s) s.name = name;
+      refreshSidebar();
+    },
+    newSession: (project) => {
+      if (typeof showNewSessionPopover === 'function') showNewSessionPopover(project);
+    },
+    openSettings: (path) => openSettingsViewer('project', path),
+    archiveSessions: async (sessions) => {
+      const active = sessions.filter(s => !s.archived);
+      if (!active.length) return;
+      const shortName = active[0]?.projectPath?.split('/').filter(Boolean).slice(-2).join('/') || '';
+      if (!confirm(`Archive all ${active.length} session${active.length > 1 ? 's' : ''} in ${shortName}?`)) return;
+      for (const s of active) {
+        if (activePtyIds.has(s.sessionId)) await window.api.stopSession(s.sessionId);
+        await window.api.archiveSession(s.sessionId, 1);
+        s.archived = 1;
+      }
+      pollActiveSessions();
+      loadProjects();
+    },
+    removeProject: async (path) => {
+      const name = path.split('/').pop();
+      if (!confirm(`Hide worktree "${name}"?\n\nSession files are not deleted.`)) return;
+      await window.api.removeProject(path);
+      loadProjects();
+    },
+  });
+
+  // Sync initial state to Vue
+  window.vueSidebar.setActiveSession(activeSessionId);
+}());

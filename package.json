@@ -6,10 +6,11 @@
   "author": "Doctly <support@doctly.ai>",
   "main": "main.js",
   "scripts": {
-    "start": "npm run bundle:codemirror && electron .",
+    "start": "npm run bundle:codemirror && npm run bundle:vue && electron .",
     "test": "node --test",
     "electron": "electron .",
     "bundle:codemirror": "esbuild public/codemirror-setup.js --bundle --outfile=public/codemirror-bundle.js --format=iife --platform=browser --minify",
+    "bundle:vue": "vite build",
     "generate-icons": "node scripts/generate-icons.js && node scripts/generate-dmg-background.js",
     "build": "npm run bundle:codemirror && electron-builder",
     "build:mac": "npm run bundle:codemirror && electron-builder --mac && node scripts/postinstall.js && codesign --sign - --force --deep dist/mac-arm64/Switchboard.app 2>/dev/null; true",
@@ -44,12 +45,15 @@
     "@codemirror/view": "^6.39.16",
     "@ddietr/codemirror-themes": "^1.5.2",
     "@napi-rs/canvas": "^0.1.62",
+    "@vitejs/plugin-vue": "^6.0.8",
     "codemirror": "^6.0.2",
     "electron": "^41.0.0",
     "electron-builder": "^26.0.0",
     "electron-reloader": "^1.2.3",
     "esbuild": "^0.27.3",
-    "png2icons": "^2.0.1"
+    "png2icons": "^2.0.1",
+    "vite": "^8.1.5",
+    "vue": "^3.5.40"
   },
   "build": {
     "appId": "ai.doctly.switchboard",

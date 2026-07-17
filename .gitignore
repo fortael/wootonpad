@@ -1,6 +1,7 @@
 .idea/
 node_modules/
 dist/
+design/
 *.db
 *.db-wal
 *.db-shm

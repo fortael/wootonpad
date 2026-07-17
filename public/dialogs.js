@@ -102,16 +102,23 @@ function showNewSessionPopover(project, anchorEl) {
   popover.appendChild(claudeOptsBtn);
   popover.appendChild(termBtn);
 
-  // Position relative to anchor, flip upward if it would overflow
+  // Position relative to anchor (or center of screen if no anchor)
   document.body.appendChild(popover);
-  const rect = anchorEl.getBoundingClientRect();
-  const popoverHeight = popover.offsetHeight;
-  if (rect.bottom + 4 + popoverHeight > window.innerHeight) {
-    popover.style.top = (rect.top - popoverHeight - 4) + 'px';
+  if (anchorEl) {
+    const rect = anchorEl.getBoundingClientRect();
+    const popoverHeight = popover.offsetHeight;
+    if (rect.bottom + 4 + popoverHeight > window.innerHeight) {
+      popover.style.top = (rect.top - popoverHeight - 4) + 'px';
+    } else {
+      popover.style.top = (rect.bottom + 4) + 'px';
+    }
+    popover.style.left = rect.left + 'px';
   } else {
-    popover.style.top = (rect.bottom + 4) + 'px';
+    const popoverWidth = popover.offsetWidth;
+    const popoverHeight = popover.offsetHeight;
+    popover.style.top = Math.max(8, (window.innerHeight / 2 - popoverHeight / 2)) + 'px';
+    popover.style.left = Math.max(8, (window.innerWidth / 2 - popoverWidth / 2)) + 'px';
   }
-  popover.style.left = rect.left + 'px';
 
   // Close on click outside
   function onClickOutside(e) {

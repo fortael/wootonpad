@@ -85,6 +85,8 @@
       <div id="jsonl-viewer-body"></div>
     </div>
     <div id="terminal-area">
+      <div id="vue-session-header"></div>
+      <!-- Legacy header kept for JS references; hidden once Vue mounts -->
       <div id="terminal-header" style="display:none;">
         <div id="terminal-header-info">
           <span id="terminal-header-name"></span>
@@ -123,6 +125,7 @@
   <script src="../node_modules/@xterm/addon-webgl/lib/addon-webgl.js"></script>
   <script src="../node_modules/morphdom/dist/morphdom-umd.js"></script>
   <script src="codemirror-bundle.js"></script>
+  <script src="vue-bundle.js"></script>
   <script src="icons.js"></script>
   <script src="viewer-toolbar.js"></script>
   <script src="viewer-panel.js"></script>
