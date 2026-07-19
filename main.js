@@ -64,6 +64,7 @@ const {
   isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
+  getProjectGitCache, setProjectGitCache, getAllProjectGitCounts,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting,
@@ -322,7 +323,7 @@ function initSessionCache() {
     db: {
       deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession,
       deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
-      setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName,
+      setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName, getAllProjectGitCounts,
     },
   });
 }
@@ -466,7 +467,7 @@ ipcMain.handle('get-project-info', (_event, projectPath) => {
 ipcMain.handle('get-project-detail', (_event, projectPath) => {
   if (!projectPath || !fs.existsSync(projectPath)) return null;
   const { execSync } = require('child_process');
-  const detail = { branch: null, commits: [], changedFiles: [], totalAdded: 0, totalDeleted: 0, containers: [] };
+  const detail = { branch: null, commits: [], unpushedCommits: [], changedFiles: [], totalAdded: 0, totalDeleted: 0, containers: [] };
   try {
     detail.branch = execSync('git rev-parse --abbrev-ref HEAD', {
       cwd: projectPath, encoding: 'utf8', timeout: 5000,
@@ -482,6 +483,18 @@ ipcMain.handle('get-project-detail', (_event, projectPath) => {
         return { hash, message, author, date };
       });
     }
+    try {
+      const unpushed = execSync('git log --format=%h\x1f%s\x1f%an\x1f%ar @{u}..HEAD', {
+        cwd: projectPath, encoding: 'utf8', timeout: 5000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      if (unpushed) {
+        detail.unpushedCommits = unpushed.split('\n').filter(Boolean).map(line => {
+          const [hash, message, author, date] = line.split('\x1f');
+          return { hash, message, author, date };
+        });
+      }
+    } catch {} // no upstream set — just leave empty
     const numstat = execSync('git diff --numstat HEAD', {
       cwd: projectPath, encoding: 'utf8', timeout: 5000,
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -512,7 +525,12 @@ ipcMain.handle('get-project-detail', (_event, projectPath) => {
       }).filter(Boolean);
     }
   } catch {}
+  try { setProjectGitCache(projectPath, detail); } catch {}
   return detail;
+});
+
+ipcMain.handle('get-project-git-cache', (_event, projectPath) => {
+  try { return getProjectGitCache(projectPath); } catch { return null; }
 });
 
 ipcMain.handle('open-external', (_event, url) => {
@@ -523,6 +541,148 @@ ipcMain.handle('open-external', (_event, url) => {
 // --- IPC: MCP bridge ---
 ipcMain.on('mcp-diff-response', (_event, sessionId, diffId, action, editedContent) => {
   resolvePendingDiff(sessionId, diffId, action, editedContent);
+});
+
+// --- IPC: git operations ---
+ipcMain.handle('git-branches', (_event, projectPath) => {
+  const { execFileSync } = require('child_process');
+  try {
+    const current = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 }).trim();
+    const all = execFileSync('git', ['branch'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 }).trim();
+    const branches = all.split('\n').map(b => b.replace(/^\*\s*/, '').trim()).filter(Boolean);
+    let remotes = [];
+    try {
+      const raw = execFileSync('git', ['branch', '-r'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 }).trim();
+      remotes = raw.split('\n').map(b => b.trim().replace(/^origin\//, '')).filter(b => b && b !== 'HEAD' && !b.includes('->') && !branches.includes(b));
+    } catch {}
+    return { ok: true, current, branches, remotes };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('git-checkout', (_event, projectPath, branch) => {
+  const { execSync } = require('child_process');
+  try {
+    execSync(`git checkout ${branch}`, { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.stderr || e.message }; }
+});
+
+ipcMain.handle('git-fetch', (_event, projectPath) => {
+  const { execSync } = require('child_process');
+  try {
+    const out = execSync('git fetch --prune', { cwd: projectPath, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] });
+    return { ok: true, output: out };
+  } catch (e) { return { ok: false, error: e.stderr || e.message }; }
+});
+
+ipcMain.handle('git-pull', (_event, projectPath) => {
+  const { execSync } = require('child_process');
+  try {
+    const out = execSync('git pull', { cwd: projectPath, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] });
+    return { ok: true, output: out };
+  } catch (e) { return { ok: false, error: e.stderr || e.message }; }
+});
+
+ipcMain.handle('git-commit', (_event, projectPath, message) => {
+  const { execSync } = require('child_process');
+  try {
+    execSync('git add -A', { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+    execSync(`git commit -m ${JSON.stringify(message)}`, { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.stderr || e.message }; }
+});
+
+ipcMain.handle('git-push', (_event, projectPath) => {
+  const { execSync } = require('child_process');
+  try {
+    const out = execSync('git push', { cwd: projectPath, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] });
+    return { ok: true, output: out };
+  } catch (e) {
+    // try push with set-upstream
+    try {
+      const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: projectPath, encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      const out2 = execSync(`git push --set-upstream origin ${branch}`, { cwd: projectPath, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] });
+      return { ok: true, output: out2 };
+    } catch (e2) { return { ok: false, error: e2.stderr || e2.message }; }
+  }
+});
+
+ipcMain.handle('git-generate-commit-msg', async (_event, projectPath) => {
+  const { execSync, spawn } = require('child_process');
+  try {
+    const diff = execSync('git diff HEAD', { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] });
+    if (!diff.trim()) return { ok: false, error: 'No changes to describe' };
+    const globalSettings = getSetting('global') || {};
+    const instruction = globalSettings.commitMessagePrompt || COMMIT_MSG_PROMPT_DEFAULT;
+    const prompt = `${instruction}\n\n${diff.slice(0, 8000)}`;
+    const msg = await new Promise((resolve, reject) => {
+      const child = spawn('claude', ['-p', prompt], { cwd: projectPath });
+      let stdout = '', stderr = '';
+      child.stdout.on('data', d => { stdout += d; });
+      child.stderr.on('data', d => { stderr += d; });
+      const timer = setTimeout(() => { child.kill(); reject(new Error('Timed out after 60s')); }, 60000);
+      child.on('close', code => {
+        clearTimeout(timer);
+        if (code !== 0 && !stdout.trim()) reject(new Error(stderr.trim() || `claude exited with code ${code}`));
+        else resolve(stdout.trim());
+      });
+      child.on('error', err => { clearTimeout(timer); reject(err); });
+    });
+    if (!msg) return { ok: false, error: 'No output from claude' };
+    return { ok: true, message: msg };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('get-file-tree', (_event, projectPath) => {
+  const IGNORE = new Set(['.git', 'node_modules', '.next', 'dist', 'build', '__pycache__', '.venv', 'venv', '.DS_Store', 'target', '.cache', 'coverage', '.turbo']);
+  function walk(dir, rel, depth) {
+    if (depth > 5) return [];
+    let entries;
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+    return entries
+      .filter(e => !IGNORE.has(e.name) && !e.name.startsWith('.'))
+      .sort((a, b) => {
+        if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      })
+      .map(e => {
+        const relPath = rel ? `${rel}/${e.name}` : e.name;
+        const isDir = e.isDirectory();
+        return { name: e.name, path: relPath, isDir, children: isDir ? walk(path.join(dir, e.name), relPath, depth + 1) : null };
+      });
+  }
+  try { return { ok: true, tree: walk(projectPath, '', 0) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('get-project-sessions', (_event, projectPath) => {
+  try {
+    const { buildProjectsFromCache } = require('./session-cache');
+    const projects = buildProjectsFromCache(false);
+    const proj = projects.find(p => p.projectPath === projectPath);
+    const sessions = (proj?.sessions || []).slice(0, 10).map(s => ({
+      id: s.sessionId, name: s.name || s.aiTitle || s.summary?.slice(0, 40) || s.sessionId?.slice(0, 8), updatedAt: s.modified, running: false,
+    }));
+    return { ok: true, sessions };
+  } catch (e) { return { ok: false, sessions: [] }; }
+});
+
+ipcMain.handle('get-file-diff', (_event, projectPath, filePath) => {
+  const { execSync } = require('child_process');
+  const path = require('path');
+  let oldContent = '';
+  try {
+    oldContent = execSync(`git show HEAD:${filePath}`, {
+      cwd: projectPath, encoding: 'utf8', timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch {}
+  try {
+    const newContent = fs.readFileSync(path.join(projectPath, filePath), 'utf8');
+    return { ok: true, oldContent, newContent, filePath };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
@@ -1089,6 +1249,8 @@ ipcMain.handle('get-accounts-usage', async () => {
 // --- Scheduled tasks ---
 const scheduleIpc = require('./schedule-ipc');
 
+const COMMIT_MSG_PROMPT_DEFAULT = `Write a concise git commit message (max 72 chars for first line) for these changes. Use conventional commit format (feat/fix/refactor/docs/chore). Output ONLY the commit message, no explanation:`;
+
 const SETTING_DEFAULTS = {
   permissionMode: null,
   dangerouslySkipPermissions: false,
@@ -1103,6 +1265,7 @@ const SETTING_DEFAULTS = {
   mcpEmulation: false,
   shellProfile: 'auto',
   showAvatars: true,
+  commitMessagePrompt: '',
 };
 
 ipcMain.handle('get-shell-profiles', () => {

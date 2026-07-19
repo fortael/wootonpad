@@ -13,7 +13,7 @@ const { encodeProjectPath } = require('./encode-project-path');
 let PROJECTS_DIR, accountId, activeSessions, getMainWindow, log;
 let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
-let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName;
+let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName, getAllProjectGitCounts;
 
 function init(ctx) {
   PROJECTS_DIR = ctx.PROJECTS_DIR;
@@ -36,6 +36,7 @@ function init(ctx) {
   getSetting = ctx.db.getSetting;
   getMeta = ctx.db.getMeta;
   setName = ctx.db.setName;
+  getAllProjectGitCounts = ctx.db.getAllProjectGitCounts;
 }
 
 // readSessionFile is imported from read-session-file.js (shared with worker)
@@ -176,6 +177,7 @@ function buildProjectsFromCache(showArchived) {
   const cachedRows = getAllCached(accountId);
   const global = getSetting('global') || {};
   const hiddenProjects = new Set(global.hiddenProjects || []);
+  const gitCounts = getAllProjectGitCounts?.() || new Map();
 
   // Group by projectPath, not on-disk folder name. Multiple ~/.claude/projects/<folder>/
   // directories can resolve to the same projectPath (Claude Code's folder-name encoding
@@ -269,6 +271,11 @@ function buildProjectsFromCache(showArchived) {
   const projects = [];
   for (const proj of projectMap.values()) {
     proj.sessions.sort((a, b) => new Date(b.modified) - new Date(a.modified));
+    const gc = gitCounts.get(proj.projectPath);
+    if (gc) {
+      proj.unpushedCount = gc.unpushedCount || 0;
+      proj.changedCount = gc.changedCount || 0;
+    }
     projects.push(proj);
   }
 

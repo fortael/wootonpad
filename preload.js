@@ -48,6 +48,17 @@ contextBridge.exposeInMainWorld('api', {
   removeProject: (projectPath) => ipcRenderer.invoke('remove-project', projectPath),
   getProjectInfo: (projectPath) => ipcRenderer.invoke('get-project-info', projectPath),
   getProjectDetail: (projectPath) => ipcRenderer.invoke('get-project-detail', projectPath),
+  getProjectGitCache: (projectPath) => ipcRenderer.invoke('get-project-git-cache', projectPath),
+  getFileDiff: (projectPath, filePath) => ipcRenderer.invoke('get-file-diff', projectPath, filePath),
+  gitBranches: (projectPath) => ipcRenderer.invoke('git-branches', projectPath),
+  gitCheckout: (projectPath, branch) => ipcRenderer.invoke('git-checkout', projectPath, branch),
+  gitFetch: (projectPath) => ipcRenderer.invoke('git-fetch', projectPath),
+  gitPull: (projectPath) => ipcRenderer.invoke('git-pull', projectPath),
+  gitCommit: (projectPath, message) => ipcRenderer.invoke('git-commit', projectPath, message),
+  gitPush: (projectPath) => ipcRenderer.invoke('git-push', projectPath),
+  gitGenerateCommitMsg: (projectPath) => ipcRenderer.invoke('git-generate-commit-msg', projectPath),
+  getFileTree: (projectPath) => ipcRenderer.invoke('get-file-tree', projectPath),
+  getProjectSessions: (projectPath) => ipcRenderer.invoke('get-project-sessions', projectPath),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
 
   // Send (fire-and-forget)

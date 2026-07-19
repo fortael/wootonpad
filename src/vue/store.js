@@ -31,4 +31,17 @@ export const store = reactive({
   headerShellProfile: null,
   headerAccount: null,
   headerAccounts: [],
+
+  // App layout state
+  activeTab: 'sessions',
+  sidebarCollapsed: false,
+  loadingStatus: '',
+  accountSwitching: false,
+  searchQuery: '',
+  searchTitlesOnly: false,
+
+  // Settings panel
+  settingsOpen: false,
+  settingsScope: 'global',       // 'global' | 'project'
+  settingsProjectPath: null,
 });

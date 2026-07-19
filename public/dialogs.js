@@ -431,8 +431,6 @@ async function showResumeSessionDialog(session) {
   document.addEventListener('keydown', onKey);
 }
 
-// Settings viewer is in settings-panel.js (openSettingsViewer / closeSettingsViewer)
-// Global settings button & add project button bindings are in app.js (need DOM refs)
 
 function showAddProjectDialog() {
   const overlay = document.createElement('div');

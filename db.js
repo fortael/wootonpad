@@ -109,6 +109,24 @@ const migrations = [
     try { db.exec('DROP TABLE IF EXISTS search_fts'); } catch {}
     searchFtsRecreated = true;
   },
+  // v5: Add project_git_cache for stale-while-revalidate git/docker info per project.
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS project_git_cache (
+        projectPath TEXT PRIMARY KEY,
+        branch TEXT,
+        unpushedCount INTEGER NOT NULL DEFAULT 0,
+        changedCount INTEGER NOT NULL DEFAULT 0,
+        totalAdded INTEGER NOT NULL DEFAULT 0,
+        totalDeleted INTEGER NOT NULL DEFAULT 0,
+        containers TEXT NOT NULL DEFAULT '[]',
+        unpushedCommits TEXT NOT NULL DEFAULT '[]',
+        changedFiles TEXT NOT NULL DEFAULT '[]',
+        commits TEXT NOT NULL DEFAULT '[]',
+        updatedAt REAL
+      )
+    `);
+  },
 ];
 
 const currentDbVersion = (() => {
@@ -364,6 +382,70 @@ function isSearchIndexPopulated() {
   return row.cnt > 0;
 }
 
+// --- Project git cache ---
+
+// Lazy-initialized so the table is guaranteed to exist (migration runs first).
+let _pgc = null;
+function pgc() {
+  if (_pgc) return _pgc;
+  _pgc = {
+    get: db.prepare('SELECT * FROM project_git_cache WHERE projectPath = ?'),
+    getAll: db.prepare('SELECT projectPath, unpushedCount, changedCount FROM project_git_cache'),
+    upsert: db.prepare(`
+      INSERT INTO project_git_cache
+        (projectPath, branch, unpushedCount, changedCount, totalAdded, totalDeleted, containers, unpushedCommits, changedFiles, commits, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(projectPath) DO UPDATE SET
+        branch = excluded.branch,
+        unpushedCount = excluded.unpushedCount,
+        changedCount = excluded.changedCount,
+        totalAdded = excluded.totalAdded,
+        totalDeleted = excluded.totalDeleted,
+        containers = excluded.containers,
+        unpushedCommits = excluded.unpushedCommits,
+        changedFiles = excluded.changedFiles,
+        commits = excluded.commits,
+        updatedAt = excluded.updatedAt
+    `),
+  };
+  return _pgc;
+}
+
+function getProjectGitCache(projectPath) {
+  const row = pgc().get.get(projectPath);
+  if (!row) return null;
+  return {
+    ...row,
+    containers: JSON.parse(row.containers || '[]'),
+    unpushedCommits: JSON.parse(row.unpushedCommits || '[]'),
+    changedFiles: JSON.parse(row.changedFiles || '[]'),
+    commits: JSON.parse(row.commits || '[]'),
+  };
+}
+
+function setProjectGitCache(projectPath, data) {
+  pgc().upsert.run(
+    projectPath,
+    data.branch || null,
+    data.unpushedCommits?.length || 0,
+    data.changedFiles?.length || 0,
+    data.totalAdded || 0,
+    data.totalDeleted || 0,
+    JSON.stringify(data.containers || []),
+    JSON.stringify(data.unpushedCommits || []),
+    JSON.stringify(data.changedFiles || []),
+    JSON.stringify(data.commits || []),
+    Date.now(),
+  );
+}
+
+function getAllProjectGitCounts() {
+  const rows = pgc().getAll.all();
+  const map = new Map();
+  for (const r of rows) map.set(r.projectPath, { unpushedCount: r.unpushedCount, changedCount: r.changedCount });
+  return map;
+}
+
 // --- Settings functions ---
 
 function getSetting(key) {
@@ -389,6 +471,7 @@ module.exports = {
   isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
+  getProjectGitCache, setProjectGitCache, getAllProjectGitCounts,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting,

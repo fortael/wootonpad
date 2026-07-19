@@ -1,20 +1,13 @@
-const statusBarInfo = document.getElementById('status-bar-info');
-const statusBarActivity = document.getElementById('status-bar-activity');
+// DOM refs — App.vue (in vue-bundle.js) has mounted and rendered these before this script runs
 const terminalsEl = document.getElementById('terminals');
-const sidebarContent = document.getElementById('sidebar-content');
-const plansContent = document.getElementById('plans-content');
+const sidebarContent = document.getElementById('sidebar-content'); // used by grid-view.js for DOM session order
 const placeholder = document.getElementById('placeholder');
-const archiveToggle = document.getElementById('archive-toggle');
-const starToggle = document.getElementById('star-toggle');
-const searchInput = document.getElementById('search-input');
 const terminalHeader = document.getElementById('terminal-header');
 const terminalHeaderName = document.getElementById('terminal-header-name');
 const terminalHeaderId = document.getElementById('terminal-header-id');
 const terminalHeaderStatus = document.getElementById('terminal-header-status');
 const terminalHeaderShell = document.getElementById('terminal-header-shell');
 const terminalStopBtn = document.getElementById('terminal-stop-btn');
-const runningToggle = document.getElementById('running-toggle');
-const todayToggle = document.getElementById('today-toggle');
 const planViewer = document.getElementById('plan-viewer');
 const planPanel = new ViewerPanel(planViewer, {
   copyPath: true, copyContent: true,
@@ -23,12 +16,6 @@ const planPanel = new ViewerPanel(planViewer, {
 });
 
 // currentPlanContent, currentPlanFilePath, currentPlanFilename → plans-memory-view.js
-const loadingStatus = document.getElementById('loading-status');
-const sessionFilters = document.getElementById('session-filters');
-const searchBar = document.getElementById('search-bar');
-const statsContent = document.getElementById('stats-content');
-const memoryContent = document.getElementById('memory-content');
-const projectsContent = document.getElementById('projects-content');
 const statsViewer = document.getElementById('stats-viewer');
 const statsViewerBody = document.getElementById('stats-viewer-body');
 const memoryViewer = document.getElementById('memory-viewer');
@@ -38,10 +25,6 @@ const memoryPanel = new ViewerPanel(memoryViewer, {
   onSave: (filePath, content) => window.api.saveMemory(filePath, content),
 });
 const terminalArea = document.getElementById('terminal-area');
-const settingsViewer = document.getElementById('settings-viewer');
-const globalSettingsBtn = document.getElementById('global-settings-btn');
-const addProjectBtn = document.getElementById('add-project-btn');
-const resortBtn = document.getElementById('resort-btn');
 const projectViewer = document.getElementById('project-viewer');
 const jsonlViewer = document.getElementById('jsonl-viewer');
 const jsonlViewerTitle = document.getElementById('jsonl-viewer-title');
@@ -62,15 +45,6 @@ function setActiveSession(id) {
   if (typeof switchPanel === 'function') switchPanel(id);
   window.vueSidebar?.setActiveSession(id);
 }
-// Persist slug group expand state across reloads
-function getExpandedSlugs() {
-  try { return new Set(JSON.parse(sessionStorage.getItem('expandedSlugs') || '[]')); } catch { return new Set(); }
-}
-function saveExpandedSlugs() {
-  const expanded = [];
-  document.querySelectorAll('.slug-group:not(.collapsed)').forEach(g => { if (g.id) expanded.push(g.id); });
-  sessionStorage.setItem('expandedSlugs', JSON.stringify(expanded));
-}
 let showArchived = false;
 let showStarredOnly = false;
 let showRunningOnly = false;
@@ -78,14 +52,13 @@ let showTodayOnly = false;
 let cachedProjects = [];
 let cachedAllProjects = [];
 let activePtyIds = new Set();
-let sortedOrder = []; // [{ projectPath, itemIds: [itemId, ...] }, ...] — single source of truth for sidebar order
+let sortedOrder = []; // kept for grid-view.js project-heading ordering; no longer updated by sidebar
 let activeTab = 'sessions';
 let cachedPlans = [];
 let visibleSessionCount = 10;
 let sessionMaxAgeDays = 3;
 const pendingSessions = new Map(); // sessionId → { session, projectPath, folder }
 
-// Bridge functions for settings-panel.js
 window._setVisibleSessionCount = (v) => { visibleSessionCount = v; };
 window._setSessionMaxAge = (v) => { sessionMaxAgeDays = v; };
 window._applyTerminalTheme = (themeName) => {
@@ -344,86 +317,16 @@ function refreshSidebar({ resort = false } = {}) {
   window.vueSidebar?.setFilters({ showStarredOnly, showRunningOnly, showTodayOnly, showArchived });
 }
 
-// --- Archive toggle ---
-archiveToggle.innerHTML = ICONS.archive(18);
-archiveToggle.addEventListener('click', () => {
-  showArchived = !showArchived;
-  archiveToggle.classList.toggle('active', showArchived);
-  refreshSidebar({ resort: true });
-});
-
-// --- Star filter toggle ---
-starToggle.addEventListener('click', () => {
-  showStarredOnly = !showStarredOnly;
-  if (showStarredOnly) { showRunningOnly = false; runningToggle.classList.remove('active'); }
-  starToggle.classList.toggle('active', showStarredOnly);
-  refreshSidebar({ resort: true });
-});
-
-// --- Running filter toggle ---
-runningToggle.addEventListener('click', () => {
-  showRunningOnly = !showRunningOnly;
-  if (showRunningOnly) { showStarredOnly = false; starToggle.classList.remove('active'); }
-  runningToggle.classList.toggle('active', showRunningOnly);
-  refreshSidebar({ resort: true });
-});
-
-// --- Today filter toggle ---
-todayToggle.addEventListener('click', () => {
-  showTodayOnly = !showTodayOnly;
-  todayToggle.classList.toggle('active', showTodayOnly);
-  refreshSidebar({ resort: true });
-});
-
-// --- Re-sort button ---
-resortBtn.addEventListener('click', () => {
-  loadProjects({ resort: true });
-});
-
-// --- Global settings gear button ---
-globalSettingsBtn.innerHTML = ICONS.gear(18);
-globalSettingsBtn.addEventListener('click', () => {
-  openSettingsViewer('global');
-});
-
-// --- Add project button ---
-addProjectBtn.addEventListener('click', () => {
-  showAddProjectDialog();
-});
-
-// --- Search (debounced, per-tab FTS) ---
-let searchDebounceTimer = null;
-const searchClear = document.getElementById('search-clear');
-const searchTitlesToggle = document.getElementById('search-titles-toggle');
-let searchTitlesOnly = false;
-
-// Load persisted preference
-(async () => {
-  const saved = await window.api.getSetting('searchTitlesOnly');
-  if (saved) {
-    searchTitlesOnly = true;
-    searchTitlesToggle.classList.add('active');
-  }
-})();
-
-searchTitlesToggle.addEventListener('click', async () => {
-  searchTitlesOnly = !searchTitlesOnly;
-  searchTitlesToggle.classList.toggle('active', searchTitlesOnly);
-  await window.api.setSetting('searchTitlesOnly', searchTitlesOnly);
-  // Re-run current search if there's a query
-  const query = searchInput.value.trim();
-  if (query) {
-    searchInput.dispatchEvent(new Event('input'));
-  }
-});
+// --- Search & filter handlers moved to App.vue ---
+// App.vue calls window.__sb.search(query, titlesOnly) and window.__sb.clearSearch()
+// App.vue calls window.__sb.onFilterChange(filters) for filter toggles
 
 function clearSearch() {
-  searchInput.value = '';
-  searchBar.classList.remove('has-query');
-  if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
+  const activeTab = window.vueStore?.activeTab || 'sessions';
+  searchMatchIds = null;
+  searchMatchProjectPaths = null;
+  window.vueSidebar?.setSearch(null, null);
   if (activeTab === 'sessions') {
-    searchMatchIds = null;
-    searchMatchProjectPaths = null;
     refreshSidebar({ resort: true });
   } else if (activeTab === 'plans') {
     renderPlans(cachedPlans);
@@ -431,67 +334,9 @@ function clearSearch() {
     renderMemories();
   } else if (activeTab === 'projects') {
     projectsSearchQuery = '';
-    renderProjectsPanel();
+    window.vueProjects?.setSearch('');
   }
 }
-
-searchClear.addEventListener('click', () => {
-  clearSearch();
-  searchInput.focus();
-});
-
-searchInput.addEventListener('input', () => {
-  // Toggle clear button visibility
-  searchBar.classList.toggle('has-query', searchInput.value.length > 0);
-
-  if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
-  searchDebounceTimer = setTimeout(async () => {
-    searchDebounceTimer = null;
-    const query = searchInput.value.trim();
-
-    if (!query) {
-      clearSearch();
-      return;
-    }
-
-    try {
-      if (activeTab === 'sessions') {
-        const results = await window.api.search('session', query, searchTitlesOnly);
-        searchMatchIds = new Set(results.map(r => r.id));
-        // When title-only, also match project names
-        searchMatchProjectPaths = null;
-        if (searchTitlesOnly) {
-          const lowerQ = query.toLowerCase();
-          for (const p of cachedAllProjects) {
-            const shortName = p.projectPath.split('/').filter(Boolean).slice(-2).join('/');
-            if (shortName.toLowerCase().includes(lowerQ)) {
-              if (!searchMatchProjectPaths) searchMatchProjectPaths = new Set();
-              searchMatchProjectPaths.add(p.projectPath);
-            }
-          }
-        }
-        refreshSidebar({ resort: true });
-      } else if (activeTab === 'plans') {
-        const results = await window.api.search('plan', query, searchTitlesOnly);
-        const matchIds = new Set(results.map(r => r.id));
-        renderPlans(cachedPlans.filter(p => matchIds.has(p.filename)));
-      } else if (activeTab === 'memory') {
-        const results = await window.api.search('memory', query, searchTitlesOnly);
-        const matchIds = new Set(results.map(r => r.id));
-        renderMemories(matchIds);
-      } else if (activeTab === 'projects') {
-        projectsSearchQuery = query;
-        renderProjectsPanel();
-      }
-    } catch {
-      if (activeTab === 'sessions') {
-        searchMatchIds = null;
-        searchMatchProjectPaths = null;
-        refreshSidebar({ resort: true });
-      }
-    }
-  }, 200);
-});
 
 // --- Stop session helper (exposed globally for Vue components) ---
 async function confirmAndStopSession(sessionId) {
@@ -545,17 +390,12 @@ function updateRunningIndicators() {
     const dot = group.querySelector('.slug-group-dot');
     if (dot) dot.classList.toggle('running', hasRunning);
   });
-  // Update grid card dots and status text
-  for (const [sid, card] of gridCards) {
+  // Update grid cards via Vue
+  for (const [sid] of gridCards) {
     const running = activePtyIds.has(sid);
     const busy = sessionBusyState.get(sid) || false;
-    const dot = card.querySelector('.grid-card-avatar');
-    if (dot) dot.className = dot.className.replace(/\b(running|busy|stopped)\b/g, '').trim()
-      + ' ' + (busy ? 'busy' : (running ? 'running' : 'stopped'));
-    const footer = card.querySelector('.grid-card-footer');
-    if (footer) footer.children[0].textContent = running ? 'Running' : 'Stopped';
-    const stopBtn = card.querySelector('.grid-card-stop-btn');
-    if (stopBtn) stopBtn.style.display = running ? '' : 'none';
+    const time = formatDate(lastActivityTime.get(sid) || new Date(sessionMap.get(sid)?.modified));
+    window.vueGrid?.updateCard(sid, running, busy, time);
   }
 }
 
@@ -616,19 +456,14 @@ function dedup(projects) {
 
 async function loadProjects({ resort = false } = {}) {
   const wasEmpty = cachedProjects.length === 0;
-  if (wasEmpty) {
-    loadingStatus.textContent = 'Loading\u2026';
-    loadingStatus.className = 'active';
-    loadingStatus.style.display = '';
-  }
+  if (wasEmpty && window.vueStore) window.vueStore.loadingStatus = 'Loading\u2026';
   const [defaultProjects, allProjects] = await Promise.all([
     window.api.getProjects(false),
     window.api.getProjects(true),
   ]);
   cachedProjects = defaultProjects;
   cachedAllProjects = allProjects;
-  loadingStatus.style.display = 'none';
-  loadingStatus.className = '';
+  if (window.vueStore) window.vueStore.loadingStatus = '';
   dedup(cachedProjects);
   dedup(cachedAllProjects);
 
@@ -678,8 +513,7 @@ async function loadProjects({ resort = false } = {}) {
   renderDefaultStatus();
 }
 
-// Sidebar rendering (slugId, folderId, buildSlugGroup, renderProjects,
-// rebindSidebarEvents, buildSessionItem, startRename) → sidebar.js
+
 
 
 async function launchNewSession(project, sessionOptions) {
@@ -817,97 +651,8 @@ window.addEventListener('resize', () => {
   }
 });
 
-// --- Tab switching ---
-document.querySelectorAll('.sidebar-tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    const tabName = tab.dataset.tab;
-    if (tabName === activeTab) return;
-    activeTab = tabName;
-    document.querySelectorAll('.sidebar-tab').forEach(t => t.classList.toggle('active', t.dataset.tab === tabName));
-
-    // Clear search on tab switch
-    searchInput.value = '';
-    searchBar.classList.remove('has-query');
-    searchMatchIds = null;
-    searchMatchProjectPaths = null;
-
-    // Hide all sidebar content areas
-    sidebarContent.style.display = 'none';
-    plansContent.style.display = 'none';
-    statsContent.style.display = 'none';
-    memoryContent.style.display = 'none';
-    if (accountsContent) accountsContent.style.display = 'none';
-    if (projectsContent) projectsContent.style.display = 'none';
-    sessionFilters.style.display = 'none';
-    searchBar.style.display = 'none';
-
-    if (tabName === 'sessions') {
-      sessionFilters.style.display = '';
-      searchBar.style.display = '';
-      searchInput.placeholder = 'Search sessions...';
-      sidebarContent.style.display = '';
-      // Restore terminal area
-      hideAllViewers();
-      if (gridViewActive) {
-        // Grid is still set up — just re-show it and refit
-        placeholder.style.display = 'none';
-        terminalHeader.style.display = 'none';
-        gridViewer.style.display = 'block';
-        for (const entry of openSessions.values()) {
-          if (!entry.closed) fitAndScroll(entry);
-        }
-      } else if (activeSessionId && openSessions.has(activeSessionId)) {
-        showSession(activeSessionId);
-      } else {
-        placeholder.style.display = '';
-      }
-      // Catch up on changes that happened while on another tab
-      if (projectsChangedWhileAway) {
-        projectsChangedWhileAway = false;
-        loadProjects();
-      }
-    } else if (tabName === 'plans') {
-      searchBar.style.display = '';
-      searchInput.placeholder = 'Search plans...';
-      plansContent.style.display = '';
-      loadPlans();
-    } else if (tabName === 'stats') {
-      statsContent.style.display = '';
-      // Immediately show stats viewer in main area
-      placeholder.style.display = 'none';
-      terminalArea.style.display = 'none';
-      planViewer.style.display = 'none';
-      memoryViewer.style.display = 'none';
-      settingsViewer.style.display = 'none';
-      statsViewer.style.display = 'flex';
-      loadStats();
-    } else if (tabName === 'memory') {
-      searchBar.style.display = '';
-      searchInput.placeholder = 'Search agent files...';
-      memoryContent.style.display = '';
-      loadMemories();
-    } else if (tabName === 'accounts') {
-      if (accountsContent) {
-        accountsContent.style.display = '';
-        renderAccountsPanel();
-        refreshAccountUsage().then(() => renderAccountsPanel());
-      }
-    } else if (tabName === 'projects') {
-      searchBar.style.display = '';
-      searchInput.placeholder = 'Search projects…';
-      searchInput.value = projectsSearchQuery;
-      if (projectsContent) {
-        projectsContent.style.display = '';
-        if (projectsChangedWhileAway) {
-          projectsChangedWhileAway = false;
-          loadProjects().then(() => renderProjectsPanel());
-        } else {
-          renderProjectsPanel();
-        }
-      }
-    }
-  });
-});
+// Tab switching is handled by App.vue (store.activeTab).
+// App.vue calls window.__sb.onTabChange(tabName) — defined near bottom of this file.
 
 // Plans & viewer helpers → plans-memory-view.js
 
@@ -927,15 +672,7 @@ initGridObservers();
 // showNewSessionDialog, showResumeSessionDialog, showAddProjectDialog, launchTerminalSession) → dialogs.js
 
 
-// --- Sidebar toggle ---
-{
-  const sidebar = document.getElementById('sidebar');
-  const collapseBtn = document.getElementById('sidebar-collapse-btn');
-  const expandBtn = document.getElementById('sidebar-expand-btn');
-
-  collapseBtn.addEventListener('click', () => sidebar.classList.add('collapsed'));
-  expandBtn.addEventListener('click', () => sidebar.classList.remove('collapsed'));
-}
+// Sidebar toggle is handled by App.vue (store.sidebarCollapsed).
 
 // --- Sidebar resize ---
 {
@@ -980,32 +717,21 @@ initGridObservers();
   });
 }
 
-// --- Grid view toggle button (next to resort button in sidebar filters) ---
-{
-  const gridToggleBtn = document.createElement('button');
-  gridToggleBtn.id = 'grid-toggle-btn';
-  gridToggleBtn.dataset.tooltip = 'Session overview';
-  gridToggleBtn.innerHTML = '<svg width="14" height="14" stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>';
-  gridToggleBtn.addEventListener('click', toggleGridView);
-  // Insert next to the resort button
-  resortBtn.parentElement.insertBefore(gridToggleBtn, resortBtn);
-
-  // Global keyboard shortcuts (covers non-terminal focus)
-  // When a terminal is focused, xterm's customKeyEventHandler fires first and sets
-  // e._handled to prevent the document listener from double-firing the same action.
-  document.addEventListener('keydown', (e) => {
-    if (e._handled) return;
-    // Cmd/Ctrl+Shift+G → toggle grid view
-    const mod = isMac ? e.metaKey : e.ctrlKey;
-    if (e.key === 'g' && mod && e.shiftKey && !e.altKey) {
-      e.preventDefault();
-      toggleGridView();
-      return;
-    }
-    // Session navigation: Cmd+Shift+[/], Cmd+Arrow
-    handleSessionNavKey(e);
-  });
-}
+// Grid toggle button is rendered by App.vue. Global keyboard shortcuts:
+// When a terminal is focused, xterm's customKeyEventHandler fires first and sets
+// e._handled to prevent the document listener from double-firing the same action.
+document.addEventListener('keydown', (e) => {
+  if (e._handled) return;
+  // Cmd/Ctrl+Shift+G → toggle grid view
+  const mod = isMac ? e.metaKey : e.ctrlKey;
+  if (e.key === 'g' && mod && e.shiftKey && !e.altKey) {
+    e.preventDefault();
+    toggleGridView();
+    return;
+  }
+  // Session navigation: Cmd+Shift+[/], Cmd+Arrow
+  handleSessionNavKey(e);
+});
 
 // Warm up xterm.js renderer so first terminal open is fast
 setTimeout(() => {
@@ -1041,6 +767,12 @@ setTimeout(() => {
       currentThemeName = global.terminalTheme;
       TERMINAL_THEME = getTerminalTheme();
     }
+    if (global.monoFont && window.TERMINAL_FONTS?.[global.monoFont]) {
+      window._applyTerminalFont?.(window.TERMINAL_FONTS[global.monoFont].family);
+    }
+    if (global.uiFont && global.uiFont !== 'default' && window.TERMINAL_FONTS?.[global.uiFont]) {
+      document.documentElement.style.setProperty('--font-ui', window.TERMINAL_FONTS[global.uiFont].family);
+    }
     if (global.showAvatars === false) {
       document.body.classList.add('hide-avatars');
     }
@@ -1051,7 +783,35 @@ window._setShowAvatars = (val) => {
   document.body.classList.toggle('hide-avatars', !val);
 };
 
-loadProjects().then(() => {
+window._applyUiFont = (fontKey) => {
+  if (fontKey === 'default' || !window.TERMINAL_FONTS?.[fontKey]) {
+    document.documentElement.style.removeProperty('--font-ui');
+  } else {
+    document.documentElement.style.setProperty('--font-ui', window.TERMINAL_FONTS[fontKey].family);
+  }
+};
+
+// Called by SettingsPanelApp (and window.closeSettingsViewer) after settings closes.
+// Restores whichever main-area panel was active before settings opened.
+window._restoreAfterSettings = () => {
+  if (gridViewActive) {
+    terminalArea.style.display = '';
+  } else if (activeSessionId && openSessions.has(activeSessionId)) {
+    terminalArea.style.display = '';
+  } else {
+    placeholder.style.display = '';
+  }
+};
+
+// ── UI state persistence ──────────────────────────────────────────
+let _uiState = {};
+
+async function saveUiState(patch) {
+  Object.assign(_uiState, patch);
+  try { await window.api.setSetting('ui_state', _uiState); } catch {}
+}
+
+loadProjects().then(async () => {
   // Restore grid view preference before opening sessions so they enter grid mode
   if (localStorage.getItem('gridViewActive') === '1') {
     showGridView();
@@ -1061,6 +821,26 @@ loadProjects().then(() => {
     const session = sessionMap.get(activeSessionId);
     if (session) openSession(session);
   }
+  // Restore last open panel + sidebar tab
+  try {
+    _uiState = (await window.api.getSetting('ui_state')) || {};
+    // Restore sidebar tab first
+    if (_uiState.sidebarTab && _uiState.sidebarTab !== 'sessions') {
+      window.vueApp?.setTab(_uiState.sidebarTab);
+    }
+    // Restore main panel
+    if (_uiState.panel === 'project' && _uiState.projectPath) {
+      const proj = cachedAllProjects.find(p => p.projectPath === _uiState.projectPath);
+      if (proj) {
+        openProjectViewer(proj);
+        if (_uiState.pvTab) setTimeout(() => window.vueProjectViewer?.setTab(_uiState.pvTab), 50);
+      }
+    } else if (_uiState.panel === 'stats') {
+      hideAllViewers();
+      statsViewer.style.display = 'flex';
+      loadStats();
+    }
+  } catch {}
 });
 
 // Live-reload sidebar when filesystem changes are detected
@@ -1068,23 +848,23 @@ let projectsChangedTimer = null;
 let projectsChangedWhileAway = false;
 window.api.onProjectsChanged(() => {
   if (projectsChangedTimer) clearTimeout(projectsChangedTimer);
+  const activeTab = window.vueStore?.activeTab || 'sessions';
   if (activeTab !== 'sessions' && activeTab !== 'projects') {
     projectsChangedWhileAway = true;
     return;
   }
   projectsChangedTimer = setTimeout(() => {
     projectsChangedTimer = null;
-    if (activeTab === 'sessions') {
+    const tab = window.vueStore?.activeTab || 'sessions';
+    if (tab === 'sessions') {
       loadProjects();
-    } else if (activeTab === 'projects') {
+    } else if (tab === 'projects') {
       loadProjects().then(() => renderProjectsPanel());
     }
   }, 300);
 });
 
 // Status bar
-let activityTimer = null;
-
 function renderDefaultStatus() {
   const totalSessions = cachedAllProjects.reduce((n, p) => n + p.sessions.length, 0);
   const totalProjects = cachedAllProjects.length;
@@ -1093,30 +873,16 @@ function renderDefaultStatus() {
   if (running > 0) parts.push(`${running} running`);
   parts.push(`${totalSessions} sessions`);
   parts.push(`${totalProjects} projects`);
-  statusBarInfo.textContent = parts.join(' \u00b7 ');
+  window.vueStatusBar?.setInfo(parts.join(' \u00b7 '));
 }
 
 window.api.onStatusUpdate((text, type) => {
-  if (activityTimer) clearTimeout(activityTimer);
-  statusBarActivity.textContent = text;
-  statusBarActivity.className = type === 'done' ? 'status-done' : '';
-  if (!text || type === 'done') {
-    activityTimer = setTimeout(() => {
-      statusBarActivity.textContent = '';
-      statusBarActivity.className = '';
-    }, type === 'done' ? 3000 : 0);
-  }
+  window.vueStatusBar?.setActivity(text, type);
 });
 
 // --- Auto-update status + toast ---
-const statusBarUpdater = document.getElementById('status-bar-updater');
-let updaterStatusTimer = null;
 function setUpdaterStatus(text, duration) {
-  if (updaterStatusTimer) clearTimeout(updaterStatusTimer);
-  statusBarUpdater.textContent = text;
-  if (duration) {
-    updaterStatusTimer = setTimeout(() => { statusBarUpdater.textContent = ''; }, duration);
-  }
+  window.vueStatusBar?.setUpdater(text, duration);
 }
 const updaterHandler = (type, data) => {
   switch (type) {
@@ -1164,13 +930,7 @@ let accounts = [];
 let activeAccountId = 'default';
 let accountsUsage = {};
 
-const accountsContent = document.getElementById('accounts-content');
 const terminalHeaderAccount = document.getElementById('terminal-header-account');
-const accountBtn = document.getElementById('account-btn');
-const accountBtnName = document.getElementById('account-btn-name');
-const accountBtnChips = document.getElementById('account-btn-chips');
-const accountDropdown = document.getElementById('account-dropdown');
-const accountDropdownList = document.getElementById('account-dropdown-list');
 
 function getAccountById(id) {
   return accounts.find(a => a.id === id) || { id: 'default', name: 'Default', configDir: '' };
@@ -1184,64 +944,11 @@ function buildUsageChips(usage) {
 }
 
 function updateAccountDropdown() {
-  const activeAcc = getAccountById(activeAccountId);
-  if (accountBtnName) accountBtnName.textContent = activeAcc.name;
-
-  if (accountBtnChips) {
-    accountBtnChips.innerHTML = '';
-    for (const chip of buildUsageChips(accountsUsage[activeAccountId])) {
-      const s = document.createElement('span');
-      s.className = 'account-chip';
-      s.textContent = chip;
-      accountBtnChips.appendChild(s);
-    }
-  }
-
-  if (!accountDropdownList) return;
-  accountDropdownList.innerHTML = '';
-  for (const acc of accounts) {
-    const item = document.createElement('div');
-    item.className = 'acct-dd-item' + (acc.id === activeAccountId ? ' active' : '');
-
-    const dot = document.createElement('span');
-    dot.className = 'acct-dd-dot';
-
-    const name = document.createElement('span');
-    name.className = 'acct-dd-name';
-    name.textContent = acc.name;
-
-    const chipsEl = document.createElement('span');
-    chipsEl.className = 'acct-dd-chips';
-    for (const chip of buildUsageChips(accountsUsage[acc.id])) {
-      const s = document.createElement('span');
-      s.className = 'account-chip';
-      s.textContent = chip;
-      chipsEl.appendChild(s);
-    }
-
-    item.appendChild(dot);
-    item.appendChild(name);
-    item.appendChild(chipsEl);
-    item.addEventListener('click', () => {
-      closeAccountDropdown();
-      switchAccount(acc.id);
-    });
-    accountDropdownList.appendChild(item);
-  }
+  window.vueAccountDropdown?.setAccounts(accounts, activeAccountId, accountsUsage);
 }
 
 function closeAccountDropdown() {
-  if (accountDropdown) accountDropdown.classList.add('hidden');
-}
-
-if (accountBtn) {
-  accountBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    if (!accountDropdown) return;
-    accountDropdown.classList.toggle('hidden');
-    if (!accountDropdown.classList.contains('hidden')) updateAccountDropdown();
-  });
-  document.addEventListener('click', closeAccountDropdown);
+  window.vueAccountDropdown?.close();
 }
 
 async function openAccountHomeSession(account) {
@@ -1267,10 +974,13 @@ async function switchAccount(id) {
   updateAccountDropdown();
   renderAccountsPanel();
 
-  sidebarContent.innerHTML = '<div class="account-switch-preloader"><div class="acct-spinner"></div><span>Switching account…</span></div>';
+  if (window.vueStore) window.vueStore.accountSwitching = true;
 
   await window.api.setActiveAccountId(id);
 
+  if (window.vueStore) window.vueStore.accountSwitching = false;
+
+  const activeTab = window.vueStore?.activeTab || 'sessions';
   if (activeTab === 'stats') loadStats();
   if (activeTab === 'projects') loadProjects().then(() => renderProjectsPanel());
 }
@@ -1282,6 +992,11 @@ function makePanelHeader(titleText, btnLabel, onBtnClick) {
 }
 
 function renderAccountsPanel() {
+  window.vueAccounts?.setAccounts(accounts, activeAccountId);
+  window.vueAccounts?.setUsage(accountsUsage);
+}
+
+function _renderAccountsPanelOld() {
   if (!accountsContent) return;
   accountsContent.innerHTML = '';
 
@@ -1476,173 +1191,15 @@ function openProjectViewer(project) {
   placeholder.style.display = 'none';
   terminalArea.style.display = 'none';
   projectViewer.style.display = 'flex';
-  projectViewer.innerHTML = '';
-
-  // Header
-  const hdr = document.createElement('div');
-  hdr.className = 'pv-header';
-  const { initials, color } = getProjectAvatar(project.projectPath);
-  const av = document.createElement('span');
-  av.className = 'pv-avatar';
-  av.textContent = initials;
-  av.style.background = color;
-  const titleWrap = document.createElement('div');
-  titleWrap.className = 'pv-title-wrap';
-  const nameEl = document.createElement('div');
-  nameEl.className = 'pv-name';
-  nameEl.textContent = project.projectPath.split('/').filter(Boolean).pop() || project.projectPath;
-  const pathEl = document.createElement('div');
-  pathEl.className = 'pv-path';
-  pathEl.textContent = project.projectPath;
-  titleWrap.appendChild(nameEl);
-  titleWrap.appendChild(pathEl);
-  const newBtn = document.createElement('button');
-  newBtn.className = 'pv-new-btn';
-  newBtn.textContent = '+ New session';
-  newBtn.onclick = () => showNewSessionPopover(project, newBtn);
-  hdr.appendChild(av);
-  hdr.appendChild(titleWrap);
-  hdr.appendChild(newBtn);
-  projectViewer.appendChild(hdr);
-
-  // Body
-  const body = document.createElement('div');
-  body.className = 'pv-body';
-  body.textContent = 'Loading…';
-  projectViewer.appendChild(body);
-
-  window.api.getProjectDetail(project.projectPath).then(detail => {
-    if (!detail) { body.textContent = 'Could not load project info.'; return; }
-    body.innerHTML = '';
-
-    // Git section
-    const gitSection = document.createElement('div');
-    gitSection.className = 'pv-section';
-    const gitTitle = document.createElement('div');
-    gitTitle.className = 'pv-section-title';
-    gitTitle.textContent = 'Git';
-    gitSection.appendChild(gitTitle);
-
-    if (detail.branch) {
-      const branchRow = document.createElement('div');
-      branchRow.className = 'pv-branch';
-      branchRow.textContent = `⎇  ${detail.branch}`;
-      if (detail.totalAdded || detail.totalDeleted) {
-        const stats = document.createElement('span');
-        stats.className = 'pv-diff-stats';
-        if (detail.totalAdded) {
-          const a = document.createElement('span');
-          a.className = 'pv-added';
-          a.textContent = `+${detail.totalAdded}`;
-          stats.appendChild(a);
-        }
-        if (detail.totalDeleted) {
-          const d = document.createElement('span');
-          d.className = 'pv-deleted';
-          d.textContent = `−${detail.totalDeleted}`;
-          stats.appendChild(d);
-        }
-        branchRow.appendChild(stats);
-      }
-      gitSection.appendChild(branchRow);
-    }
-
-    if (detail.changedFiles.length) {
-      const filesTitle = document.createElement('div');
-      filesTitle.className = 'pv-subsection-title';
-      filesTitle.textContent = 'Uncommitted changes';
-      gitSection.appendChild(filesTitle);
-      const fileList = document.createElement('div');
-      fileList.className = 'pv-file-list';
-      for (const f of detail.changedFiles) {
-        const row = document.createElement('div');
-        row.className = 'pv-file-row';
-        const fname = document.createElement('span');
-        fname.className = 'pv-file-name';
-        fname.textContent = f.file;
-        fname.title = f.file;
-        const diff = document.createElement('span');
-        diff.className = 'pv-file-diff';
-        if (f.added) { const s = document.createElement('span'); s.className = 'pv-added'; s.textContent = `+${f.added}`; diff.appendChild(s); }
-        if (f.deleted) { const s = document.createElement('span'); s.className = 'pv-deleted'; s.textContent = `−${f.deleted}`; diff.appendChild(s); }
-        row.appendChild(fname);
-        row.appendChild(diff);
-        fileList.appendChild(row);
-      }
-      gitSection.appendChild(fileList);
-    }
-
-    if (detail.commits.length) {
-      const commitsTitle = document.createElement('div');
-      commitsTitle.className = 'pv-subsection-title';
-      commitsTitle.textContent = 'Recent commits';
-      gitSection.appendChild(commitsTitle);
-      const commitList = document.createElement('div');
-      commitList.className = 'pv-commit-list';
-      for (const c of detail.commits) {
-        const row = document.createElement('div');
-        row.className = 'pv-commit-row';
-        const hash = document.createElement('span');
-        hash.className = 'pv-commit-hash';
-        hash.textContent = c.hash;
-        const msg = document.createElement('span');
-        msg.className = 'pv-commit-msg';
-        msg.textContent = c.message;
-        const date = document.createElement('span');
-        date.className = 'pv-commit-date';
-        date.textContent = c.date;
-        row.appendChild(hash);
-        row.appendChild(msg);
-        row.appendChild(date);
-        commitList.appendChild(row);
-      }
-      gitSection.appendChild(commitList);
-    }
-
-    if (!detail.branch && !detail.commits.length) {
-      const empty = document.createElement('div');
-      empty.className = 'pv-empty';
-      empty.textContent = 'Not a git repository.';
-      gitSection.appendChild(empty);
-    }
-
-    body.appendChild(gitSection);
-
-    // Docker section
-    if (detail.containers.length) {
-      const dockerSection = document.createElement('div');
-      dockerSection.className = 'pv-section';
-      const dockerTitle = document.createElement('div');
-      dockerTitle.className = 'pv-section-title';
-      dockerTitle.textContent = 'Docker Compose';
-      dockerSection.appendChild(dockerTitle);
-
-      const containerList = document.createElement('div');
-      containerList.className = 'pv-container-list';
-      for (const c of detail.containers) {
-        const row = document.createElement('div');
-        row.className = 'pv-container-row' + (c.state.includes('running') ? ' running' : '');
-        const nameEl = document.createElement('span');
-        nameEl.className = 'pv-container-name';
-        nameEl.textContent = c.name;
-        const stateEl = document.createElement('span');
-        stateEl.className = 'pv-container-state';
-        stateEl.textContent = c.status || c.state;
-        const portsEl = document.createElement('span');
-        portsEl.className = 'pv-container-ports';
-        portsEl.textContent = c.ports || '';
-        row.appendChild(nameEl);
-        row.appendChild(stateEl);
-        row.appendChild(portsEl);
-        containerList.appendChild(row);
-      }
-      dockerSection.appendChild(containerList);
-      body.appendChild(dockerSection);
-    }
-  }).catch(() => { body.textContent = 'Could not load project info.'; });
+  window.vueProjectViewer?.open(project);
+  saveUiState({ panel: 'project', projectPath: project.projectPath });
 }
 
 function renderProjectsPanel() {
+  window.vueProjects?.setProjects(cachedAllProjects);
+}
+
+function _renderProjectsPanelOld() {
   if (!projectsContent) return;
   projectsContent.innerHTML = '';
 
@@ -1882,6 +1439,7 @@ function renderProjectsPanel() {
 async function refreshAccountUsage() {
   try {
     accountsUsage = await window.api.getAccountsUsage();
+    window.vueAccounts?.setUsage(accountsUsage);
   } catch {}
 }
 
@@ -1947,79 +1505,232 @@ async function initAccounts() {
 
 initAccounts();
 
-// --- Mount Vue apps ---
-(function mountVue() {
-  const sidebarEl = document.getElementById('sidebar-content');
-  const headerEl = document.getElementById('vue-session-header');
-  if (!sidebarEl || !headerEl || !window.vueSidebar) return;
+// --- App.vue side-effect callbacks ---
+// App.vue calls these when the user interacts with the sidebar shell
+// (tabs, filters, search). Each callback syncs local app.js state and
+// triggers whatever data loading or rendering is needed.
+window.__sb = {
+  onTabChange(tabName) {
+    activeTab = tabName;
+    searchMatchIds = null;
+    searchMatchProjectPaths = null;
+    window.vueSidebar?.setSearch(null, null);
+    saveUiState({ sidebarTab: tabName });
 
-  window.vueSidebar.mount(sidebarEl, headerEl, {
-    openSession: (session) => openSession(session),
-    stopSession: (id) => confirmAndStopSession(id),
-    toggleStar: async (id) => {
-      const { starred } = await window.api.toggleStar(id);
-      const s = sessionMap.get(id);
-      if (s) s.starred = starred;
-      refreshSidebar({ resort: true });
-    },
-    archiveSession: async (id) => {
-      const session = sessionMap.get(id);
-      if (!session) return;
-      const newVal = session.archived ? 0 : 1;
-      if (newVal && activePtyIds.has(id)) {
-        await window.api.stopSession(id);
-        pollActiveSessions();
+    if (tabName === 'sessions') {
+      saveUiState({ panel: 'terminal', sidebarTab: tabName });
+      if (gridViewActive) {
+        for (const entry of openSessions.values()) {
+          if (!entry.closed) fitAndScroll(entry);
+        }
+      } else if (activeSessionId && openSessions.has(activeSessionId)) {
+        showSession(activeSessionId);
+      } else {
+        placeholder.style.display = '';
       }
-      await window.api.archiveSession(id, newVal);
-      session.archived = newVal;
-      loadProjects();
-    },
-    forkSession: (id) => {
-      const session = sessionMap.get(id);
-      const project = [...cachedAllProjects, ...cachedProjects].find(p =>
-        p.sessions.some(s => s.sessionId === id)
-      );
-      if (session && project && typeof forkSession === 'function') forkSession(session, project);
-    },
-    showJsonl: (id) => {
-      const session = sessionMap.get(id);
-      if (session && typeof showJsonlViewer === 'function') showJsonlViewer(session);
-    },
-    launchConfig: (id) => {
-      const session = sessionMap.get(id);
-      if (session && typeof showResumeSessionDialog === 'function') showResumeSessionDialog(session);
-    },
-    renameSession: async (id, name) => {
-      await window.api.renameSession(id, name);
-      const s = sessionMap.get(id);
-      if (s) s.name = name;
-      refreshSidebar();
-    },
-    newSession: (project) => {
-      if (typeof showNewSessionPopover === 'function') showNewSessionPopover(project);
-    },
-    openSettings: (path) => openSettingsViewer('project', path),
-    archiveSessions: async (sessions) => {
-      const active = sessions.filter(s => !s.archived);
-      if (!active.length) return;
-      const shortName = active[0]?.projectPath?.split('/').filter(Boolean).slice(-2).join('/') || '';
-      if (!confirm(`Archive all ${active.length} session${active.length > 1 ? 's' : ''} in ${shortName}?`)) return;
-      for (const s of active) {
-        if (activePtyIds.has(s.sessionId)) await window.api.stopSession(s.sessionId);
-        await window.api.archiveSession(s.sessionId, 1);
-        s.archived = 1;
+      if (projectsChangedWhileAway) {
+        projectsChangedWhileAway = false;
+        loadProjects();
       }
+    } else if (tabName === 'plans') {
+      loadPlans();
+    } else if (tabName === 'stats') {
+      saveUiState({ panel: 'stats' });
+      hideAllViewers();
+      statsViewer.style.display = 'flex';
+      loadStats();
+    } else if (tabName === 'memory') {
+      saveUiState({ panel: 'memory' });
+      loadMemories();
+    } else if (tabName === 'accounts') {
+      renderAccountsPanel();
+      refreshAccountUsage().then(() => renderAccountsPanel());
+    } else if (tabName === 'projects') {
+      if (projectsChangedWhileAway) {
+        projectsChangedWhileAway = false;
+        loadProjects().then(() => renderProjectsPanel());
+      } else {
+        renderProjectsPanel();
+      }
+    }
+  },
+
+  onFilterChange({ showStarredOnly: s, showRunningOnly: r, showTodayOnly: t, showArchived: a }) {
+    showStarredOnly = s;
+    showRunningOnly = r;
+    showTodayOnly = t;
+    showArchived = a;
+    refreshSidebar({ resort: true });
+  },
+
+  async search(query, titlesOnly) {
+    const tab = activeTab;
+    try {
+      if (tab === 'sessions') {
+        const results = await window.api.search('session', query, titlesOnly);
+        searchMatchIds = new Set(results.map(r => r.id));
+        searchMatchProjectPaths = null;
+        if (titlesOnly) {
+          const matchProjects = new Set();
+          for (const r of results) {
+            const s = sessionMap.get(r.id);
+            if (s?.projectPath) matchProjects.add(s.projectPath);
+          }
+          searchMatchProjectPaths = matchProjects;
+        }
+        window.vueSidebar?.setSearch(searchMatchIds, searchMatchProjectPaths);
+        refreshSidebar({ resort: true });
+      } else if (tab === 'plans') {
+        const results = await window.api.search('plan', query, titlesOnly);
+        const matchIds = new Set(results.map(r => r.id));
+        renderPlans(cachedPlans.filter(p => matchIds.has(p.filename)));
+      } else if (tab === 'memory') {
+        const results = await window.api.search('memory', query, titlesOnly);
+        renderMemories(new Set(results.map(r => r.id)));
+      } else if (tab === 'projects') {
+        projectsSearchQuery = query;
+        window.vueProjects?.setSearch(query);
+      }
+    } catch {
+      if (tab === 'sessions') {
+        searchMatchIds = null;
+        searchMatchProjectPaths = null;
+        window.vueSidebar?.setSearch(null, null);
+        refreshSidebar({ resort: true });
+      }
+    }
+  },
+
+  clearSearch,
+
+  resort: () => loadProjects({ resort: true }),
+
+  addProject: () => showAddProjectDialog(),
+
+  openGlobalSettings: () => openSettingsViewer('global'),
+
+  toggleGridView: () => toggleGridView(),
+
+  openSession: (session) => openSession(session),
+
+  stopSession: (id) => confirmAndStopSession(id),
+
+  toggleStar: async (id) => {
+    const { starred } = await window.api.toggleStar(id);
+    const s = sessionMap.get(id);
+    if (s) s.starred = starred;
+    refreshSidebar({ resort: true });
+  },
+
+  archiveSession: async (id) => {
+    const session = sessionMap.get(id);
+    if (!session) return;
+    const newVal = session.archived ? 0 : 1;
+    if (newVal && activePtyIds.has(id)) {
+      await window.api.stopSession(id);
       pollActiveSessions();
-      loadProjects();
-    },
-    removeProject: async (path) => {
-      const name = path.split('/').pop();
-      if (!confirm(`Hide worktree "${name}"?\n\nSession files are not deleted.`)) return;
-      await window.api.removeProject(path);
-      loadProjects();
-    },
-  });
+    }
+    await window.api.archiveSession(id, newVal);
+    session.archived = newVal;
+    loadProjects();
+  },
 
-  // Sync initial state to Vue
-  window.vueSidebar.setActiveSession(activeSessionId);
-}());
+  forkSession: (id) => {
+    const session = sessionMap.get(id);
+    const project = [...cachedAllProjects, ...cachedProjects].find(p =>
+      p.sessions.some(s => s.sessionId === id)
+    );
+    if (session && project && typeof forkSession === 'function') forkSession(session, project);
+  },
+
+  showJsonl: (id) => {
+    const session = sessionMap.get(id);
+    if (session && typeof showJsonlViewer === 'function') showJsonlViewer(session);
+  },
+
+  launchConfig: (id) => {
+    const session = sessionMap.get(id);
+    if (session && typeof showResumeSessionDialog === 'function') showResumeSessionDialog(session);
+  },
+
+  renameSession: async (id, name) => {
+    await window.api.renameSession(id, name);
+    const s = sessionMap.get(id);
+    if (s) s.name = name;
+    refreshSidebar();
+  },
+
+  newSession: (project) => {
+    if (typeof showNewSessionPopover === 'function') showNewSessionPopover(project);
+  },
+
+  openSettings: (path) => openSettingsViewer('project', path),
+
+  archiveSessions: async (sessions) => {
+    const active = sessions.filter(s => !s.archived);
+    if (!active.length) return;
+    const shortName = active[0]?.projectPath?.split('/').filter(Boolean).slice(-2).join('/') || '';
+    if (!confirm(`Archive all ${active.length} session${active.length > 1 ? 's' : ''} in ${shortName}?`)) return;
+    for (const s of active) {
+      if (activePtyIds.has(s.sessionId)) await window.api.stopSession(s.sessionId);
+      await window.api.archiveSession(s.sessionId, 1);
+      s.archived = 1;
+    }
+    pollActiveSessions();
+    loadProjects();
+  },
+
+  removeProject: async (path) => {
+    const name = path.split('/').pop();
+    if (!confirm(`Hide worktree "${name}"?\n\nSession files are not deleted.`)) return;
+    await window.api.removeProject(path);
+    loadProjects();
+  },
+
+  openPlan: (plan) => openPlan(plan),
+
+  openMemory: (file) => openMemory(file),
+
+  switchAccount: (id) => switchAccount(id),
+
+  openAccountHomeSession: (acc) => openAccountHomeSession(acc),
+
+  renameAccount: async (id, name) => {
+    await window.api.renameAccount(id, name);
+    updateAccountDropdown();
+  },
+
+  deleteAccount: async (id) => {
+    if (activeAccountId === id) await switchAccount('default');
+    accounts = accounts.filter(a => a.id !== id);
+    await window.api.deleteAccount(id);
+    updateAccountDropdown();
+    renderAccountsPanel();
+  },
+
+  createAccount: async (name) => {
+    const newAcc = await window.api.createAccount(name);
+    if (!newAcc) return null;
+    accounts = [...accounts, newAcc];
+    await refreshAccountUsage();
+    updateAccountDropdown();
+    renderAccountsPanel();
+    return newAcc;
+  },
+
+  openProject: (project) => openProjectViewer(project),
+  onPvTabChange: (tab) => saveUiState({ pvTab: tab }),
+
+  openSessionById: (sessionId) => {
+    const session = sessionMap.get(sessionId);
+    if (!session) return;
+    hideAllViewers();
+    window.vueApp?.setTab('sessions');
+    openSession(session);
+  },
+
+  projectRemoved: () => loadProjects().then(() => renderProjectsPanel()),
+};
+
+// Sync initial account dropdown state (initAccounts may already have run)
+updateAccountDropdown();

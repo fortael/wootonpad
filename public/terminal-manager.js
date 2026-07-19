@@ -8,6 +8,19 @@
 // wrapInGridCard, showGridView (grid-view.js)
 // Depends on: shellEscape (utils.js)
 
+// Current terminal font — read from settings on startup, changed via _applyTerminalFont
+let currentFontFamily = (window.TERMINAL_FONTS?.['default']?.family) || "'SF Mono', Menlo, monospace";
+
+window._applyTerminalFont = (fontFamily) => {
+  currentFontFamily = fontFamily;
+  for (const [, entry] of openSessions) {
+    if (!entry.closed) {
+      entry.terminal.options.fontFamily = fontFamily;
+      safeFit(entry);
+    }
+  }
+};
+
 // --- Terminal key bindings ---
 // Shift+Enter → kitty protocol (CSI 13;2u) so Claude Code treats it as newline, not submit.
 // Two layers needed:
@@ -173,7 +186,7 @@ function createTerminalEntry(session) {
 
   const terminal = new Terminal({
     fontSize: 12,
-    fontFamily: "'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
+    fontFamily: currentFontFamily,
     theme: TERMINAL_THEME,
     cursorBlink: false,
     scrollback: 10000,

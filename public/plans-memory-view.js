@@ -20,43 +20,11 @@ async function loadPlans() {
 
 function renderPlans(plans) {
   plans = plans || cachedPlans;
-  plansContent.innerHTML = '';
-  if (plans.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'plans-empty';
-    empty.textContent = 'No plans found in ~/.claude/plans/';
-    plansContent.appendChild(empty);
-    return;
-  }
-  
-  const { group, list: plansList } = makeGroup('Plans');
-  plansContent.appendChild(group);
-
-  for (const plan of plans) {
-    plansList.appendChild(buildPlanItem(plan));
-  }
-}
-
-function buildPlanItem(plan) {
-  const { item } = buildListItem({
-    title: plan.title,
-    subtitle: plan.filename,
-    meta: formatDate(new Date(plan.modified)),
-    classes: ['plan-item'],
-  });
-  item.addEventListener('click', () => openPlan(plan));
-  return item;
+  window.vuePlans?.setPlans(plans);
 }
 
 async function openPlan(plan) {
-  // Mark active in sidebar
-  plansContent.querySelectorAll('.plan-item.active').forEach(el => el.classList.remove('active'));
-  const items = plansContent.querySelectorAll('.plan-item');
-  items.forEach(el => {
-    if (el.querySelector('.session-subtitle')?.textContent === plan.filename) {
-      el.classList.add('active');
-    }
-  });
+  window.vuePlans?.setActive(plan.filename);
 
   const result = await window.api.readPlan(plan.filename);
   currentPlanContent = result.content;
@@ -68,7 +36,7 @@ async function openPlan(plan) {
   terminalArea.style.display = 'none';
   statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
-  settingsViewer.style.display = 'none';
+  if (window.vueStore) window.vueStore.settingsOpen = false;
   planViewer.style.display = 'flex';
 
   planPanel.open(plan.title, currentPlanFilePath, currentPlanContent);
@@ -78,9 +46,11 @@ function hideAllViewers() {
   planViewer.style.display = 'none';
   statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
-  settingsViewer.style.display = 'none';
+  // settingsViewer is now a Vue component managed via store.settingsOpen
+  if (window.vueStore) window.vueStore.settingsOpen = false;
   jsonlViewer.style.display = 'none';
   projectViewer.style.display = 'none';
+  window.vueProjectViewer?.close();
   terminalArea.style.display = '';
 }
 
@@ -96,31 +66,7 @@ async function loadMemories() {
 }
 
 function renderMemories(filterIds) {
-  memoryContent.innerHTML = '';
-  const data = cachedMemoryData;
-  const allFiles = [...data.global.files, ...data.projects.flatMap(p => p.files)];
-  if (allFiles.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'plans-empty';
-    empty.textContent = 'No memory files found.';
-    memoryContent.appendChild(empty);
-    return;
-  }
-
-  // Global group
-  if (data.global.files.length > 0) {
-    const globalFiles = filterIds ? data.global.files.filter(f => filterIds.has(f.filePath)) : data.global.files;
-    if (globalFiles.length > 0) {
-      memoryContent.appendChild(buildMemoryGroup('__global__', 'Global', globalFiles));
-    }
-  }
-
-  // Per-project groups
-  for (const proj of data.projects) {
-    const projFiles = filterIds ? proj.files.filter(f => filterIds.has(f.filePath)) : proj.files;
-    if (projFiles.length === 0) continue;
-    memoryContent.appendChild(buildMemoryGroup(proj.folder, proj.shortName, projFiles));
-  }
+  window.vueMemory?.setMemories(cachedMemoryData, filterIds || null);
 }
 
 function buildMemoryGroup(key, label, files) {
@@ -218,10 +164,7 @@ function buildMemoryItem(file) {
 }
 
 async function openMemory(file) {
-  // Mark active in sidebar
-  memoryContent.querySelectorAll('.memory-item.active').forEach(el => el.classList.remove('active'));
-  const target = memoryContent.querySelector(`.memory-item[data-filepath="${CSS.escape(file.filePath)}"]`);
-  if (target) target.classList.add('active');
+  window.vueMemory?.setActive(file.filePath);
 
   const content = await window.api.readMemory(file.filePath);
   currentMemoryFilePath = file.filePath;
@@ -232,7 +175,7 @@ async function openMemory(file) {
   terminalArea.style.display = 'none';
   planViewer.style.display = 'none';
   statsViewer.style.display = 'none';
-  settingsViewer.style.display = 'none';
+  if (window.vueStore) window.vueStore.settingsOpen = false;
   memoryViewer.style.display = 'flex';
 
   memoryPanel.open(file.filename, file.filePath, content);

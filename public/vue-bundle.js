@@ -153,6 +153,9 @@
 		}
 		return String(a) === String(b);
 	}
+	function looseIndexOf(arr, val) {
+		return arr.findIndex((item) => looseEqual(item, val));
+	}
 	var isRef$1 = (val) => {
 		return !!(val && val["__v_isRef"] === true);
 	};
@@ -1649,6 +1652,30 @@
 		renderFnWithContext._d = true;
 		return renderFnWithContext;
 	}
+	function withDirectives(vnode, directives) {
+		if (currentRenderingInstance === null) return vnode;
+		const instance = getComponentPublicInstance(currentRenderingInstance);
+		const bindings = vnode.dirs || (vnode.dirs = []);
+		for (let i = 0; i < directives.length; i++) {
+			let [dir, value, arg, modifiers = EMPTY_OBJ] = directives[i];
+			if (dir) {
+				if (isFunction(dir)) dir = {
+					mounted: dir,
+					updated: dir
+				};
+				if (dir.deep) traverse(value);
+				bindings.push({
+					dir,
+					instance,
+					value,
+					oldValue: void 0,
+					arg,
+					modifiers
+				});
+			}
+		}
+		return vnode;
+	}
 	function invokeDirectiveHook(vnode, prevVNode, instance, name) {
 		const bindings = vnode.dirs;
 		const oldBindings = prevVNode && prevVNode.dirs;
@@ -1764,8 +1791,209 @@
 			return cur;
 		};
 	}
+	var pendingMounts = /* @__PURE__ */ new WeakMap();
 	var TeleportEndKey = /* @__PURE__ */ Symbol("_vte");
 	var isTeleport = (type) => type.__isTeleport;
+	var isTeleportDisabled = (props) => props && (props.disabled || props.disabled === "");
+	var isTeleportDeferred = (props) => props && (props.defer || props.defer === "");
+	var isTargetSVG = (target) => typeof SVGElement !== "undefined" && target instanceof SVGElement;
+	var isTargetMathML = (target) => typeof MathMLElement === "function" && target instanceof MathMLElement;
+	var resolveTarget = (props, select) => {
+		const targetSelector = props && props.to;
+		if (isString(targetSelector)) if (!select) return null;
+		else return select(targetSelector);
+		else return targetSelector;
+	};
+	var TeleportImpl = {
+		name: "Teleport",
+		__isTeleport: true,
+		process(n1, n2, container, anchor, parentComponent, parentSuspense, namespace, slotScopeIds, optimized, internals) {
+			const { mc: mountChildren, pc: patchChildren, pbc: patchBlockChildren, o: { insert, querySelector, createText, createComment, parentNode } } = internals;
+			const disabled = isTeleportDisabled(n2.props);
+			let { dynamicChildren } = n2;
+			const mount = (vnode, container2, anchor2) => {
+				if (vnode.shapeFlag & 16) mountChildren(vnode.children, container2, anchor2, parentComponent, parentSuspense, namespace, slotScopeIds, optimized);
+			};
+			const mountToTarget = (vnode = n2) => {
+				const disabled2 = isTeleportDisabled(vnode.props);
+				const target = vnode.target = resolveTarget(vnode.props, querySelector);
+				const targetAnchor = prepareAnchor(target, vnode, createText, insert);
+				if (target) {
+					if (namespace !== "svg" && isTargetSVG(target)) namespace = "svg";
+					else if (namespace !== "mathml" && isTargetMathML(target)) namespace = "mathml";
+					if (parentComponent && parentComponent.isCE) (parentComponent.ce._teleportTargets || (parentComponent.ce._teleportTargets = /* @__PURE__ */ new Set())).add(target);
+					if (!disabled2) {
+						mount(vnode, target, targetAnchor);
+						updateCssVars(vnode, false);
+					}
+				}
+			};
+			const queuePendingMount = (vnode) => {
+				const mountJob = () => {
+					if (pendingMounts.get(vnode) !== mountJob) return;
+					pendingMounts.delete(vnode);
+					if (isTeleportDisabled(vnode.props)) {
+						const mountContainer = parentNode(vnode.el) || container;
+						mount(vnode, mountContainer, vnode.anchor);
+						updateCssVars(vnode, true);
+					}
+					mountToTarget(vnode);
+				};
+				pendingMounts.set(vnode, mountJob);
+				queuePostRenderEffect(mountJob, parentSuspense);
+			};
+			if (n1 == null) {
+				const placeholder = n2.el = createText("");
+				const mainAnchor = n2.anchor = createText("");
+				insert(placeholder, container, anchor);
+				insert(mainAnchor, container, anchor);
+				if (isTeleportDeferred(n2.props) || parentSuspense && parentSuspense.pendingBranch) {
+					queuePendingMount(n2);
+					return;
+				}
+				if (disabled) {
+					mount(n2, container, mainAnchor);
+					updateCssVars(n2, true);
+				}
+				mountToTarget();
+			} else {
+				n2.el = n1.el;
+				const mainAnchor = n2.anchor = n1.anchor;
+				const pendingMount = pendingMounts.get(n1);
+				if (pendingMount) {
+					pendingMount.flags |= 8;
+					pendingMounts.delete(n1);
+					queuePendingMount(n2);
+					return;
+				}
+				n2.targetStart = n1.targetStart;
+				const target = n2.target = n1.target;
+				const targetAnchor = n2.targetAnchor = n1.targetAnchor;
+				const wasDisabled = isTeleportDisabled(n1.props);
+				const currentContainer = wasDisabled ? container : target;
+				const currentAnchor = wasDisabled ? mainAnchor : targetAnchor;
+				if (namespace === "svg" || isTargetSVG(target)) namespace = "svg";
+				else if (namespace === "mathml" || isTargetMathML(target)) namespace = "mathml";
+				if (dynamicChildren) {
+					patchBlockChildren(n1.dynamicChildren, dynamicChildren, currentContainer, parentComponent, parentSuspense, namespace, slotScopeIds);
+					traverseStaticChildren(n1, n2, true);
+				} else if (!optimized) patchChildren(n1, n2, currentContainer, currentAnchor, parentComponent, parentSuspense, namespace, slotScopeIds, false);
+				if (disabled) {
+					if (!wasDisabled) moveTeleport(n2, container, mainAnchor, internals, 1);
+					else if (n2.props && n1.props && n2.props.to !== n1.props.to) n2.props.to = n1.props.to;
+				} else if ((n2.props && n2.props.to) !== (n1.props && n1.props.to)) {
+					const nextTarget = resolveTarget(n2.props, querySelector);
+					if (nextTarget) {
+						n2.target = nextTarget;
+						moveTeleport(n2, nextTarget, null, internals, 0);
+					}
+				} else if (wasDisabled) moveTeleport(n2, target, targetAnchor, internals, 1);
+				updateCssVars(n2, disabled);
+			}
+		},
+		remove(vnode, parentComponent, parentSuspense, { um: unmount, o: { remove: hostRemove } }, doRemove) {
+			const { shapeFlag, children, anchor, targetStart, targetAnchor, target, props } = vnode;
+			const disabled = isTeleportDisabled(props);
+			const shouldRemove = doRemove || !disabled;
+			const pendingMount = pendingMounts.get(vnode);
+			if (pendingMount) {
+				pendingMount.flags |= 8;
+				pendingMounts.delete(vnode);
+			}
+			if (target) {
+				hostRemove(targetStart);
+				hostRemove(targetAnchor);
+			}
+			doRemove && hostRemove(anchor);
+			if (!pendingMount && (disabled || target) && shapeFlag & 16) for (let i = 0; i < children.length; i++) {
+				const child = children[i];
+				unmount(child, parentComponent, parentSuspense, shouldRemove, !!child.dynamicChildren);
+			}
+		},
+		move: moveTeleport,
+		hydrate: hydrateTeleport
+	};
+	function moveTeleport(vnode, container, parentAnchor, { o: { insert }, m: move }, moveType = 2) {
+		if (moveType === 0) insert(vnode.targetAnchor, container, parentAnchor);
+		const { el, anchor, shapeFlag, children, props } = vnode;
+		const isReorder = moveType === 2;
+		if (isReorder) insert(el, container, parentAnchor);
+		if (!pendingMounts.has(vnode) && (!isReorder || isTeleportDisabled(props))) {
+			if (shapeFlag & 16) for (let i = 0; i < children.length; i++) move(children[i], container, parentAnchor, 2);
+		}
+		if (isReorder) insert(anchor, container, parentAnchor);
+	}
+	function hydrateTeleport(node, vnode, parentComponent, parentSuspense, slotScopeIds, optimized, { o: { nextSibling, parentNode, querySelector, insert, createText } }, hydrateChildren) {
+		function hydrateAnchor(target2, targetNode) {
+			let targetAnchor = targetNode;
+			while (targetAnchor) {
+				if (targetAnchor && targetAnchor.nodeType === 8) {
+					if (targetAnchor.data === "teleport start anchor") vnode.targetStart = targetAnchor;
+					else if (targetAnchor.data === "teleport anchor") {
+						vnode.targetAnchor = targetAnchor;
+						target2._lpa = vnode.targetAnchor && nextSibling(vnode.targetAnchor);
+						break;
+					}
+				}
+				targetAnchor = nextSibling(targetAnchor);
+			}
+		}
+		function hydrateDisabledTeleport(node2, vnode2) {
+			vnode2.anchor = hydrateChildren(nextSibling(node2), vnode2, parentNode(node2), parentComponent, parentSuspense, slotScopeIds, optimized);
+		}
+		const target = vnode.target = resolveTarget(vnode.props, querySelector);
+		const disabled = isTeleportDisabled(vnode.props);
+		if (target) {
+			const targetNode = target._lpa || target.firstChild;
+			if (vnode.shapeFlag & 16) if (disabled) {
+				hydrateDisabledTeleport(node, vnode);
+				hydrateAnchor(target, targetNode);
+				if (!vnode.targetAnchor) prepareAnchor(target, vnode, createText, insert, parentNode(node) === target ? node : null);
+			} else {
+				vnode.anchor = nextSibling(node);
+				hydrateAnchor(target, targetNode);
+				if (!vnode.targetAnchor) prepareAnchor(target, vnode, createText, insert);
+				hydrateChildren(targetNode && nextSibling(targetNode), vnode, target, parentComponent, parentSuspense, slotScopeIds, optimized);
+			}
+			updateCssVars(vnode, disabled);
+		} else if (disabled) {
+			if (vnode.shapeFlag & 16) {
+				hydrateDisabledTeleport(node, vnode);
+				vnode.targetStart = node;
+				vnode.targetAnchor = nextSibling(node);
+			}
+		}
+		return vnode.anchor && nextSibling(vnode.anchor);
+	}
+	var Teleport = TeleportImpl;
+	function updateCssVars(vnode, isDisabled) {
+		const ctx = vnode.ctx;
+		if (ctx && ctx.ut) {
+			let node, anchor;
+			if (isDisabled) {
+				node = vnode.el;
+				anchor = vnode.anchor;
+			} else {
+				node = vnode.targetStart;
+				anchor = vnode.targetAnchor;
+			}
+			while (node && node !== anchor) {
+				if (node.nodeType === 1) node.setAttribute("data-v-owner", ctx.uid);
+				node = node.nextSibling;
+			}
+			ctx.ut();
+		}
+	}
+	function prepareAnchor(target, vnode, createText, insert, anchor = null) {
+		const targetStart = vnode.targetStart = createText("");
+		const targetAnchor = vnode.targetAnchor = createText("");
+		targetStart[TeleportEndKey] = targetAnchor;
+		if (target) {
+			insert(targetStart, target, anchor);
+			insert(targetAnchor, target, anchor);
+		}
+		return targetAnchor;
+	}
 	var leaveCbKey = /* @__PURE__ */ Symbol("_leaveCb");
 	function setTransitionHooks(vnode, hooks) {
 		if (vnode.shapeFlag & 6 && vnode.component) {
@@ -1987,6 +2215,39 @@
 		else ret = [];
 		if (cache) cache[index] = ret;
 		return ret;
+	}
+	function renderSlot(slots, name, props = {}, fallback, noSlotted, branchKey) {
+		if (currentRenderingInstance.ce || currentRenderingInstance.parent && isAsyncWrapper(currentRenderingInstance.parent) && currentRenderingInstance.parent.ce) {
+			const slotProps = branchKey != null && props.key == null ? extend({}, props, { key: branchKey }) : props;
+			const hasProps = Object.keys(slotProps).length > 0;
+			if (name !== "default") slotProps.name = name;
+			return openBlock(), createBlock(Fragment, null, [createVNode("slot", slotProps, fallback && fallback())], hasProps ? -2 : 64);
+		}
+		let slot = slots[name];
+		if (slot && slot._c) slot._d = false;
+		const prevStackSize = blockStack.length;
+		openBlock();
+		let rendered;
+		try {
+			const validSlotContent = slot && ensureValidVNode(slot(props));
+			const slotKey = props.key || branchKey || validSlotContent && validSlotContent.key;
+			rendered = createBlock(Fragment, { key: (slotKey && !isSymbol(slotKey) ? slotKey : `_${name}`) + (!validSlotContent && fallback ? "_fb" : "") }, validSlotContent || (fallback ? fallback() : []), validSlotContent && slots._ === 1 ? 64 : -2);
+		} catch (err) {
+			for (let i = blockStack.length; i > prevStackSize; i--) closeBlock();
+			throw err;
+		} finally {
+			if (slot && slot._c) slot._d = true;
+		}
+		if (!noSlotted && rendered.scopeId) rendered.slotScopeIds = [rendered.scopeId + "-s"];
+		return rendered;
+	}
+	function ensureValidVNode(vnodes) {
+		return vnodes.some((child) => {
+			if (!isVNode(child)) return true;
+			if (child.type === Comment) return false;
+			if (child.type === Fragment && !ensureValidVNode(child.children)) return false;
+			return true;
+		}) ? vnodes : null;
 	}
 	var getPublicInstance = (i) => {
 		if (!i) return null;
@@ -3651,6 +3912,11 @@
 	function createTextVNode(text = " ", flag = 0) {
 		return createVNode(Text, null, text, flag);
 	}
+	function createStaticVNode(content, numberOfNodes) {
+		const vnode = createVNode(Static, null, content);
+		vnode.staticCount = numberOfNodes;
+		return vnode;
+	}
 	function createCommentVNode(text = "", asBlock = false) {
 		return asBlock ? (openBlock(), createBlock(Comment, null, text)) : createVNode(Comment, null, text);
 	}
@@ -4016,6 +4282,35 @@
 	}
 	var vShowOriginalDisplay = /* @__PURE__ */ Symbol("_vod");
 	var vShowHidden = /* @__PURE__ */ Symbol("_vsh");
+	var vShow = {
+		name: "show",
+		beforeMount(el, { value }, { transition }) {
+			el[vShowOriginalDisplay] = el.style.display === "none" ? "" : el.style.display;
+			if (transition && value) transition.beforeEnter(el);
+			else setDisplay(el, value);
+		},
+		mounted(el, { value }, { transition }) {
+			if (transition && value) transition.enter(el);
+		},
+		updated(el, { value, oldValue }, { transition }) {
+			if (!value === !oldValue) return;
+			if (transition) if (value) {
+				transition.beforeEnter(el);
+				setDisplay(el, true);
+				transition.enter(el);
+			} else transition.leave(el, () => {
+				setDisplay(el, false);
+			});
+			else setDisplay(el, value);
+		},
+		beforeUnmount(el, { value }) {
+			setDisplay(el, value);
+		}
+	};
+	function setDisplay(el, value) {
+		el.style.display = value ? el[vShowOriginalDisplay] : "none";
+		el[vShowHidden] = !value;
+	}
 	var CSS_VAR_TEXT = /* @__PURE__ */ Symbol("");
 	var displayRE = /(?:^|;)\s*display\s*:/;
 	function patchStyle(el, prev, next) {
@@ -4221,6 +4516,107 @@
 		const camelKey = camelize(key);
 		return Array.isArray(props) ? props.some((prop) => camelize(prop) === camelKey) : Object.keys(props).some((prop) => camelize(prop) === camelKey);
 	}
+	var getModelAssigner = (vnode) => {
+		const fn = vnode.props["onUpdate:modelValue"] || false;
+		return isArray(fn) ? (value) => invokeArrayFns(fn, value) : fn;
+	};
+	function onCompositionStart(e) {
+		e.target.composing = true;
+	}
+	function onCompositionEnd(e) {
+		const target = e.target;
+		if (target.composing) {
+			target.composing = false;
+			target.dispatchEvent(new Event("input"));
+		}
+	}
+	var assignKey = /* @__PURE__ */ Symbol("_assign");
+	function castValue(value, trim, number) {
+		if (trim) value = value.trim();
+		if (number) value = looseToNumber(value);
+		return value;
+	}
+	var vModelText = {
+		created(el, { modifiers: { lazy, trim, number } }, vnode) {
+			el[assignKey] = getModelAssigner(vnode);
+			const castToNumber = number || vnode.props && vnode.props.type === "number";
+			addEventListener(el, lazy ? "change" : "input", (e) => {
+				if (e.target.composing) return;
+				el[assignKey](castValue(el.value, trim, castToNumber));
+			});
+			if (trim || castToNumber) addEventListener(el, "change", () => {
+				el.value = castValue(el.value, trim, castToNumber);
+			});
+			if (!lazy) {
+				addEventListener(el, "compositionstart", onCompositionStart);
+				addEventListener(el, "compositionend", onCompositionEnd);
+				addEventListener(el, "change", onCompositionEnd);
+			}
+		},
+		mounted(el, { value }) {
+			el.value = value == null ? "" : value;
+		},
+		beforeUpdate(el, { value, oldValue, modifiers: { lazy, trim, number } }, vnode) {
+			el[assignKey] = getModelAssigner(vnode);
+			if (el.composing) return;
+			const elValue = (number || el.type === "number") && !/^0\d/.test(el.value) ? looseToNumber(el.value) : el.value;
+			const newValue = value == null ? "" : value;
+			if (elValue === newValue) return;
+			const rootNode = el.getRootNode();
+			if ((rootNode instanceof Document || rootNode instanceof ShadowRoot) && rootNode.activeElement === el && el.type !== "range") {
+				if (lazy && value === oldValue) return;
+				if (trim && el.value.trim() === newValue) return;
+			}
+			el.value = newValue;
+		}
+	};
+	var vModelSelect = {
+		deep: true,
+		created(el, { value, modifiers: { number } }, vnode) {
+			el._modelValue = value;
+			addEventListener(el, "change", () => {
+				const selectedVal = Array.prototype.filter.call(el.options, (o) => o.selected).map((o) => number ? looseToNumber(getValue(o)) : getValue(o));
+				el[assignKey](el.multiple ? isSet(el._modelValue) ? new Set(selectedVal) : selectedVal : selectedVal[0]);
+				el._assigning = true;
+				nextTick(() => {
+					el._assigning = false;
+				});
+			});
+			el[assignKey] = getModelAssigner(vnode);
+		},
+		mounted(el, { value }) {
+			setSelected(el, value);
+		},
+		beforeUpdate(el, { value }, vnode) {
+			el._modelValue = value;
+			el[assignKey] = getModelAssigner(vnode);
+		},
+		updated(el, { value }) {
+			if (!el._assigning) setSelected(el, value);
+		}
+	};
+	function setSelected(el, value) {
+		const isMultiple = el.multiple;
+		const isArrayValue = isArray(value);
+		if (isMultiple && !isArrayValue && !isSet(value)) return;
+		for (let i = 0, l = el.options.length; i < l; i++) {
+			const option = el.options[i];
+			const optionValue = getValue(option);
+			if (isMultiple) if (isArrayValue) {
+				const optionType = typeof optionValue;
+				if (optionType === "string" || optionType === "number") option.selected = value.some((v) => String(v) === String(optionValue));
+				else option.selected = looseIndexOf(value, optionValue) > -1;
+			} else option.selected = value.has(optionValue);
+			else if (looseEqual(getValue(option), value)) {
+				if (el.selectedIndex !== i) el.selectedIndex = i;
+				return;
+			}
+		}
+		if (!isMultiple && el.selectedIndex !== -1) el.selectedIndex = -1;
+	}
+	function getValue(el) {
+		return "_value" in el ? el._value : el.value;
+	}
 	var systemModifiers = [
 		"ctrl",
 		"shift",
@@ -4324,29 +4720,38 @@
 		headerPtyTitle: null,
 		headerShellProfile: null,
 		headerAccount: null,
-		headerAccounts: []
+		headerAccounts: [],
+		activeTab: "sessions",
+		sidebarCollapsed: false,
+		loadingStatus: "",
+		accountSwitching: false,
+		searchQuery: "",
+		searchTitlesOnly: false,
+		settingsOpen: false,
+		settingsScope: "global",
+		settingsProjectPath: null
 	});
 	//#endregion
 	//#region src/vue/components/SessionItem.vue
-	var _hoisted_1$2 = ["id", "data-session-id"];
-	var _hoisted_2$2 = { class: "session-row" };
-	var _hoisted_3$2 = { class: "session-info" };
-	var _hoisted_4$1 = ["value"];
-	var _hoisted_5$1 = {
+	var _hoisted_1$17 = ["id", "data-session-id"];
+	var _hoisted_2$14 = { class: "session-row" };
+	var _hoisted_3$14 = { class: "session-info" };
+	var _hoisted_4$12 = ["value"];
+	var _hoisted_5$11 = {
 		key: 0,
 		class: "session-subtitle"
 	};
-	var _hoisted_6$1 = { class: "session-meta" };
-	var _hoisted_7$1 = { class: "session-actions" };
-	var _hoisted_8$1 = ["data-tooltip"];
-	var _hoisted_9$1 = ["innerHTML"];
+	var _hoisted_6$10 = { class: "session-meta" };
+	var _hoisted_7$7 = { class: "session-actions" };
+	var _hoisted_8$6 = ["data-tooltip"];
+	var _hoisted_9$6 = ["innerHTML"];
 	var stopSvg$1 = "<svg width=\"12\" height=\"12\" viewBox=\"0 0 12 12\" fill=\"currentColor\"><rect x=\"2\" y=\"2\" width=\"8\" height=\"8\" rx=\"1\"/></svg>";
 	var forkSvg = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M16 3h5v5\"/><path d=\"M8 3h-5v5\"/><path d=\"M21 3l-7.536 7.536a5 5 0 0 0-1.464 3.534v6.93\"/><path d=\"M3 3l7.536 7.536a5 5 0 0 1 1.464 3.534v.93\"/></svg>";
 	var jsonlSvg = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z\"/><path d=\"M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1\"/></svg>";
-	var archiveSvg$1 = "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"21 8 21 21 3 21 3 8\"/><rect x=\"1\" y=\"3\" width=\"22\" height=\"5\"/><line x1=\"10\" y1=\"12\" x2=\"14\" y2=\"12\"/></svg>";
+	var archiveSvg$2 = "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"21 8 21 21 3 21 3 8\"/><rect x=\"1\" y=\"3\" width=\"22\" height=\"5\"/><line x1=\"10\" y1=\"12\" x2=\"14\" y2=\"12\"/></svg>";
 	var launchConfigSvg = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83\"/></svg>";
 	var terminalBadgeSvg = "<svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z\"/></svg>";
-	var _sfc_main$3 = {
+	var _sfc_main$19 = {
 		__name: "SessionItem",
 		props: {
 			session: {
@@ -4416,9 +4821,9 @@
 					id: "si-" + __props.session.sessionId,
 					"data-session-id": __props.session.sessionId,
 					onClick: _cache[6] || (_cache[6] = ($event) => _ctx.$emit("open", __props.session))
-				}, [createBaseVNode("div", _hoisted_2$2, [
+				}, [createBaseVNode("div", _hoisted_2$14, [
 					createBaseVNode("span", { class: normalizeClass(["session-status-dot", { running: __props.isRunning }]) }, null, 2),
-					createBaseVNode("div", _hoisted_3$2, [
+					createBaseVNode("div", _hoisted_3$14, [
 						createBaseVNode("div", {
 							class: "session-summary",
 							onDblclick: withModifiers(startRename, ["stop"])
@@ -4435,11 +4840,11 @@
 							value: renameValue.value,
 							onBlur: saveRename,
 							onKeydown: [withKeys(saveRename, ["enter"]), withKeys(cancelRename, ["esc"])]
-						}, null, 40, _hoisted_4$1)) : (openBlock(), createElementBlock(Fragment, { key: 2 }, [createTextVNode(toDisplayString(displayName.value), 1)], 64))], 32),
-						__props.session.aiTitle && !renaming.value ? (openBlock(), createElementBlock("div", _hoisted_5$1, toDisplayString(cleanName(__props.session.aiTitle)), 1)) : createCommentVNode("", true),
-						createBaseVNode("div", _hoisted_6$1, toDisplayString(timeStr.value) + toDisplayString(msgSuffix.value), 1)
+						}, null, 40, _hoisted_4$12)) : (openBlock(), createElementBlock(Fragment, { key: 2 }, [createTextVNode(toDisplayString(displayName.value), 1)], 64))], 32),
+						__props.session.aiTitle && !renaming.value ? (openBlock(), createElementBlock("div", _hoisted_5$11, toDisplayString(cleanName(__props.session.aiTitle)), 1)) : createCommentVNode("", true),
+						createBaseVNode("div", _hoisted_6$10, toDisplayString(timeStr.value) + toDisplayString(msgSuffix.value), 1)
 					]),
-					createBaseVNode("div", _hoisted_7$1, [
+					createBaseVNode("div", _hoisted_7$7, [
 						createBaseVNode("button", {
 							class: "session-stop-btn",
 							"data-tooltip": "Stop session",
@@ -4463,8 +4868,8 @@
 								class: "session-archive-btn",
 								"data-tooltip": __props.session.archived ? "Unarchive" : "Archive",
 								onClick: _cache[3] || (_cache[3] = withModifiers(($event) => _ctx.$emit("archive", __props.session.sessionId), ["stop"])),
-								innerHTML: archiveSvg$1
-							}, null, 8, _hoisted_8$1),
+								innerHTML: archiveSvg$2
+							}, null, 8, _hoisted_8$6),
 							createBaseVNode("button", {
 								class: "session-launch-config-btn",
 								"data-tooltip": "Resume with config",
@@ -4476,21 +4881,232 @@
 							class: normalizeClass(["session-pin", { pinned: __props.session.starred }]),
 							onClick: _cache[5] || (_cache[5] = withModifiers(($event) => _ctx.$emit("star", __props.session.sessionId), ["stop"])),
 							innerHTML: pinSvg.value
-						}, null, 10, _hoisted_9$1)
+						}, null, 10, _hoisted_9$6)
 					])
-				])], 10, _hoisted_1$2);
+				])], 10, _hoisted_1$17);
+			};
+		}
+	};
+	//#endregion
+	//#region src/vue/components/SlugGroup.vue
+	var _hoisted_1$16 = ["id"];
+	var _hoisted_2$13 = { class: "slug-group-row" };
+	var _hoisted_3$13 = { class: "slug-group-name" };
+	var _hoisted_4$11 = { class: "slug-group-meta" };
+	var _hoisted_5$10 = { class: "slug-group-count" };
+	var _hoisted_6$9 = { class: "slug-group-sessions" };
+	var archiveSvg$1 = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"21 8 21 21 3 21 3 8\"/><rect x=\"1\" y=\"3\" width=\"22\" height=\"5\"/><line x1=\"10\" y1=\"12\" x2=\"14\" y2=\"12\"/></svg>";
+	var _sfc_main$18 = {
+		__name: "SlugGroup",
+		props: {
+			slug: {
+				type: String,
+				required: true
+			},
+			sessions: {
+				type: Array,
+				required: true
+			},
+			activePtyIds: {
+				type: Set,
+				required: true
+			},
+			activeSessionId: {
+				type: String,
+				default: null
+			},
+			sessionBusyState: {
+				type: Map,
+				required: true
+			},
+			attentionSessions: {
+				type: Set,
+				required: true
+			},
+			responseReadySessions: {
+				type: Set,
+				required: true
+			}
+		},
+		emits: [
+			"open",
+			"stop",
+			"star",
+			"archive",
+			"fork",
+			"jsonl",
+			"launch-config",
+			"rename",
+			"archive-all"
+		],
+		setup(__props, { emit: __emit }) {
+			const props = __props;
+			const emit = __emit;
+			const groupId = computed(() => "slug-" + props.slug.replace(/[^a-zA-Z0-9_-]/g, "_"));
+			const storedKey = computed(() => groupId.value);
+			const expanded = /* @__PURE__ */ ref((() => {
+				try {
+					return new Set(JSON.parse(sessionStorage.getItem("expandedSlugs") || "[]")).has(storedKey.value);
+				} catch {
+					return false;
+				}
+			})());
+			const showRest = /* @__PURE__ */ ref(false);
+			function toggle() {
+				expanded.value = !expanded.value;
+				try {
+					const set = new Set(JSON.parse(sessionStorage.getItem("expandedSlugs") || "[]"));
+					if (expanded.value) set.add(storedKey.value);
+					else set.delete(storedKey.value);
+					sessionStorage.setItem("expandedSlugs", JSON.stringify([...set]));
+				} catch {}
+			}
+			const mostRecent = computed(() => props.sessions.reduce((a, b) => {
+				const aTime = window.lastActivityTime?.get(a.sessionId) || new Date(a.modified);
+				return (window.lastActivityTime?.get(b.sessionId) || new Date(b.modified)) > aTime ? b : a;
+			}));
+			const displayName = computed(() => {
+				const s = mostRecent.value;
+				const name = s.name || s.summary || props.slug;
+				return window.cleanDisplayName ? window.cleanDisplayName(name) : name;
+			});
+			const timeStr = computed(() => {
+				const t = window.lastActivityTime?.get(mostRecent.value.sessionId) || new Date(mostRecent.value.modified);
+				return window.formatDate ? window.formatDate(t) : "";
+			});
+			const hasRunning = computed(() => props.sessions.some((s) => props.activePtyIds.has(s.sessionId)));
+			const promoted = computed(() => props.sessions.filter((s) => props.activePtyIds.has(s.sessionId)));
+			const rest = computed(() => props.sessions.filter((s) => !props.activePtyIds.has(s.sessionId)));
+			function sessionProps(s) {
+				return {
+					isActive: props.activeSessionId === s.sessionId,
+					isRunning: props.activePtyIds.has(s.sessionId),
+					isBusy: props.sessionBusyState.get(s.sessionId) || false,
+					isAttention: props.attentionSessions.has(s.sessionId),
+					isResponseReady: props.responseReadySessions.has(s.sessionId)
+				};
+			}
+			async function archiveAll() {
+				emit("archive-all", props.sessions);
+			}
+			return (_ctx, _cache) => {
+				return openBlock(), createElementBlock("div", {
+					class: normalizeClass(["slug-group", {
+						collapsed: !expanded.value,
+						"has-promoted": promoted.value.length > 0
+					}]),
+					id: groupId.value
+				}, [createBaseVNode("div", {
+					class: "slug-group-header",
+					onClick: withModifiers(toggle, ["self"])
+				}, [createBaseVNode("div", _hoisted_2$13, [
+					createBaseVNode("span", {
+						class: "slug-group-expand",
+						onClick: withModifiers(toggle, ["stop"])
+					}, [..._cache[4] || (_cache[4] = [createBaseVNode("span", { class: "arrow" }, "▶", -1)])]),
+					createBaseVNode("div", {
+						class: "slug-group-info",
+						onClick: toggle
+					}, [createBaseVNode("div", _hoisted_3$13, toDisplayString(displayName.value), 1), createBaseVNode("div", _hoisted_4$11, [
+						createBaseVNode("span", { class: normalizeClass(["slug-group-dot", { running: hasRunning.value }]) }, null, 2),
+						createBaseVNode("span", _hoisted_5$10, toDisplayString(__props.sessions.length) + " sessions", 1),
+						createTextVNode(" " + toDisplayString(" " + timeStr.value), 1)
+					])]),
+					createBaseVNode("button", {
+						class: "slug-group-archive-btn",
+						"data-tooltip": "Archive all sessions in group",
+						onClick: withModifiers(archiveAll, ["stop"]),
+						innerHTML: archiveSvg$1
+					})
+				])]), createBaseVNode("div", _hoisted_6$9, [(openBlock(true), createElementBlock(Fragment, null, renderList(promoted.value, (s) => {
+					return openBlock(), createBlock(_sfc_main$19, mergeProps({
+						key: s.sessionId,
+						session: s
+					}, { ref_for: true }, sessionProps(s), {
+						onOpen: ($event) => _ctx.$emit("open", s),
+						onStop: ($event) => _ctx.$emit("stop", s.sessionId),
+						onStar: ($event) => _ctx.$emit("star", s.sessionId),
+						onArchive: ($event) => _ctx.$emit("archive", s.sessionId),
+						onFork: ($event) => _ctx.$emit("fork", s.sessionId),
+						onJsonl: ($event) => _ctx.$emit("jsonl", s.sessionId),
+						onLaunchConfig: ($event) => _ctx.$emit("launch-config", s.sessionId),
+						onRename: _cache[0] || (_cache[0] = (id, name) => _ctx.$emit("rename", id, name))
+					}), null, 16, [
+						"session",
+						"onOpen",
+						"onStop",
+						"onStar",
+						"onArchive",
+						"onFork",
+						"onJsonl",
+						"onLaunchConfig"
+					]);
+				}), 128)), promoted.value.length > 0 && rest.value.length > 0 ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [createBaseVNode("div", {
+					class: normalizeClass(["slug-group-more", { expanded: showRest.value }]),
+					onClick: _cache[1] || (_cache[1] = ($event) => showRest.value = !showRest.value)
+				}, [!showRest.value ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [createTextVNode("+ " + toDisplayString(rest.value.length) + " more", 1)], 64)) : createCommentVNode("", true)], 2), showRest.value ? (openBlock(true), createElementBlock(Fragment, { key: 0 }, renderList(rest.value, (s) => {
+					return openBlock(), createBlock(_sfc_main$19, mergeProps({
+						key: s.sessionId,
+						session: s
+					}, { ref_for: true }, sessionProps(s), {
+						onOpen: ($event) => _ctx.$emit("open", s),
+						onStop: ($event) => _ctx.$emit("stop", s.sessionId),
+						onStar: ($event) => _ctx.$emit("star", s.sessionId),
+						onArchive: ($event) => _ctx.$emit("archive", s.sessionId),
+						onFork: ($event) => _ctx.$emit("fork", s.sessionId),
+						onJsonl: ($event) => _ctx.$emit("jsonl", s.sessionId),
+						onLaunchConfig: ($event) => _ctx.$emit("launch-config", s.sessionId),
+						onRename: _cache[2] || (_cache[2] = (id, name) => _ctx.$emit("rename", id, name))
+					}), null, 16, [
+						"session",
+						"onOpen",
+						"onStop",
+						"onStar",
+						"onArchive",
+						"onFork",
+						"onJsonl",
+						"onLaunchConfig"
+					]);
+				}), 128)) : createCommentVNode("", true)], 64)) : (openBlock(true), createElementBlock(Fragment, { key: 1 }, renderList(rest.value, (s) => {
+					return openBlock(), createBlock(_sfc_main$19, mergeProps({
+						key: s.sessionId,
+						session: s
+					}, { ref_for: true }, sessionProps(s), {
+						onOpen: ($event) => _ctx.$emit("open", s),
+						onStop: ($event) => _ctx.$emit("stop", s.sessionId),
+						onStar: ($event) => _ctx.$emit("star", s.sessionId),
+						onArchive: ($event) => _ctx.$emit("archive", s.sessionId),
+						onFork: ($event) => _ctx.$emit("fork", s.sessionId),
+						onJsonl: ($event) => _ctx.$emit("jsonl", s.sessionId),
+						onLaunchConfig: ($event) => _ctx.$emit("launch-config", s.sessionId),
+						onRename: _cache[3] || (_cache[3] = (id, name) => _ctx.$emit("rename", id, name))
+					}), null, 16, [
+						"session",
+						"onOpen",
+						"onStop",
+						"onStar",
+						"onArchive",
+						"onFork",
+						"onJsonl",
+						"onLaunchConfig"
+					]);
+				}), 128))])], 10, _hoisted_1$16);
 			};
 		}
 	};
 	//#endregion
 	//#region src/vue/components/ProjectGroup.vue
-	var _hoisted_1$1 = ["id"];
-	var _hoisted_2$1 = ["id"];
-	var _hoisted_3$1 = ["id"];
+	var _hoisted_1$15 = ["id"];
+	var _hoisted_2$12 = ["id"];
+	var _hoisted_3$12 = ["id"];
+	var _hoisted_4$10 = ["id"];
 	var gearSvg = "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"3\"/><path d=\"M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z\"/></svg>";
 	var archiveSvg = "<svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"21 8 21 21 3 21 3 8\"/><rect x=\"1\" y=\"3\" width=\"22\" height=\"5\"/><line x1=\"10\" y1=\"12\" x2=\"14\" y2=\"12\"/></svg>";
 	var plusSvg = "<svg width=\"12\" height=\"12\" viewBox=\"0 0 12 12\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><line x1=\"6\" y1=\"2\" x2=\"6\" y2=\"10\"/><line x1=\"2\" y1=\"6\" x2=\"10\" y2=\"6\"/></svg>";
-	var _sfc_main$2 = {
+	var plusSmSvg = "<svg width=\"10\" height=\"10\" viewBox=\"0 0 12 12\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\"><line x1=\"6\" y1=\"2\" x2=\"6\" y2=\"10\"/><line x1=\"2\" y1=\"6\" x2=\"10\" y2=\"6\"/></svg>";
+	var closeSvg = "<svg width=\"10\" height=\"10\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><line x1=\"18\" y1=\"6\" x2=\"6\" y2=\"18\"/><line x1=\"6\" y1=\"6\" x2=\"18\" y2=\"18\"/></svg>";
+	var branchSvg = "<svg width=\"16\" height=\"16\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M13 8c0-2.76-2.46-5-5.5-5S2 5.24 2 8h2l1-1 1 1h4\"/><path d=\"M13 7.14A5.82 5.82 0 0 1 16.5 6c3.04 0 5.5 2.24 5.5 5h-3l-1-1-1 1h-3\"/><path d=\"M5.89 9.71c-2.15 2.15-2.3 5.47-.35 7.43l4.24-4.25.7-.7.71-.71 2.12-2.12c-1.95-1.96-5.27-1.8-7.42.35\"/><path d=\"M11 15.5c.5 2.5-.17 4.5-1 6.5h4c2-5.5-.5-12-1-14\"/></svg>";
+	var _sfc_main$17 = {
 		__name: "ProjectGroup",
 		props: {
 			project: {
@@ -4565,7 +5181,17 @@
 				color: "#666"
 			});
 			const shortName = computed(() => props.project.projectPath.split("/").filter(Boolean).slice(-2).join("/"));
-			const collapsed = /* @__PURE__ */ ref(false);
+			const worktreeName = computed(() => {
+				return props.project.projectPath.match(/\/\.claude\/worktrees\/([^/]+)\/?$/)?.[1] || props.project.projectPath.split("/").pop();
+			});
+			const collapsed = /* @__PURE__ */ ref(() => {
+				if (props.project._projectMatchedOnly) return true;
+				if (props.searchMatchIds || props.showStarredOnly || props.showRunningOnly) return false;
+				const sessions = props.project.sessions || [];
+				if (sessions.length === 0) return false;
+				const mostRecent = sessions.reduce((a, b) => new Date(b.modified) > new Date(a.modified) ? b : a);
+				return Date.now() - new Date(mostRecent.modified) > props.sessionMaxAgeDays * 864e5;
+			});
 			function toggle() {
 				collapsed.value = !collapsed.value;
 			}
@@ -4585,20 +5211,52 @@
 					});
 				}
 				if (props.searchMatchIds) sessions = sessions.filter((s) => props.searchMatchIds.has(s.sessionId));
-				sessions = [...sessions].sort((a, b) => {
-					const aR = props.activePtyIds.has(a.sessionId);
-					const bR = props.activePtyIds.has(b.sessionId);
-					const aPri = a.starred && aR ? 3 : aR ? 2 : a.starred ? 1 : 0;
-					const bPri = b.starred && bR ? 3 : bR ? 2 : b.starred ? 1 : 0;
+				const slugMap = /* @__PURE__ */ new Map();
+				const ungrouped = [];
+				for (const s of sessions) if (s.slug) {
+					if (!slugMap.has(s.slug)) slugMap.set(s.slug, []);
+					slugMap.get(s.slug).push(s);
+				} else ungrouped.push(s);
+				const items = [];
+				for (const s of ungrouped) {
+					const running = props.activePtyIds.has(s.sessionId);
+					items.push({
+						type: "session",
+						session: s,
+						sortTime: new Date(s.modified).getTime(),
+						pinned: !!s.starred,
+						running
+					});
+				}
+				for (const [slug, slugSessions] of slugMap) if (slugSessions.length === 1) {
+					const s = slugSessions[0];
+					items.push({
+						type: "session",
+						session: s,
+						sortTime: new Date(s.modified).getTime(),
+						pinned: !!s.starred,
+						running: props.activePtyIds.has(s.sessionId)
+					});
+				} else {
+					const mostRecentTime = Math.max(...slugSessions.map((s) => new Date(s.modified).getTime()));
+					const hasRunning = slugSessions.some((s) => props.activePtyIds.has(s.sessionId));
+					const hasPinned = slugSessions.some((s) => s.starred);
+					items.push({
+						type: "slug",
+						slug,
+						sessions: slugSessions,
+						sortTime: mostRecentTime,
+						pinned: hasPinned,
+						running: hasRunning
+					});
+				}
+				items.sort((a, b) => {
+					const aPri = a.pinned && a.running ? 3 : a.running ? 2 : a.pinned ? 1 : 0;
+					const bPri = b.pinned && b.running ? 3 : b.running ? 2 : b.pinned ? 1 : 0;
 					if (aPri !== bPri) return bPri - aPri;
-					return new Date(b.modified) - new Date(a.modified);
+					return b.sortTime - a.sortTime;
 				});
-				return sessions.map((s) => ({
-					session: s,
-					sortTime: new Date(s.modified).getTime(),
-					pinned: !!s.starred,
-					running: props.activePtyIds.has(s.sessionId)
-				}));
+				return items;
 			});
 			const visibleItems = computed(() => {
 				if (props.showStarredOnly || props.showRunningOnly || props.showTodayOnly || props.searchMatchIds) return allItems.value;
@@ -4613,8 +5271,8 @@
 				});
 			});
 			const olderItems = computed(() => {
-				const visIds = new Set(visibleItems.value.map((i) => i.session.sessionId));
-				return allItems.value.filter((i) => !visIds.has(i.session.sessionId));
+				const visIds = new Set(visibleItems.value.map((i) => i.type === "slug" ? "slug-" + i.slug : i.session.sessionId));
+				return allItems.value.filter((i) => !visIds.has(i.type === "slug" ? "slug-" + i.slug : i.session.sessionId));
 			});
 			async function archiveAll() {
 				emit("archive-sessions", props.project.sessions.filter((s) => !s.archived));
@@ -4622,9 +5280,37 @@
 			return (_ctx, _cache) => {
 				const _component_ProjectGroup = resolveComponent("ProjectGroup", true);
 				return openBlock(), createElementBlock("div", {
-					class: "project-group",
+					class: normalizeClass(__props.isWorktree ? "worktree-group" : "project-group"),
 					id: folderId.value
-				}, [createBaseVNode("div", {
+				}, [__props.isWorktree ? (openBlock(), createElementBlock("div", {
+					key: 0,
+					class: normalizeClass(["worktree-header", { collapsed: collapsed.value }]),
+					id: "ph-" + folderId.value,
+					onClick: withModifiers(toggle, ["self"])
+				}, [
+					createBaseVNode("span", {
+						class: "worktree-branch-icon",
+						innerHTML: branchSvg,
+						onClick: withModifiers(toggle, ["stop"])
+					}),
+					createBaseVNode("span", {
+						class: "worktree-name",
+						onClick: withModifiers(toggle, ["stop"])
+					}, toDisplayString(worktreeName.value), 1),
+					createBaseVNode("button", {
+						class: "worktree-hide-btn",
+						"data-tooltip": "Hide worktree",
+						onClick: _cache[0] || (_cache[0] = withModifiers(($event) => _ctx.$emit("remove-project", __props.project.projectPath), ["stop"])),
+						innerHTML: closeSvg
+					}),
+					createBaseVNode("button", {
+						class: "project-new-btn worktree-new-btn",
+						"data-tooltip": "New session in worktree",
+						onClick: _cache[1] || (_cache[1] = withModifiers(($event) => _ctx.$emit("new-session", __props.project), ["stop"])),
+						innerHTML: plusSmSvg
+					})
+				], 10, _hoisted_2$12)) : (openBlock(), createElementBlock("div", {
+					key: 1,
 					class: normalizeClass(["project-header", { collapsed: collapsed.value }]),
 					id: "ph-" + folderId.value,
 					onClick: withModifiers(toggle, ["self"])
@@ -4645,7 +5331,7 @@
 					createBaseVNode("button", {
 						class: "project-settings-btn",
 						"data-tooltip": "Project settings",
-						onClick: _cache[0] || (_cache[0] = withModifiers(($event) => _ctx.$emit("settings", __props.project.projectPath), ["stop"])),
+						onClick: _cache[2] || (_cache[2] = withModifiers(($event) => _ctx.$emit("settings", __props.project.projectPath), ["stop"])),
 						innerHTML: gearSvg
 					}),
 					createBaseVNode("button", {
@@ -4657,16 +5343,42 @@
 					createBaseVNode("button", {
 						class: "project-new-btn",
 						"data-tooltip": "New session",
-						onClick: _cache[1] || (_cache[1] = withModifiers(($event) => _ctx.$emit("new-session", __props.project), ["stop"])),
+						onClick: _cache[3] || (_cache[3] = withModifiers(($event) => _ctx.$emit("new-session", __props.project), ["stop"])),
 						innerHTML: plusSvg
 					})
-				], 10, _hoisted_2$1), createBaseVNode("div", {
-					class: "project-sessions",
+				], 10, _hoisted_3$12)), createBaseVNode("div", {
+					class: normalizeClass(__props.isWorktree ? "worktree-sessions" : "project-sessions"),
 					id: "sessions-" + folderId.value
 				}, [
 					(openBlock(true), createElementBlock(Fragment, null, renderList(visibleItems.value, (item) => {
-						return openBlock(), createBlock(_sfc_main$3, {
-							key: item.session.sessionId,
+						return openBlock(), createElementBlock(Fragment, { key: item.type === "slug" ? "slug-" + item.slug : item.session.sessionId }, [item.type === "slug" ? (openBlock(), createBlock(_sfc_main$18, {
+							key: 0,
+							slug: item.slug,
+							sessions: item.sessions,
+							"active-pty-ids": __props.activePtyIds,
+							"active-session-id": __props.activeSessionId,
+							"session-busy-state": __props.sessionBusyState,
+							"attention-sessions": __props.attentionSessions,
+							"response-ready-sessions": __props.responseReadySessions,
+							onOpen: _cache[4] || (_cache[4] = (s) => _ctx.$emit("open", s)),
+							onStop: _cache[5] || (_cache[5] = (id) => _ctx.$emit("stop", id)),
+							onStar: _cache[6] || (_cache[6] = (id) => _ctx.$emit("star", id)),
+							onArchive: _cache[7] || (_cache[7] = (id) => _ctx.$emit("archive", id)),
+							onFork: _cache[8] || (_cache[8] = (id) => _ctx.$emit("fork", id)),
+							onJsonl: _cache[9] || (_cache[9] = (id) => _ctx.$emit("jsonl", id)),
+							onLaunchConfig: _cache[10] || (_cache[10] = (id) => _ctx.$emit("launch-config", id)),
+							onRename: _cache[11] || (_cache[11] = (id, name) => _ctx.$emit("rename", id, name)),
+							onArchiveAll: _cache[12] || (_cache[12] = (sessions) => _ctx.$emit("archive-sessions", sessions))
+						}, null, 8, [
+							"slug",
+							"sessions",
+							"active-pty-ids",
+							"active-session-id",
+							"session-busy-state",
+							"attention-sessions",
+							"response-ready-sessions"
+						])) : (openBlock(), createBlock(_sfc_main$19, {
+							key: 1,
 							session: item.session,
 							"is-active": __props.activeSessionId === item.session.sessionId,
 							"is-running": __props.activePtyIds.has(item.session.sessionId),
@@ -4680,7 +5392,7 @@
 							onFork: ($event) => _ctx.$emit("fork", item.session.sessionId),
 							onJsonl: ($event) => _ctx.$emit("jsonl", item.session.sessionId),
 							onLaunchConfig: ($event) => _ctx.$emit("launch-config", item.session.sessionId),
-							onRename: _cache[2] || (_cache[2] = (id, name) => _ctx.$emit("rename", id, name))
+							onRename: _cache[13] || (_cache[13] = (id, name) => _ctx.$emit("rename", id, name))
 						}, null, 8, [
 							"session",
 							"is-active",
@@ -4695,16 +5407,42 @@
 							"onFork",
 							"onJsonl",
 							"onLaunchConfig"
-						]);
+						]))], 64);
 					}), 128)),
 					olderItems.value.length > 0 ? (openBlock(), createElementBlock("div", {
 						key: 0,
 						class: normalizeClass(["sessions-more-toggle", { expanded: showOlder.value }]),
-						onClick: _cache[3] || (_cache[3] = ($event) => showOlder.value = !showOlder.value)
+						onClick: _cache[14] || (_cache[14] = ($event) => showOlder.value = !showOlder.value)
 					}, toDisplayString(showOlder.value ? "- hide older" : `+ ${olderItems.value.length} older`), 3)) : createCommentVNode("", true),
 					showOlder.value ? (openBlock(true), createElementBlock(Fragment, { key: 1 }, renderList(olderItems.value, (item) => {
-						return openBlock(), createBlock(_sfc_main$3, {
-							key: item.session.sessionId,
+						return openBlock(), createElementBlock(Fragment, { key: item.type === "slug" ? "slug-" + item.slug : item.session.sessionId }, [item.type === "slug" ? (openBlock(), createBlock(_sfc_main$18, {
+							key: 0,
+							slug: item.slug,
+							sessions: item.sessions,
+							"active-pty-ids": __props.activePtyIds,
+							"active-session-id": __props.activeSessionId,
+							"session-busy-state": __props.sessionBusyState,
+							"attention-sessions": __props.attentionSessions,
+							"response-ready-sessions": __props.responseReadySessions,
+							onOpen: _cache[15] || (_cache[15] = (s) => _ctx.$emit("open", s)),
+							onStop: _cache[16] || (_cache[16] = (id) => _ctx.$emit("stop", id)),
+							onStar: _cache[17] || (_cache[17] = (id) => _ctx.$emit("star", id)),
+							onArchive: _cache[18] || (_cache[18] = (id) => _ctx.$emit("archive", id)),
+							onFork: _cache[19] || (_cache[19] = (id) => _ctx.$emit("fork", id)),
+							onJsonl: _cache[20] || (_cache[20] = (id) => _ctx.$emit("jsonl", id)),
+							onLaunchConfig: _cache[21] || (_cache[21] = (id) => _ctx.$emit("launch-config", id)),
+							onRename: _cache[22] || (_cache[22] = (id, name) => _ctx.$emit("rename", id, name)),
+							onArchiveAll: _cache[23] || (_cache[23] = (sessions) => _ctx.$emit("archive-sessions", sessions))
+						}, null, 8, [
+							"slug",
+							"sessions",
+							"active-pty-ids",
+							"active-session-id",
+							"session-busy-state",
+							"attention-sessions",
+							"response-ready-sessions"
+						])) : (openBlock(), createBlock(_sfc_main$19, {
+							key: 1,
 							session: item.session,
 							"is-active": __props.activeSessionId === item.session.sessionId,
 							"is-running": __props.activePtyIds.has(item.session.sessionId),
@@ -4718,7 +5456,7 @@
 							onFork: ($event) => _ctx.$emit("fork", item.session.sessionId),
 							onJsonl: ($event) => _ctx.$emit("jsonl", item.session.sessionId),
 							onLaunchConfig: ($event) => _ctx.$emit("launch-config", item.session.sessionId),
-							onRename: _cache[4] || (_cache[4] = (id, name) => _ctx.$emit("rename", id, name))
+							onRename: _cache[24] || (_cache[24] = (id, name) => _ctx.$emit("rename", id, name))
 						}, null, 8, [
 							"session",
 							"is-active",
@@ -4733,7 +5471,7 @@
 							"onFork",
 							"onJsonl",
 							"onLaunchConfig"
-						]);
+						]))], 64);
 					}), 128)) : createCommentVNode("", true),
 					(openBlock(true), createElementBlock(Fragment, null, renderList(__props.worktrees, (wt) => {
 						return openBlock(), createBlock(_component_ProjectGroup, {
@@ -4752,18 +5490,18 @@
 							"show-today-only": __props.showTodayOnly,
 							"visible-session-count": __props.visibleSessionCount,
 							"session-max-age-days": __props.sessionMaxAgeDays,
-							onOpen: _cache[5] || (_cache[5] = (s) => _ctx.$emit("open", s)),
-							onStop: _cache[6] || (_cache[6] = (id) => _ctx.$emit("stop", id)),
-							onStar: _cache[7] || (_cache[7] = (id) => _ctx.$emit("star", id)),
-							onArchive: _cache[8] || (_cache[8] = (id) => _ctx.$emit("archive", id)),
-							onFork: _cache[9] || (_cache[9] = (id) => _ctx.$emit("fork", id)),
-							onJsonl: _cache[10] || (_cache[10] = (id) => _ctx.$emit("jsonl", id)),
-							onLaunchConfig: _cache[11] || (_cache[11] = (id) => _ctx.$emit("launch-config", id)),
-							onRename: _cache[12] || (_cache[12] = (id, name) => _ctx.$emit("rename", id, name)),
-							onNewSession: _cache[13] || (_cache[13] = (p) => _ctx.$emit("new-session", p)),
-							onSettings: _cache[14] || (_cache[14] = (path) => _ctx.$emit("settings", path)),
-							onArchiveSessions: _cache[15] || (_cache[15] = (sessions) => _ctx.$emit("archive-sessions", sessions)),
-							onRemoveProject: _cache[16] || (_cache[16] = (path) => _ctx.$emit("remove-project", path))
+							onOpen: _cache[25] || (_cache[25] = (s) => _ctx.$emit("open", s)),
+							onStop: _cache[26] || (_cache[26] = (id) => _ctx.$emit("stop", id)),
+							onStar: _cache[27] || (_cache[27] = (id) => _ctx.$emit("star", id)),
+							onArchive: _cache[28] || (_cache[28] = (id) => _ctx.$emit("archive", id)),
+							onFork: _cache[29] || (_cache[29] = (id) => _ctx.$emit("fork", id)),
+							onJsonl: _cache[30] || (_cache[30] = (id) => _ctx.$emit("jsonl", id)),
+							onLaunchConfig: _cache[31] || (_cache[31] = (id) => _ctx.$emit("launch-config", id)),
+							onRename: _cache[32] || (_cache[32] = (id, name) => _ctx.$emit("rename", id, name)),
+							onNewSession: _cache[33] || (_cache[33] = (p) => _ctx.$emit("new-session", p)),
+							onSettings: _cache[34] || (_cache[34] = (path) => _ctx.$emit("settings", path)),
+							onArchiveSessions: _cache[35] || (_cache[35] = (sessions) => _ctx.$emit("archive-sessions", sessions)),
+							onRemoveProject: _cache[36] || (_cache[36] = (path) => _ctx.$emit("remove-project", path))
 						}, null, 8, [
 							"project",
 							"active-pty-ids",
@@ -4780,13 +5518,13 @@
 							"session-max-age-days"
 						]);
 					}), 128))
-				], 8, _hoisted_3$1)], 8, _hoisted_1$1);
+				], 10, _hoisted_4$10)], 10, _hoisted_1$15);
 			};
 		}
 	};
 	//#endregion
 	//#region src/vue/components/SidebarApp.vue
-	var _sfc_main$1 = {
+	var _sfc_main$16 = {
 		__name: "SidebarApp",
 		props: { callbacks: {
 			type: Object,
@@ -4867,7 +5605,7 @@
 			}
 			return (_ctx, _cache) => {
 				return openBlock(), createElementBlock("div", null, [(openBlock(true), createElementBlock(Fragment, null, renderList(visibleProjects.value, (project) => {
-					return openBlock(), createBlock(_sfc_main$2, {
+					return openBlock(), createBlock(_sfc_main$17, {
 						key: project.projectPath,
 						project,
 						worktrees: worktreeMap.value.get(project.projectPath) || [],
@@ -4917,39 +5655,39 @@
 	};
 	//#endregion
 	//#region src/vue/components/SessionHeaderApp.vue
-	var _hoisted_1 = {
+	var _hoisted_1$14 = {
 		key: 0,
 		class: "vue-session-header"
 	};
-	var _hoisted_2 = { class: "vsh-top" };
-	var _hoisted_3 = { class: "vsh-identity" };
-	var _hoisted_4 = { class: "vsh-breadcrumb" };
-	var _hoisted_5 = { class: "vsh-project-path" };
-	var _hoisted_6 = ["title"];
-	var _hoisted_7 = { class: "vsh-controls" };
-	var _hoisted_8 = {
+	var _hoisted_2$11 = { class: "vsh-top" };
+	var _hoisted_3$11 = { class: "vsh-identity" };
+	var _hoisted_4$9 = { class: "vsh-breadcrumb" };
+	var _hoisted_5$9 = { class: "vsh-project-path" };
+	var _hoisted_6$8 = ["title"];
+	var _hoisted_7$6 = { class: "vsh-controls" };
+	var _hoisted_8$5 = {
 		key: 0,
 		class: "terminal-account-badge"
 	};
-	var _hoisted_9 = {
+	var _hoisted_9$5 = {
 		key: 1,
 		class: "vsh-shell-badge"
 	};
-	var _hoisted_10 = {
+	var _hoisted_10$5 = {
 		key: 0,
 		class: "vsh-ai-title"
 	};
-	var _hoisted_11 = {
+	var _hoisted_11$5 = {
 		key: 1,
 		class: "vsh-pty-title"
 	};
-	var _hoisted_12 = { class: "vsh-status" };
-	var _hoisted_13 = { class: "vsh-status-label" };
-	var _hoisted_14 = { class: "vsh-msg-count" };
-	var _hoisted_15 = { class: "vsh-time" };
-	var _hoisted_16 = { class: "vsh-session-id" };
+	var _hoisted_12$5 = { class: "vsh-status" };
+	var _hoisted_13$5 = { class: "vsh-status-label" };
+	var _hoisted_14$5 = { class: "vsh-msg-count" };
+	var _hoisted_15$5 = { class: "vsh-time" };
+	var _hoisted_16$5 = { class: "vsh-session-id" };
 	var stopSvg = "<svg width=\"12\" height=\"12\" viewBox=\"0 0 12 12\" fill=\"currentColor\"><rect x=\"2\" y=\"2\" width=\"8\" height=\"8\" rx=\"1\"/></svg>";
-	var _sfc_main = {
+	var _sfc_main$15 = {
 		__name: "SessionHeaderApp",
 		setup(__props) {
 			const session = computed(() => store.headerSession);
@@ -5004,20 +5742,20 @@
 				if (sessionId.value && window.confirmAndStopSession) window.confirmAndStopSession(sessionId.value);
 			}
 			return (_ctx, _cache) => {
-				return unref(store).headerSession ? (openBlock(), createElementBlock("div", _hoisted_1, [
-					createBaseVNode("div", _hoisted_2, [createBaseVNode("div", _hoisted_3, [createBaseVNode("span", {
+				return unref(store).headerSession ? (openBlock(), createElementBlock("div", _hoisted_1$14, [
+					createBaseVNode("div", _hoisted_2$11, [createBaseVNode("div", _hoisted_3$11, [createBaseVNode("span", {
 						class: "vsh-avatar",
 						style: normalizeStyle({ background: avatar.value.color })
-					}, toDisplayString(avatar.value.initials), 5), createBaseVNode("div", _hoisted_4, [
-						createBaseVNode("span", _hoisted_5, toDisplayString(projectShortPath.value), 1),
+					}, toDisplayString(avatar.value.initials), 5), createBaseVNode("div", _hoisted_4$9, [
+						createBaseVNode("span", _hoisted_5$9, toDisplayString(projectShortPath.value), 1),
 						_cache[0] || (_cache[0] = createBaseVNode("span", { class: "vsh-sep" }, "›", -1)),
 						createBaseVNode("span", {
 							class: "vsh-session-name",
 							title: sessionName.value
-						}, toDisplayString(sessionName.value), 9, _hoisted_6)
-					])]), createBaseVNode("div", _hoisted_7, [
-						unref(store).headerAccount ? (openBlock(), createElementBlock("span", _hoisted_8, toDisplayString(unref(store).headerAccount), 1)) : createCommentVNode("", true),
-						unref(store).headerShellProfile ? (openBlock(), createElementBlock("span", _hoisted_9, toDisplayString(unref(store).headerShellProfile), 1)) : createCommentVNode("", true),
+						}, toDisplayString(sessionName.value), 9, _hoisted_6$8)
+					])]), createBaseVNode("div", _hoisted_7$6, [
+						unref(store).headerAccount ? (openBlock(), createElementBlock("span", _hoisted_8$5, toDisplayString(unref(store).headerAccount), 1)) : createCommentVNode("", true),
+						unref(store).headerShellProfile ? (openBlock(), createElementBlock("span", _hoisted_9$5, toDisplayString(unref(store).headerShellProfile), 1)) : createCommentVNode("", true),
 						createBaseVNode("button", {
 							class: "session-stop-btn vsh-stop",
 							"data-tooltip": "Stop session",
@@ -5025,27 +5763,2901 @@
 							innerHTML: stopSvg
 						})
 					])]),
-					aiTitle.value ? (openBlock(), createElementBlock("div", _hoisted_10, toDisplayString(aiTitle.value), 1)) : createCommentVNode("", true),
-					unref(store).headerPtyTitle ? (openBlock(), createElementBlock("div", _hoisted_11, toDisplayString(unref(store).headerPtyTitle), 1)) : createCommentVNode("", true),
-					createBaseVNode("div", _hoisted_12, [
+					aiTitle.value ? (openBlock(), createElementBlock("div", _hoisted_10$5, toDisplayString(aiTitle.value), 1)) : createCommentVNode("", true),
+					unref(store).headerPtyTitle ? (openBlock(), createElementBlock("div", _hoisted_11$5, toDisplayString(unref(store).headerPtyTitle), 1)) : createCommentVNode("", true),
+					createBaseVNode("div", _hoisted_12$5, [
 						createBaseVNode("span", { class: normalizeClass(["vsh-status-dot", statusClass.value]) }, null, 2),
-						createBaseVNode("span", _hoisted_13, toDisplayString(statusLabel.value), 1),
-						messageCount.value ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [_cache[1] || (_cache[1] = createBaseVNode("span", { class: "vsh-dot-sep" }, "·", -1)), createBaseVNode("span", _hoisted_14, toDisplayString(messageCount.value) + " msgs", 1)], 64)) : createCommentVNode("", true),
-						timeStr.value ? (openBlock(), createElementBlock(Fragment, { key: 1 }, [_cache[2] || (_cache[2] = createBaseVNode("span", { class: "vsh-dot-sep" }, "·", -1)), createBaseVNode("span", _hoisted_15, toDisplayString(timeStr.value), 1)], 64)) : createCommentVNode("", true),
-						sessionId.value ? (openBlock(), createElementBlock(Fragment, { key: 2 }, [_cache[3] || (_cache[3] = createBaseVNode("span", { class: "vsh-dot-sep" }, "·", -1)), createBaseVNode("span", _hoisted_16, toDisplayString(shortId.value), 1)], 64)) : createCommentVNode("", true)
+						createBaseVNode("span", _hoisted_13$5, toDisplayString(statusLabel.value), 1),
+						messageCount.value ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [_cache[1] || (_cache[1] = createBaseVNode("span", { class: "vsh-dot-sep" }, "·", -1)), createBaseVNode("span", _hoisted_14$5, toDisplayString(messageCount.value) + " msgs", 1)], 64)) : createCommentVNode("", true),
+						timeStr.value ? (openBlock(), createElementBlock(Fragment, { key: 1 }, [_cache[2] || (_cache[2] = createBaseVNode("span", { class: "vsh-dot-sep" }, "·", -1)), createBaseVNode("span", _hoisted_15$5, toDisplayString(timeStr.value), 1)], 64)) : createCommentVNode("", true),
+						sessionId.value ? (openBlock(), createElementBlock(Fragment, { key: 2 }, [_cache[3] || (_cache[3] = createBaseVNode("span", { class: "vsh-dot-sep" }, "·", -1)), createBaseVNode("span", _hoisted_16$5, toDisplayString(shortId.value), 1)], 64)) : createCommentVNode("", true)
 					])
 				])) : createCommentVNode("", true);
 			};
 		}
 	};
 	//#endregion
+	//#region src/vue/components/ListItem.vue
+	var _hoisted_1$13 = ["id"];
+	var _hoisted_2$10 = { class: "session-row" };
+	var _hoisted_3$10 = { class: "session-info" };
+	var _hoisted_4$8 = { class: "session-summary" };
+	var _hoisted_5$8 = {
+		key: 0,
+		class: "session-subtitle"
+	};
+	var _hoisted_6$7 = {
+		key: 1,
+		class: "session-meta"
+	};
+	var _sfc_main$14 = {
+		__name: "ListItem",
+		props: {
+			title: {
+				type: String,
+				default: ""
+			},
+			subtitle: {
+				type: String,
+				default: null
+			},
+			meta: {
+				type: String,
+				default: null
+			},
+			active: {
+				type: Boolean,
+				default: false
+			},
+			classes: {
+				type: Array,
+				default: () => []
+			},
+			itemId: {
+				type: String,
+				default: void 0
+			}
+		},
+		emits: ["click"],
+		setup(__props) {
+			return (_ctx, _cache) => {
+				return openBlock(), createElementBlock("div", {
+					class: normalizeClass(["session-item", [...__props.classes, { active: __props.active }]]),
+					id: __props.itemId,
+					onClick: _cache[0] || (_cache[0] = ($event) => _ctx.$emit("click"))
+				}, [createBaseVNode("div", _hoisted_2$10, [
+					renderSlot(_ctx.$slots, "leading"),
+					createBaseVNode("div", _hoisted_3$10, [
+						createBaseVNode("div", _hoisted_4$8, toDisplayString(__props.title), 1),
+						__props.subtitle ? (openBlock(), createElementBlock("div", _hoisted_5$8, toDisplayString(__props.subtitle), 1)) : createCommentVNode("", true),
+						__props.meta ? (openBlock(), createElementBlock("div", _hoisted_6$7, toDisplayString(__props.meta), 1)) : createCommentVNode("", true)
+					]),
+					renderSlot(_ctx.$slots, "trailing")
+				])], 10, _hoisted_1$13);
+			};
+		}
+	};
+	//#endregion
+	//#region src/vue/components/PlansApp.vue
+	var _hoisted_1$12 = {
+		key: 0,
+		class: "plans-empty"
+	};
+	var _hoisted_2$9 = {
+		key: 1,
+		class: "project-group"
+	};
+	var _hoisted_3$9 = { class: "project-sessions" };
+	var planSvg = "<svg width=\"15\" height=\"15\" viewBox=\"0 0 17 17\" fill=\"currentColor\" stroke=\"currentColor\" stroke-width=\"0\"><path d=\"M14 2v-2h-13v17h13v-2h2v-13h-2zM2 16v-15h2v15h-2zM13 16h-8v-15h8v15zM15 14h-1v-3h1v3zM15 10h-1v-3h1v3zM14 6v-3h1v3h-1zM6 4h5v1h-5v-1zM6 6h4v1h-4v-1z\"/></svg>";
+	var _sfc_main$13 = {
+		__name: "PlansApp",
+		props: { callbacks: {
+			type: Object,
+			required: true
+		} },
+		setup(__props, { expose: __expose }) {
+			const props = __props;
+			const plans = /* @__PURE__ */ ref([]);
+			const activePlan = /* @__PURE__ */ ref(null);
+			function fmtDate(d) {
+				return window.formatDate ? window.formatDate(new Date(d)) : d;
+			}
+			function openPlan(plan) {
+				activePlan.value = plan.filename;
+				props.callbacks.openPlan?.(plan);
+			}
+			__expose({
+				setPlans(list) {
+					plans.value = list;
+				},
+				setActive(filename) {
+					activePlan.value = filename;
+				},
+				clearActive() {
+					activePlan.value = null;
+				}
+			});
+			return (_ctx, _cache) => {
+				return openBlock(), createElementBlock("div", null, [plans.value.length === 0 ? (openBlock(), createElementBlock("div", _hoisted_1$12, " No plans found in ~/.claude/plans/ ")) : (openBlock(), createElementBlock("div", _hoisted_2$9, [_cache[0] || (_cache[0] = createBaseVNode("div", { class: "project-header" }, [createBaseVNode("span", { class: "project-name" }, "Plans")], -1)), createBaseVNode("div", _hoisted_3$9, [(openBlock(true), createElementBlock(Fragment, null, renderList(plans.value, (plan) => {
+					return openBlock(), createBlock(_sfc_main$14, {
+						key: plan.filename,
+						title: plan.title || plan.filename,
+						subtitle: plan.filename,
+						meta: fmtDate(plan.modified),
+						active: activePlan.value === plan.filename,
+						classes: ["plan-item"],
+						onClick: ($event) => openPlan(plan)
+					}, {
+						leading: withCtx(() => [createBaseVNode("span", {
+							class: "memory-brain-icon",
+							innerHTML: planSvg
+						})]),
+						_: 1
+					}, 8, [
+						"title",
+						"subtitle",
+						"meta",
+						"active",
+						"onClick"
+					]);
+				}), 128))])]))]);
+			};
+		}
+	};
+	//#endregion
+	//#region src/vue/components/MemoryGroup.vue
+	var _hoisted_1$11 = { class: "project-name" };
+	var _hoisted_2$8 = { class: "memory-file-count" };
+	var _hoisted_3$8 = { class: "project-sessions" };
+	var _hoisted_4$7 = ["innerHTML"];
+	var _hoisted_5$7 = ["onClick", "innerHTML"];
+	var brainSvg = "<svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z\"/><path d=\"M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z\"/><path d=\"M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4\"/><path d=\"M17.599 6.5a3 3 0 0 0 .399-1.375\"/><path d=\"M6.003 5.125A3 3 0 0 0 6.401 6.5\"/><path d=\"M3.477 10.896a4 4 0 0 1 .585-.396\"/><path d=\"M19.938 10.5a4 4 0 0 1 .585.396\"/><path d=\"M6 18a4 4 0 0 1-1.967-.516\"/><path d=\"M19.967 17.484A4 4 0 0 1 18 18\"/></svg>";
+	var scheduleSvg = "<svg width=\"15\" height=\"15\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><polyline points=\"12 6 12 12 16 14\"/></svg>";
+	var playSvg = "<svg width=\"12\" height=\"12\" viewBox=\"0 0 384 512\" fill=\"currentColor\"><path d=\"M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80L0 432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z\"/></svg>";
+	var spinnerSvg = "<svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.5\" stroke-linecap=\"round\"><path d=\"M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83\"/></svg>";
+	var checkSvg = "<svg width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"20 6 9 17 4 12\"/></svg>";
+	var _sfc_main$12 = {
+		__name: "MemoryGroup",
+		props: {
+			groupKey: {
+				type: String,
+				required: true
+			},
+			label: {
+				type: String,
+				required: true
+			},
+			files: {
+				type: Array,
+				required: true
+			},
+			activeFile: {
+				type: String,
+				default: null
+			}
+		},
+		emits: ["open"],
+		setup(__props, { emit: __emit }) {
+			const collapsed = /* @__PURE__ */ ref(false);
+			function toggle() {
+				collapsed.value = !collapsed.value;
+			}
+			function fmtDate(d) {
+				return window.formatDate ? window.formatDate(new Date(d)) : d;
+			}
+			function isSchedule(f) {
+				return f.filename.startsWith("schedule-");
+			}
+			const runningFile = /* @__PURE__ */ ref(null);
+			const doneFile = /* @__PURE__ */ ref(null);
+			async function runSchedule(file) {
+				runningFile.value = file.filePath;
+				const result = await window.api.runScheduleNow(file.filePath);
+				runningFile.value = null;
+				doneFile.value = file.filePath;
+				setTimeout(() => {
+					doneFile.value = null;
+				}, 2e3);
+				if (result && !result.ok) console.error("Schedule run failed:", result.error);
+			}
+			function playIcon(file) {
+				if (runningFile.value === file.filePath) return spinnerSvg;
+				if (doneFile.value === file.filePath) return checkSvg;
+				return playSvg;
+			}
+			return (_ctx, _cache) => {
+				return openBlock(), createElementBlock("div", { class: normalizeClass(["project-group", { collapsed: collapsed.value }]) }, [createBaseVNode("div", {
+					class: "project-header",
+					onClick: toggle
+				}, [
+					_cache[0] || (_cache[0] = createBaseVNode("span", { class: "arrow" }, "▼", -1)),
+					createBaseVNode("span", _hoisted_1$11, toDisplayString(__props.label), 1),
+					createBaseVNode("span", _hoisted_2$8, toDisplayString(__props.files.length), 1)
+				]), createBaseVNode("div", _hoisted_3$8, [(openBlock(true), createElementBlock(Fragment, null, renderList(__props.files, (file) => {
+					return openBlock(), createBlock(_sfc_main$14, {
+						key: file.filePath,
+						title: file.filename,
+						subtitle: file.displayPath,
+						meta: fmtDate(file.modified),
+						active: __props.activeFile === file.filePath,
+						classes: ["memory-item"],
+						"item-id": "mf-" + file.filePath.replace(/[^a-zA-Z0-9]/g, "_"),
+						onClick: ($event) => _ctx.$emit("open", file)
+					}, {
+						leading: withCtx(() => [createBaseVNode("span", {
+							class: normalizeClass(isSchedule(file) ? "memory-schedule-icon" : "memory-brain-icon"),
+							innerHTML: isSchedule(file) ? scheduleSvg : brainSvg
+						}, null, 10, _hoisted_4$7)]),
+						trailing: withCtx(() => [isSchedule(file) ? (openBlock(), createElementBlock("button", {
+							key: 0,
+							class: normalizeClass(["schedule-play-btn", {
+								running: runningFile.value === file.filePath,
+								done: doneFile.value === file.filePath
+							}]),
+							title: "Run now",
+							onClick: withModifiers(($event) => runSchedule(file), ["stop"]),
+							innerHTML: playIcon(file)
+						}, null, 10, _hoisted_5$7)) : createCommentVNode("", true)]),
+						_: 2
+					}, 1032, [
+						"title",
+						"subtitle",
+						"meta",
+						"active",
+						"item-id",
+						"onClick"
+					]);
+				}), 128))])], 2);
+			};
+		}
+	};
+	//#endregion
+	//#region src/vue/components/MemoryApp.vue
+	var _hoisted_1$10 = {
+		key: 0,
+		class: "plans-empty"
+	};
+	var _sfc_main$11 = {
+		__name: "MemoryApp",
+		props: { callbacks: {
+			type: Object,
+			required: true
+		} },
+		setup(__props, { expose: __expose }) {
+			const props = __props;
+			const data = /* @__PURE__ */ ref({
+				global: { files: [] },
+				projects: []
+			});
+			const filterIds = /* @__PURE__ */ ref(null);
+			const activeFile = /* @__PURE__ */ ref(null);
+			const allFiles = computed(() => [...data.value.global.files, ...data.value.projects.flatMap((p) => p.files)]);
+			const filteredGlobal = computed(() => {
+				if (!filterIds.value) return data.value.global.files;
+				return data.value.global.files.filter((f) => filterIds.value.has(f.filePath));
+			});
+			const filteredProjects = computed(() => {
+				return data.value.projects.map((proj) => ({
+					...proj,
+					files: filterIds.value ? proj.files.filter((f) => filterIds.value.has(f.filePath)) : proj.files
+				})).filter((proj) => proj.files.length > 0);
+			});
+			function openMemory(file) {
+				activeFile.value = file.filePath;
+				props.callbacks.openMemory?.(file);
+			}
+			__expose({
+				setMemories(memData, ids = null) {
+					data.value = memData;
+					filterIds.value = ids;
+				},
+				setFilter(ids) {
+					filterIds.value = ids;
+				},
+				setActive(filePath) {
+					activeFile.value = filePath;
+				},
+				clearActive() {
+					activeFile.value = null;
+				}
+			});
+			return (_ctx, _cache) => {
+				return openBlock(), createElementBlock("div", null, [allFiles.value.length === 0 ? (openBlock(), createElementBlock("div", _hoisted_1$10, " No memory files found. ")) : (openBlock(), createElementBlock(Fragment, { key: 1 }, [data.value.global.files.length > 0 ? (openBlock(), createBlock(_sfc_main$12, {
+					key: 0,
+					"group-key": "__global__",
+					label: "Global",
+					files: filteredGlobal.value,
+					"active-file": activeFile.value,
+					onOpen: openMemory
+				}, null, 8, ["files", "active-file"])) : createCommentVNode("", true), (openBlock(true), createElementBlock(Fragment, null, renderList(filteredProjects.value, (proj) => {
+					return openBlock(), createBlock(_sfc_main$12, {
+						key: proj.folder,
+						"group-key": proj.folder,
+						label: proj.shortName,
+						files: proj.files,
+						"active-file": activeFile.value,
+						onOpen: openMemory
+					}, null, 8, [
+						"group-key",
+						"label",
+						"files",
+						"active-file"
+					]);
+				}), 128))], 64))]);
+			};
+		}
+	};
+	//#endregion
+	//#region src/vue/components/AccountsApp.vue
+	var _hoisted_1$9 = { class: "project-group" };
+	var _hoisted_2$7 = { class: "project-sessions" };
+	var _hoisted_3$7 = ["onClick"];
+	var _hoisted_4$6 = { class: "session-row" };
+	var _hoisted_5$6 = { class: "session-info" };
+	var _hoisted_6$6 = ["onBlur", "onKeydown"];
+	var _hoisted_7$5 = ["onDblclick"];
+	var _hoisted_8$4 = { class: "session-subtitle" };
+	var _hoisted_9$4 = {
+		key: 2,
+		class: "account-usage-block"
+	};
+	var _hoisted_10$4 = { class: "account-usage-label" };
+	var _hoisted_11$4 = { class: "account-usage-bar" };
+	var _hoisted_12$4 = { class: "account-usage-info" };
+	var _hoisted_13$4 = {
+		key: 0,
+		class: "account-usage-cached-note"
+	};
+	var _hoisted_14$4 = { class: "account-card-actions" };
+	var _hoisted_15$4 = ["onClick"];
+	var _hoisted_16$4 = ["onClick"];
+	var _hoisted_17$4 = ["onClick"];
+	var _hoisted_18$3 = { class: "project-group" };
+	var _hoisted_19$3 = { class: "project-sessions" };
+	var _hoisted_20$3 = { class: "accounts-add-form" };
+	var _hoisted_21$3 = ["disabled"];
+	var editSvg = "<svg width=\"11\" height=\"11\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7\"/><path d=\"M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z\"/></svg>";
+	var trashSvg$1 = "<svg width=\"11\" height=\"11\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"3 6 5 6 21 6\"/><path d=\"M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6\"/><path d=\"M10 11v6M14 11v6\"/><path d=\"M9 6V4h6v2\"/></svg>";
+	var _sfc_main$10 = {
+		__name: "AccountsApp",
+		props: { callbacks: {
+			type: Object,
+			required: true
+		} },
+		setup(__props, { expose: __expose }) {
+			const props = __props;
+			const accounts = /* @__PURE__ */ ref([]);
+			const activeAccountId = /* @__PURE__ */ ref("default");
+			const usage = /* @__PURE__ */ ref({});
+			const editingId = /* @__PURE__ */ ref(null);
+			const editName = /* @__PURE__ */ ref("");
+			let activeEditInput = null;
+			const newName = /* @__PURE__ */ ref("");
+			const adding = /* @__PURE__ */ ref(false);
+			function hasUsage(id) {
+				const u = usage.value[id];
+				if (!u || u._error || u._rateLimited) return false;
+				return u.session != null || u.weekAll != null;
+			}
+			function usageRows(id) {
+				const u = usage.value[id] || {};
+				const rows = [];
+				if (u.session != null) rows.push({
+					key: "session",
+					label: "5h",
+					pct: u.session,
+					resetIn: u.sessionResetIn
+				});
+				if (u.weekAll != null) rows.push({
+					key: "weekAll",
+					label: "7d",
+					pct: u.weekAll,
+					resetIn: u.weekAllResetIn
+				});
+				return rows;
+			}
+			async function startEdit(acc) {
+				editingId.value = acc.id;
+				editName.value = acc.name;
+				activeEditInput = null;
+				await nextTick();
+				activeEditInput?.focus();
+				activeEditInput?.select();
+			}
+			async function saveEdit(acc) {
+				if (editingId.value !== acc.id) return;
+				editingId.value = null;
+				const newN = editName.value.trim() || acc.name;
+				if (newN !== acc.name) {
+					acc.name = newN;
+					await props.callbacks.renameAccount?.(acc.id, newN);
+				}
+			}
+			function cancelEdit() {
+				editingId.value = null;
+			}
+			async function onSwitch(acc) {
+				if (acc.id !== activeAccountId.value) await props.callbacks.switchAccount?.(acc.id);
+			}
+			function onOpenClaude(acc) {
+				props.callbacks.openAccountHomeSession?.(acc);
+			}
+			async function onDelete(acc) {
+				if (!confirm(`Remove account "${acc.name}"?`)) return;
+				props.callbacks.deleteAccount?.(acc.id);
+			}
+			async function addAccount() {
+				const name = newName.value.trim();
+				if (!name) return;
+				adding.value = true;
+				const newAcc = await props.callbacks.createAccount?.(name);
+				adding.value = false;
+				if (newAcc) newName.value = "";
+			}
+			__expose({
+				setAccounts(list, activeId) {
+					accounts.value = list;
+					if (activeId !== void 0) activeAccountId.value = activeId;
+				},
+				setActiveAccount(id) {
+					activeAccountId.value = id;
+				},
+				setUsage(usageObj) {
+					usage.value = { ...usageObj };
+				}
+			});
+			return (_ctx, _cache) => {
+				return openBlock(), createElementBlock("div", null, [createBaseVNode("div", _hoisted_1$9, [_cache[3] || (_cache[3] = createBaseVNode("div", { class: "project-header" }, [createBaseVNode("span", { class: "project-name" }, "Accounts")], -1)), createBaseVNode("div", _hoisted_2$7, [(openBlock(true), createElementBlock(Fragment, null, renderList(accounts.value, (acc) => {
+					return openBlock(), createElementBlock("div", {
+						key: acc.id,
+						class: normalizeClass(["session-item account-item", { active: acc.id === activeAccountId.value }]),
+						onClick: ($event) => onSwitch(acc)
+					}, [createBaseVNode("div", _hoisted_4$6, [createBaseVNode("div", _hoisted_5$6, [
+						editingId.value === acc.id ? withDirectives((openBlock(), createElementBlock("input", {
+							key: 0,
+							class: "account-row-name-input",
+							"onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => editName.value = $event),
+							ref_for: true,
+							ref: (el) => {
+								if (el) /* @__PURE__ */ isRef(activeEditInput) ? activeEditInput.value = el : activeEditInput = el;
+							},
+							onBlur: ($event) => saveEdit(acc),
+							onKeydown: [withKeys(withModifiers(($event) => saveEdit(acc), ["prevent"]), ["enter"]), withKeys(cancelEdit, ["escape"])],
+							onClick: _cache[1] || (_cache[1] = withModifiers(() => {}, ["stop"]))
+						}, null, 40, _hoisted_6$6)), [[vModelText, editName.value]]) : (openBlock(), createElementBlock("div", {
+							key: 1,
+							class: "session-summary",
+							onDblclick: withModifiers(($event) => startEdit(acc), ["stop"])
+						}, toDisplayString(acc.name), 41, _hoisted_7$5)),
+						createBaseVNode("div", _hoisted_8$4, toDisplayString(acc.configDir || "~/.claude (default)"), 1),
+						hasUsage(acc.id) ? (openBlock(), createElementBlock("div", _hoisted_9$4, [(openBlock(true), createElementBlock(Fragment, null, renderList(usageRows(acc.id), (row) => {
+							return openBlock(), createElementBlock("div", {
+								key: row.key,
+								class: "account-usage-row"
+							}, [
+								createBaseVNode("span", _hoisted_10$4, toDisplayString(row.label), 1),
+								createBaseVNode("div", _hoisted_11$4, [createBaseVNode("div", {
+									class: normalizeClass(["account-usage-bar-fill", {
+										danger: row.pct >= 90,
+										warn: row.pct >= 70 && row.pct < 90
+									}]),
+									style: normalizeStyle({ width: Math.min(row.pct, 100) + "%" })
+								}, null, 6)]),
+								createBaseVNode("span", _hoisted_12$4, toDisplayString(row.pct) + "%" + toDisplayString(row.resetIn ? `  · resets in ${row.resetIn}~` : ""), 1)
+							]);
+						}), 128)), usage.value[acc.id]?._cached ? (openBlock(), createElementBlock("div", _hoisted_13$4, "cached data")) : createCommentVNode("", true)])) : createCommentVNode("", true)
+					]), createBaseVNode("div", _hoisted_14$4, [
+						editingId.value !== acc.id ? (openBlock(), createElementBlock("button", {
+							key: 0,
+							class: "account-edit-btn",
+							"data-tooltip": "Rename",
+							onClick: withModifiers(($event) => startEdit(acc), ["stop"]),
+							innerHTML: editSvg
+						}, null, 8, _hoisted_15$4)) : createCommentVNode("", true),
+						createBaseVNode("button", {
+							class: "account-open-btn",
+							"data-tooltip": "Open Claude session in home directory",
+							onClick: withModifiers(($event) => onOpenClaude(acc), ["stop"])
+						}, "Open Claude", 8, _hoisted_16$4),
+						acc.id !== "default" ? (openBlock(), createElementBlock("button", {
+							key: 1,
+							class: "account-row-del",
+							"data-tooltip": "Remove account",
+							onClick: withModifiers(($event) => onDelete(acc), ["stop"]),
+							innerHTML: trashSvg$1
+						}, null, 8, _hoisted_17$4)) : createCommentVNode("", true)
+					])])], 10, _hoisted_3$7);
+				}), 128))])]), createBaseVNode("div", _hoisted_18$3, [_cache[5] || (_cache[5] = createBaseVNode("div", { class: "project-header" }, [createBaseVNode("span", { class: "project-name" }, "Add account")], -1)), createBaseVNode("div", _hoisted_19$3, [_cache[4] || (_cache[4] = createBaseVNode("p", { class: "accounts-add-desc" }, "Each account uses its own Claude credentials and session history. Add a second account to switch between personal and work Claude Pro plans, or any two separate logins.", -1)), createBaseVNode("div", _hoisted_20$3, [withDirectives(createBaseVNode("input", {
+					"onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => newName.value = $event),
+					placeholder: "Account name (e.g. Work)",
+					onKeydown: withKeys(addAccount, ["enter"])
+				}, null, 544), [[vModelText, newName.value]]), createBaseVNode("button", {
+					class: "accounts-add-btn",
+					disabled: adding.value,
+					onClick: addAccount
+				}, toDisplayString(adding.value ? "Adding…" : "Add account"), 9, _hoisted_21$3)])])])]);
+			};
+		}
+	};
+	//#endregion
+	//#region src/vue/components/AccountDropdownApp.vue
+	var _hoisted_1$8 = { class: "account-btn-name" };
+	var _hoisted_2$6 = { class: "account-btn-chips" };
+	var _hoisted_3$6 = {
+		key: 0,
+		class: "account-dropdown-vue"
+	};
+	var _hoisted_4$5 = ["onClick"];
+	var _hoisted_5$5 = { class: "acct-dd-name" };
+	var _hoisted_6$5 = { class: "acct-dd-chips" };
+	var _sfc_main$9 = {
+		__name: "AccountDropdownApp",
+		props: { callbacks: {
+			type: Object,
+			required: true
+		} },
+		setup(__props, { expose: __expose }) {
+			const props = __props;
+			const accounts = /* @__PURE__ */ ref([]);
+			const activeAccountId = /* @__PURE__ */ ref("default");
+			const usage = /* @__PURE__ */ ref({});
+			const open = /* @__PURE__ */ ref(false);
+			const activeName = computed(() => {
+				return accounts.value.find((a) => a.id === activeAccountId.value)?.name ?? "Default";
+			});
+			const activeChips = computed(() => chips(activeAccountId.value));
+			function chips(id) {
+				const u = usage.value[id];
+				if (!u || u._error || u._rateLimited) return [];
+				const out = [];
+				if (u.session != null) out.push(`${u.session}% 5h`);
+				return out;
+			}
+			function toggle() {
+				open.value = !open.value;
+			}
+			function close() {
+				open.value = false;
+			}
+			async function onSwitch(id) {
+				close();
+				if (id !== activeAccountId.value) await props.callbacks.switchAccount?.(id);
+			}
+			function onDocumentClick() {
+				close();
+			}
+			onMounted(() => {
+				document.addEventListener("click", onDocumentClick);
+			});
+			onUnmounted(() => {
+				document.removeEventListener("click", onDocumentClick);
+			});
+			__expose({
+				setAccounts(list, activeId, usageObj) {
+					accounts.value = list;
+					if (activeId !== void 0) activeAccountId.value = activeId;
+					if (usageObj !== void 0) usage.value = usageObj;
+				},
+				setActiveAccount(id) {
+					activeAccountId.value = id;
+				},
+				setUsage(usageObj) {
+					usage.value = { ...usageObj };
+				},
+				close
+			});
+			return (_ctx, _cache) => {
+				return openBlock(), createElementBlock(Fragment, null, [createBaseVNode("button", {
+					class: "account-btn-vue",
+					"data-tooltip": "Switch account",
+					onClick: withModifiers(toggle, ["stop"])
+				}, [
+					_cache[0] || (_cache[0] = createBaseVNode("span", { class: "account-btn-dot" }, null, -1)),
+					createBaseVNode("span", _hoisted_1$8, toDisplayString(activeName.value), 1),
+					createBaseVNode("span", _hoisted_2$6, [(openBlock(true), createElementBlock(Fragment, null, renderList(activeChips.value, (chip) => {
+						return openBlock(), createElementBlock("span", {
+							key: chip,
+							class: "account-chip"
+						}, toDisplayString(chip), 1);
+					}), 128))]),
+					_cache[1] || (_cache[1] = createBaseVNode("svg", {
+						width: "10",
+						height: "6",
+						viewBox: "0 0 10 6",
+						fill: "none",
+						stroke: "currentColor",
+						"stroke-width": "1.5",
+						"stroke-linecap": "round",
+						"stroke-linejoin": "round"
+					}, [createBaseVNode("path", { d: "M1 1l4 4 4-4" })], -1))
+				]), open.value ? (openBlock(), createElementBlock("div", _hoisted_3$6, [(openBlock(true), createElementBlock(Fragment, null, renderList(accounts.value, (acc) => {
+					return openBlock(), createElementBlock("div", {
+						key: acc.id,
+						class: normalizeClass(["acct-dd-item", { active: acc.id === activeAccountId.value }]),
+						onClick: ($event) => onSwitch(acc.id)
+					}, [
+						_cache[2] || (_cache[2] = createBaseVNode("span", { class: "acct-dd-dot" }, null, -1)),
+						createBaseVNode("span", _hoisted_5$5, toDisplayString(acc.name), 1),
+						createBaseVNode("span", _hoisted_6$5, [(openBlock(true), createElementBlock(Fragment, null, renderList(chips(acc.id), (chip) => {
+							return openBlock(), createElementBlock("span", {
+								key: chip,
+								class: "account-chip"
+							}, toDisplayString(chip), 1);
+						}), 128))])
+					], 10, _hoisted_4$5);
+				}), 128))])) : createCommentVNode("", true)], 64);
+			};
+		}
+	};
+	//#endregion
+	//#region src/vue/components/ProjectsApp.vue
+	var _hoisted_1$7 = { class: "project-group" };
+	var _hoisted_2$5 = { class: "project-header" };
+	var _hoisted_3$5 = { class: "project-name" };
+	var _hoisted_4$4 = { class: "projects-sort-wrap" };
+	var _hoisted_5$4 = ["onClick"];
+	var _hoisted_6$4 = { class: "project-sessions" };
+	var _hoisted_7$4 = {
+		key: 0,
+		class: "projects-empty-hint"
+	};
+	var _hoisted_8$3 = ["onClick"];
+	var _hoisted_9$3 = { class: "session-row" };
+	var _hoisted_10$3 = { class: "session-info" };
+	var _hoisted_11$3 = { class: "session-summary" };
+	var _hoisted_12$3 = { class: "project-item-name" };
+	var _hoisted_13$3 = {
+		key: 0,
+		class: "project-unpushed-badge"
+	};
+	var _hoisted_14$3 = ["title"];
+	var _hoisted_15$3 = { class: "session-meta" };
+	var _hoisted_16$3 = {
+		key: 0,
+		class: "project-env-added"
+	};
+	var _hoisted_17$3 = {
+		key: 1,
+		class: "project-env-deleted"
+	};
+	var _hoisted_18$2 = {
+		key: 0,
+		class: "project-card-env"
+	};
+	var _hoisted_19$2 = { class: "project-env-containers-box" };
+	var _hoisted_20$2 = { class: "project-env-containers-hdr" };
+	var _hoisted_21$2 = { class: "project-env-cname" };
+	var _hoisted_22$2 = { class: "project-env-cuptime" };
+	var _hoisted_23$2 = ["onClick"];
+	var _hoisted_24$2 = ["onClick"];
+	var trashSvg = "<svg width=\"11\" height=\"11\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"3 6 5 6 21 6\"/><path d=\"M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6\"/><path d=\"M10 11v6M14 11v6\"/><path d=\"M9 6V4h6v2\"/></svg>";
+	var _sfc_main$8 = {
+		__name: "ProjectsApp",
+		props: { callbacks: {
+			type: Object,
+			required: true
+		} },
+		setup(__props, { expose: __expose }) {
+			const props = __props;
+			const projects = /* @__PURE__ */ ref([]);
+			const searchQuery = /* @__PURE__ */ ref("");
+			const sortOrder = /* @__PURE__ */ ref("name");
+			const projectInfo = /* @__PURE__ */ reactive({});
+			const activeProjectPath = /* @__PURE__ */ ref(null);
+			const sortOptions = [["name", "Name"], ["changes", "Changes"]];
+			let queueGen = 0;
+			const filteredProjects = computed(() => {
+				const q = searchQuery.value.trim().toLowerCase();
+				let list = q ? projects.value.filter((p) => {
+					return (p.projectPath.split("/").filter(Boolean).pop() || "").toLowerCase().includes(q) || p.projectPath.toLowerCase().includes(q);
+				}) : [...projects.value];
+				if (sortOrder.value === "name") list.sort((a, b) => {
+					const na = a.projectPath.split("/").filter(Boolean).pop() || "";
+					const nb = b.projectPath.split("/").filter(Boolean).pop() || "";
+					return na.localeCompare(nb);
+				});
+				else list.sort((a, b) => {
+					const ia = projectInfo[a.projectPath];
+					const ib = projectInfo[b.projectPath];
+					const sa = (ia?.added || 0) + (ia?.deleted || 0);
+					return (ib?.added || 0) + (ib?.deleted || 0) - sa;
+				});
+				return list;
+			});
+			function projectName(p) {
+				return p.projectPath.split("/").filter(Boolean).pop() || p.projectPath;
+			}
+			function avatar(p) {
+				return window.getProjectAvatar ? window.getProjectAvatar(p.projectPath) : {
+					initials: "?",
+					color: "#888"
+				};
+			}
+			function baseMeta(p) {
+				const n = p.sessions.length;
+				const last = p.sessions[0];
+				const activity = last ? window.formatDate ? window.formatDate(new Date(last.modified)) : last.modified : "—";
+				return `${n} session${n !== 1 ? "s" : ""} · ${activity}`;
+			}
+			function parseUptime(status) {
+				return window.parseContainerUptime ? window.parseContainerUptime(status) : "";
+			}
+			function openProject(project) {
+				activeProjectPath.value = project.projectPath;
+				props.callbacks.openProject?.(project);
+			}
+			async function removeProject(project) {
+				const name = project.projectPath.split("/").pop();
+				if (!confirm(`Remove "${name}" from the project list?\n\nSession files are not deleted.`)) return;
+				await window.api.removeProject(project.projectPath);
+				props.callbacks.projectRemoved?.();
+			}
+			async function runInfoQueue(gen, list) {
+				for (const project of list) {
+					if (queueGen !== gen) break;
+					try {
+						const info = await window.api.getProjectInfo(project.projectPath);
+						if (queueGen !== gen) break;
+						if (info) projectInfo[project.projectPath] = info;
+					} catch {}
+				}
+			}
+			__expose({
+				setProjects(list) {
+					projects.value = list;
+					queueGen++;
+					runInfoQueue(queueGen, list);
+				},
+				setSearch(q) {
+					searchQuery.value = q || "";
+				},
+				clearActive() {
+					activeProjectPath.value = null;
+				}
+			});
+			return (_ctx, _cache) => {
+				return openBlock(), createElementBlock("div", null, [createBaseVNode("div", _hoisted_1$7, [createBaseVNode("div", _hoisted_2$5, [
+					createBaseVNode("span", _hoisted_3$5, "Projects (" + toDisplayString(filteredProjects.value.length) + ")", 1),
+					createBaseVNode("button", {
+						class: "project-new-btn",
+						"data-tooltip": "Add",
+						onClick: _cache[0] || (_cache[0] = ($event) => __props.callbacks.addProject?.())
+					}, [..._cache[2] || (_cache[2] = [createBaseVNode("svg", {
+						width: "11",
+						height: "11",
+						viewBox: "0 0 12 12",
+						fill: "none",
+						stroke: "currentColor",
+						"stroke-width": "1.8",
+						"stroke-linecap": "round"
+					}, [createBaseVNode("line", {
+						x1: "6",
+						y1: "1",
+						x2: "6",
+						y2: "11"
+					}), createBaseVNode("line", {
+						x1: "1",
+						y1: "6",
+						x2: "11",
+						y2: "6"
+					})], -1)])]),
+					createBaseVNode("div", _hoisted_4$4, [(openBlock(), createElementBlock(Fragment, null, renderList(sortOptions, ([key, label]) => {
+						return createBaseVNode("button", {
+							key,
+							class: normalizeClass(["projects-sort-btn", { active: sortOrder.value === key }]),
+							onClick: ($event) => sortOrder.value = key
+						}, toDisplayString(label), 11, _hoisted_5$4);
+					}), 64))])
+				]), createBaseVNode("div", _hoisted_6$4, [filteredProjects.value.length === 0 ? (openBlock(), createElementBlock("div", _hoisted_7$4, toDisplayString(searchQuery.value ? "No matching projects." : "No projects yet. Click Add to select a folder."), 1)) : createCommentVNode("", true), (openBlock(true), createElementBlock(Fragment, null, renderList(filteredProjects.value, (project) => {
+					return openBlock(), createElementBlock("div", {
+						key: project.projectPath,
+						class: normalizeClass(["session-item project-item", { active: project.projectPath === activeProjectPath.value }]),
+						onClick: ($event) => openProject(project)
+					}, [createBaseVNode("div", _hoisted_9$3, [
+						createBaseVNode("span", {
+							class: "project-card-avatar",
+							style: normalizeStyle({ background: avatar(project).color })
+						}, toDisplayString(avatar(project).initials), 5),
+						createBaseVNode("div", _hoisted_10$3, [
+							createBaseVNode("div", _hoisted_11$3, [createBaseVNode("span", _hoisted_12$3, toDisplayString(projectName(project)), 1), project.unpushedCount ? (openBlock(), createElementBlock("span", _hoisted_13$3, toDisplayString(project.unpushedCount), 1)) : createCommentVNode("", true)]),
+							createBaseVNode("div", {
+								class: "session-subtitle",
+								title: project.projectPath
+							}, toDisplayString(project.projectPath), 9, _hoisted_14$3),
+							createBaseVNode("div", _hoisted_15$3, [createTextVNode(toDisplayString(baseMeta(project)), 1), projectInfo[project.projectPath]?.branch ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
+								_cache[3] || (_cache[3] = createTextVNode(" \xA0·\xA0", -1)),
+								_cache[4] || (_cache[4] = createBaseVNode("span", { class: "project-env-branch-icon" }, "⎇", -1)),
+								createTextVNode(" " + toDisplayString(projectInfo[project.projectPath].branch) + " ", 1),
+								projectInfo[project.projectPath].added ? (openBlock(), createElementBlock("span", _hoisted_16$3, " +" + toDisplayString(projectInfo[project.projectPath].added), 1)) : createCommentVNode("", true),
+								projectInfo[project.projectPath].deleted ? (openBlock(), createElementBlock("span", _hoisted_17$3, " −" + toDisplayString(projectInfo[project.projectPath].deleted), 1)) : createCommentVNode("", true)
+							], 64)) : createCommentVNode("", true)]),
+							projectInfo[project.projectPath]?.containers?.length ? (openBlock(), createElementBlock("div", _hoisted_18$2, [createBaseVNode("div", _hoisted_19$2, [createBaseVNode("div", _hoisted_20$2, [_cache[5] || (_cache[5] = createBaseVNode("svg", {
+								width: "12",
+								height: "12",
+								viewBox: "0 0 24 24",
+								fill: "none",
+								stroke: "currentColor",
+								"stroke-width": "2"
+							}, [createBaseVNode("rect", {
+								x: "2",
+								y: "7",
+								width: "20",
+								height: "14",
+								rx: "2"
+							}), createBaseVNode("path", { d: "M16 7V5a2 2 0 0 0-4 0v2M8 7V5a2 2 0 0 0-4 0v2" })], -1)), createTextVNode(" CONTAINERS · " + toDisplayString(projectInfo[project.projectPath].containers.length), 1)]), (openBlock(true), createElementBlock(Fragment, null, renderList(projectInfo[project.projectPath].containers, (c) => {
+								return openBlock(), createElementBlock("div", {
+									key: c.name,
+									class: "project-env-container-row"
+								}, [
+									createBaseVNode("span", { class: normalizeClass(["project-env-dot", {
+										running: c.state.includes("running"),
+										starting: !c.state.includes("running") && (c.state.includes("starting") || c.status?.toLowerCase().includes("starting"))
+									}]) }, null, 2),
+									createBaseVNode("span", _hoisted_21$2, toDisplayString(c.name), 1),
+									createBaseVNode("span", _hoisted_22$2, toDisplayString(parseUptime(c.status)), 1),
+									!c.state.includes("running") && c.state && c.state !== "exited" ? (openBlock(), createElementBlock("span", {
+										key: 0,
+										class: normalizeClass(["project-env-cbadge", { starting: c.state.includes("starting") || c.status?.toLowerCase().includes("starting") }])
+									}, toDisplayString(c.state), 3)) : createCommentVNode("", true)
+								]);
+							}), 128))])])) : createCommentVNode("", true)
+						]),
+						createBaseVNode("div", {
+							class: "project-card-actions",
+							onClick: _cache[1] || (_cache[1] = withModifiers(() => {}, ["stop"]))
+						}, [createBaseVNode("button", {
+							class: "project-card-new-btn",
+							"data-tooltip": "New session",
+							onClick: withModifiers(($event) => __props.callbacks.newSession?.(project), ["stop"])
+						}, [..._cache[6] || (_cache[6] = [createBaseVNode("svg", {
+							width: "13",
+							height: "13",
+							viewBox: "0 0 12 12",
+							fill: "none",
+							stroke: "currentColor",
+							"stroke-width": "1.8",
+							"stroke-linecap": "round"
+						}, [createBaseVNode("line", {
+							x1: "6",
+							y1: "1",
+							x2: "6",
+							y2: "11"
+						}), createBaseVNode("line", {
+							x1: "1",
+							y1: "6",
+							x2: "11",
+							y2: "6"
+						})], -1)])], 8, _hoisted_23$2), createBaseVNode("button", {
+							class: "project-card-del-btn",
+							"data-tooltip": "Remove project",
+							onClick: withModifiers(($event) => removeProject(project), ["stop"]),
+							innerHTML: trashSvg
+						}, null, 8, _hoisted_24$2)])
+					])], 10, _hoisted_8$3);
+				}), 128))])])]);
+			};
+		}
+	};
+	//#endregion
+	//#region src/vue/components/StatusBarApp.vue
+	var _sfc_main$7 = {
+		__name: "StatusBarApp",
+		setup(__props, { expose: __expose }) {
+			const info = /* @__PURE__ */ ref("");
+			const activity = /* @__PURE__ */ ref("");
+			const activityClass = /* @__PURE__ */ ref("");
+			const updater = /* @__PURE__ */ ref("");
+			let activityTimer = null;
+			let updaterTimer = null;
+			__expose({
+				setInfo(text) {
+					info.value = text;
+				},
+				setActivity(text, type) {
+					if (activityTimer) clearTimeout(activityTimer);
+					activity.value = text;
+					activityClass.value = type === "done" ? "status-done" : "";
+					if (!text || type === "done") activityTimer = setTimeout(() => {
+						activity.value = "";
+						activityClass.value = "";
+					}, type === "done" ? 3e3 : 0);
+				},
+				setUpdater(text, duration) {
+					if (updaterTimer) clearTimeout(updaterTimer);
+					updater.value = text;
+					if (duration) updaterTimer = setTimeout(() => {
+						updater.value = "";
+					}, duration);
+				}
+			});
+			return (_ctx, _cache) => {
+				return openBlock(), createElementBlock(Fragment, null, [
+					createBaseVNode("span", null, toDisplayString(info.value), 1),
+					createBaseVNode("span", { class: normalizeClass(activityClass.value) }, toDisplayString(activity.value), 3),
+					createBaseVNode("span", null, toDisplayString(updater.value), 1)
+				], 64);
+			};
+		}
+	};
+	//#endregion
+	//#region src/vue/components/GridCardsApp.vue
+	var _hoisted_1$6 = { class: "grid-card-name" };
+	var _hoisted_2$4 = { class: "grid-card-project" };
+	var _hoisted_3$4 = ["onClick"];
+	var _sfc_main$6 = {
+		__name: "GridCardsApp",
+		setup(__props, { expose: __expose }) {
+			const activeCards = /* @__PURE__ */ reactive(/* @__PURE__ */ new Map());
+			function stop(sessionId) {
+				window.confirmAndStopSession?.(sessionId);
+			}
+			__expose({
+				addCard(sessionId, headerEl, footerEl, { name, project, initials, color, running, busy, time }) {
+					activeCards.set(sessionId, {
+						headerEl,
+						footerEl,
+						name,
+						project,
+						initials,
+						color,
+						running: !!running,
+						busy: !!busy,
+						time: time || ""
+					});
+				},
+				updateCard(sessionId, running, busy, time) {
+					const card = activeCards.get(sessionId);
+					if (!card) return;
+					card.running = !!running;
+					card.busy = !!busy;
+					if (time !== void 0) card.time = time;
+				},
+				removeCard(sessionId) {
+					activeCards.delete(sessionId);
+				},
+				clearAll() {
+					activeCards.clear();
+				}
+			});
+			return (_ctx, _cache) => {
+				return openBlock(true), createElementBlock(Fragment, null, renderList(activeCards, ([sessionId, card]) => {
+					return openBlock(), createElementBlock(Fragment, { key: sessionId }, [(openBlock(), createBlock(Teleport, { to: card.headerEl }, [
+						createBaseVNode("span", {
+							class: normalizeClass(["grid-card-avatar", card.busy ? "busy" : card.running ? "running" : "stopped"]),
+							style: normalizeStyle({ background: card.color })
+						}, toDisplayString(card.initials), 7),
+						createBaseVNode("span", _hoisted_1$6, toDisplayString(card.name), 1),
+						createBaseVNode("span", _hoisted_2$4, toDisplayString(card.project), 1),
+						card.running ? (openBlock(), createElementBlock("button", {
+							key: 0,
+							class: "grid-card-stop-btn",
+							"data-tooltip": "Stop session",
+							onClick: withModifiers(($event) => stop(sessionId), ["stop"])
+						}, [..._cache[0] || (_cache[0] = [createBaseVNode("svg", {
+							width: "10",
+							height: "10",
+							viewBox: "0 0 12 12",
+							fill: "currentColor"
+						}, [createBaseVNode("rect", {
+							x: "2",
+							y: "2",
+							width: "8",
+							height: "8",
+							rx: "1"
+						})], -1)])], 8, _hoisted_3$4)) : createCommentVNode("", true)
+					], 8, ["to"])), (openBlock(), createBlock(Teleport, { to: card.footerEl }, [createBaseVNode("span", null, toDisplayString(card.running ? "Running" : "Stopped"), 1), createBaseVNode("span", null, toDisplayString(card.time), 1)], 8, ["to"]))], 64);
+				}), 128);
+			};
+		}
+	};
+	//#endregion
+	//#region src/vue/components/SbSwitch.vue
+	var _hoisted_1$5 = ["aria-checked", "disabled"];
+	var _sfc_main$5 = {
+		__name: "SbSwitch",
+		props: {
+			modelValue: {
+				type: Boolean,
+				default: false
+			},
+			disabled: {
+				type: Boolean,
+				default: false
+			}
+		},
+		emits: ["update:modelValue"],
+		setup(__props, { emit: __emit }) {
+			const props = __props;
+			const emit = __emit;
+			function toggle() {
+				if (!props.disabled) emit("update:modelValue", !props.modelValue);
+			}
+			return (_ctx, _cache) => {
+				return openBlock(), createElementBlock("button", {
+					type: "button",
+					role: "switch",
+					"aria-checked": __props.modelValue,
+					disabled: __props.disabled,
+					class: normalizeClass(["sb-switch", { "sb-switch--on": __props.modelValue }]),
+					onClick: toggle
+				}, [..._cache[0] || (_cache[0] = [createBaseVNode("span", { class: "sb-switch-thumb" }, null, -1)])], 10, _hoisted_1$5);
+			};
+		}
+	};
+	//#endregion
+	//#region src/vue/components/SbButton.vue
+	var _hoisted_1$4 = ["type", "disabled"];
+	var _sfc_main$4 = {
+		__name: "SbButton",
+		props: {
+			variant: {
+				type: String,
+				default: "secondary"
+			},
+			size: {
+				type: String,
+				default: "md"
+			},
+			type: {
+				type: String,
+				default: "button"
+			},
+			disabled: {
+				type: Boolean,
+				default: false
+			}
+		},
+		emits: ["click"],
+		setup(__props) {
+			return (_ctx, _cache) => {
+				return openBlock(), createElementBlock("button", {
+					type: __props.type,
+					disabled: __props.disabled,
+					class: normalizeClass(["sb-btn", [`sb-btn--${__props.variant}`, `sb-btn--${__props.size}`]]),
+					onClick: _cache[0] || (_cache[0] = ($event) => _ctx.$emit("click", $event))
+				}, [renderSlot(_ctx.$slots, "icon"), renderSlot(_ctx.$slots, "default")], 10, _hoisted_1$4);
+			};
+		}
+	};
+	//#endregion
+	//#region src/vue/components/SettingsPanelApp.vue
+	var _hoisted_1$3 = { class: "settings-panel" };
+	var _hoisted_2$3 = { class: "settings-panel-header" };
+	var _hoisted_3$3 = { class: "settings-panel-title" };
+	var _hoisted_4$3 = { class: "settings-panel-body" };
+	var _hoisted_5$3 = {
+		key: 0,
+		class: "settings-loading"
+	};
+	var _hoisted_6$3 = {
+		key: 1,
+		class: "settings-form"
+	};
+	var _hoisted_7$3 = { class: "settings-section" };
+	var _hoisted_8$2 = { class: "settings-field" };
+	var _hoisted_9$2 = { class: "settings-field-info" };
+	var _hoisted_10$2 = { class: "settings-field-header" };
+	var _hoisted_11$2 = {
+		key: 0,
+		class: "settings-use-global"
+	};
+	var _hoisted_12$2 = ["checked"];
+	var _hoisted_13$2 = { class: "settings-field-control" };
+	var _hoisted_14$2 = ["disabled"];
+	var _hoisted_15$2 = { class: "settings-field" };
+	var _hoisted_16$2 = { class: "settings-field-info" };
+	var _hoisted_17$2 = { class: "settings-field-header" };
+	var _hoisted_18$1 = {
+		key: 0,
+		class: "settings-use-global"
+	};
+	var _hoisted_19$1 = ["checked"];
+	var _hoisted_20$1 = { class: "settings-field-control" };
+	var _hoisted_21$1 = { class: "settings-field" };
+	var _hoisted_22$1 = { class: "settings-field-info" };
+	var _hoisted_23$1 = { class: "settings-field-header" };
+	var _hoisted_24$1 = {
+		key: 0,
+		class: "settings-use-global"
+	};
+	var _hoisted_25$1 = ["checked"];
+	var _hoisted_26$1 = { class: "settings-field-control" };
+	var _hoisted_27$1 = ["disabled"];
+	var _hoisted_28$1 = { class: "settings-field" };
+	var _hoisted_29$1 = { class: "settings-field-info" };
+	var _hoisted_30$1 = { class: "settings-field-header" };
+	var _hoisted_31$1 = {
+		key: 0,
+		class: "settings-use-global"
+	};
+	var _hoisted_32$1 = ["checked"];
+	var _hoisted_33$1 = { class: "settings-field-control" };
+	var _hoisted_34$1 = { class: "settings-field settings-field-wide" };
+	var _hoisted_35$1 = { class: "settings-field-info" };
+	var _hoisted_36$1 = { class: "settings-field-header" };
+	var _hoisted_37$1 = {
+		key: 0,
+		class: "settings-use-global"
+	};
+	var _hoisted_38$1 = ["checked"];
+	var _hoisted_39$1 = { class: "settings-field-control" };
+	var _hoisted_40$1 = ["disabled"];
+	var _hoisted_41$1 = { class: "settings-section" };
+	var _hoisted_42$1 = { class: "settings-field settings-field-wide" };
+	var _hoisted_43$1 = { class: "settings-field-info" };
+	var _hoisted_44$1 = { class: "settings-field-header" };
+	var _hoisted_45$1 = {
+		key: 0,
+		class: "settings-use-global"
+	};
+	var _hoisted_46$1 = ["checked"];
+	var _hoisted_47$1 = { class: "settings-field-control" };
+	var _hoisted_48$1 = ["disabled"];
+	var _hoisted_49$1 = { class: "settings-section" };
+	var _hoisted_50$1 = { class: "settings-field" };
+	var _hoisted_51$1 = { class: "settings-field-control" };
+	var _hoisted_52$1 = ["value"];
+	var _hoisted_53$1 = { class: "settings-field settings-field-wide" };
+	var _hoisted_54$1 = { class: "settings-field-control settings-font-control" };
+	var _hoisted_55$1 = ["value"];
+	var _hoisted_56$1 = { class: "settings-field settings-field-wide" };
+	var _hoisted_57$1 = { class: "settings-field-control settings-font-control" };
+	var _hoisted_58$1 = ["value"];
+	var _hoisted_59$1 = { class: "settings-field" };
+	var _hoisted_60$1 = { class: "settings-field-control" };
+	var _hoisted_61$1 = ["value"];
+	var _hoisted_62$1 = { class: "settings-field" };
+	var _hoisted_63$1 = { class: "settings-field-control" };
+	var _hoisted_64$1 = { class: "settings-field" };
+	var _hoisted_65$1 = { class: "settings-field-control" };
+	var _hoisted_66$1 = { class: "settings-field" };
+	var _hoisted_67$1 = { class: "settings-field-control" };
+	var _hoisted_68$1 = { class: "settings-field" };
+	var _hoisted_69$1 = { class: "settings-field-control" };
+	var _hoisted_70$1 = { class: "settings-section" };
+	var _hoisted_71$1 = { class: "settings-field settings-field--column" };
+	var _hoisted_72$1 = { class: "settings-field-control settings-field-control--full" };
+	var _hoisted_73$1 = { class: "settings-section" };
+	var _hoisted_74$1 = { class: "settings-field" };
+	var _hoisted_75$1 = { class: "settings-field-info" };
+	var _hoisted_76$1 = { class: "settings-description" };
+	var _hoisted_77$1 = { key: 0 };
+	var _hoisted_78$1 = {
+		key: 1,
+		class: "settings-update-status"
+	};
+	var _hoisted_79$1 = { class: "settings-field-control" };
+	var _hoisted_80$1 = { class: "settings-btn-row" };
+	var _hoisted_81$1 = {
+		key: 1,
+		class: "settings-notice"
+	};
+	var COMMIT_MSG_PROMPT_DEFAULT = `Write a concise git commit message (max 72 chars for first line) for these changes. Use conventional commit format (feat/fix/refactor/docs/chore). Output ONLY the commit message, no explanation:`;
+	var _sfc_main$3 = {
+		__name: "SettingsPanelApp",
+		setup(__props) {
+			const isProject = computed(() => store.settingsScope === "project");
+			const projectPath = computed(() => store.settingsProjectPath);
+			const settingsKey = computed(() => isProject.value ? "project:" + projectPath.value : "global");
+			const title = computed(() => {
+				const shortName = isProject.value ? projectPath.value?.split("/").filter(Boolean).slice(-2).join("/") || projectPath.value : "Global";
+				return (isProject.value ? "Project Settings — " : "Global Settings — ") + shortName;
+			});
+			const loading = /* @__PURE__ */ ref(true);
+			const saveState = /* @__PURE__ */ ref("idle");
+			const ideNotice = /* @__PURE__ */ ref("");
+			const appVersion = /* @__PURE__ */ ref("");
+			const updateStatus = /* @__PURE__ */ ref("");
+			const shellProfiles = /* @__PURE__ */ ref([]);
+			const terminalThemes = computed(() => window.TERMINAL_THEMES || {});
+			const terminalFonts = computed(() => window.TERMINAL_FONTS || {});
+			const form = /* @__PURE__ */ reactive({
+				permissionMode: "",
+				worktree: false,
+				worktreeName: "",
+				chrome: false,
+				preLaunchCmd: "",
+				addDirs: "",
+				visibleSessionCount: 10,
+				sessionMaxAgeDays: 3,
+				terminalTheme: "switchboard",
+				mcpEmulation: true,
+				shellProfile: "auto",
+				showAvatars: true,
+				monoFont: "default",
+				uiFont: "default",
+				commitMessagePrompt: ""
+			});
+			const useGlobal = /* @__PURE__ */ reactive({
+				permissionMode: true,
+				worktree: true,
+				worktreeName: true,
+				chrome: true,
+				preLaunchCmd: true,
+				addDirs: true
+			});
+			let originalMcpEmulation = true;
+			function effectiveValue(current, global, field, fallback) {
+				if (isProject.value && (current[field] === void 0 || current[field] === null)) return global[field] !== void 0 ? global[field] : fallback;
+				return current[field] !== void 0 ? current[field] : fallback;
+			}
+			function isUsingGlobal(current, field) {
+				return current[field] === void 0 || current[field] === null;
+			}
+			async function loadSettings() {
+				loading.value = true;
+				const current = await window.api.getSetting(settingsKey.value) || {};
+				const global = isProject.value ? await window.api.getSetting("global") || {} : {};
+				for (const field of [
+					"permissionMode",
+					"worktree",
+					"worktreeName",
+					"chrome",
+					"preLaunchCmd",
+					"addDirs"
+				]) {
+					if (isProject.value) useGlobal[field] = isUsingGlobal(current, field);
+					form[field] = effectiveValue(current, global, field, getDefault(field));
+				}
+				if (!isProject.value) {
+					form.visibleSessionCount = current.visibleSessionCount ?? 10;
+					form.sessionMaxAgeDays = current.sessionMaxAgeDays ?? 3;
+					form.terminalTheme = current.terminalTheme ?? "switchboard";
+					form.mcpEmulation = current.mcpEmulation !== false;
+					form.shellProfile = current.shellProfile ?? "auto";
+					form.showAvatars = current.showAvatars !== false;
+					form.monoFont = current.monoFont ?? "default";
+					form.uiFont = current.uiFont ?? "default";
+					form.commitMessagePrompt = current.commitMessagePrompt || COMMIT_MSG_PROMPT_DEFAULT;
+					originalMcpEmulation = form.mcpEmulation;
+					try {
+						shellProfiles.value = await window.api.getShellProfiles();
+					} catch {
+						shellProfiles.value = [];
+					}
+					window.api.getAppVersion().then((v) => {
+						appVersion.value = v;
+					});
+				}
+				loading.value = false;
+			}
+			function getDefault(field) {
+				return {
+					permissionMode: "",
+					worktree: false,
+					worktreeName: "",
+					chrome: false,
+					preLaunchCmd: "",
+					addDirs: ""
+				}[field];
+			}
+			function toggleGlobal(field, checked) {
+				useGlobal[field] = checked;
+			}
+			async function save() {
+				let settings = {};
+				if (isProject.value) {
+					for (const field of [
+						"permissionMode",
+						"worktree",
+						"worktreeName",
+						"chrome",
+						"preLaunchCmd",
+						"addDirs"
+					]) if (!useGlobal[field]) settings[field] = form[field];
+				} else settings = {
+					...await window.api.getSetting("global") || {},
+					permissionMode: form.permissionMode || null,
+					worktree: form.worktree,
+					worktreeName: form.worktreeName,
+					chrome: form.chrome,
+					preLaunchCmd: form.preLaunchCmd,
+					addDirs: form.addDirs,
+					visibleSessionCount: form.visibleSessionCount || 10,
+					sessionMaxAgeDays: form.sessionMaxAgeDays || 3,
+					terminalTheme: form.terminalTheme || "switchboard",
+					mcpEmulation: form.mcpEmulation,
+					shellProfile: form.shellProfile || "auto",
+					showAvatars: form.showAvatars,
+					monoFont: form.monoFont || "default",
+					uiFont: form.uiFont || "default",
+					commitMessagePrompt: form.commitMessagePrompt === COMMIT_MSG_PROMPT_DEFAULT ? "" : form.commitMessagePrompt || ""
+				};
+				await window.api.setSetting(settingsKey.value, settings);
+				if (!isProject.value) {
+					window._setVisibleSessionCount?.(settings.visibleSessionCount);
+					window._setSessionMaxAge?.(settings.sessionMaxAgeDays);
+					window._applyTerminalTheme?.(settings.terminalTheme);
+					window._setShowAvatars?.(settings.showAvatars);
+					if (window.TERMINAL_FONTS?.[settings.monoFont]) window._applyTerminalFont?.(window.TERMINAL_FONTS[settings.monoFont].family);
+					window._applyUiFont?.(settings.uiFont);
+					if (typeof refreshSidebar === "function") refreshSidebar();
+					if (settings.mcpEmulation !== originalMcpEmulation) {
+						ideNotice.value = "IDE Emulation setting changed. New sessions will use the updated setting — running sessions are not affected.";
+						setTimeout(() => {
+							ideNotice.value = "";
+						}, 8e3);
+					}
+				}
+				saveState.value = "saved";
+				setTimeout(() => close(), 600);
+			}
+			function close() {
+				store.settingsOpen = false;
+				window._restoreAfterSettings?.();
+			}
+			async function removeProject() {
+				const shortName = projectPath.value?.split("/").filter(Boolean).slice(-2).join("/") || projectPath.value;
+				if (!confirm(`Hide project "${shortName}" from Switchboard?\n\nThis hides the project from the sidebar. Your session files are not deleted.`)) return;
+				await window.api.removeProject(projectPath.value);
+				store.settingsOpen = false;
+				if (typeof loadProjects === "function") loadProjects();
+			}
+			function checkUpdates() {
+				window.api.updaterCheck();
+			}
+			onMounted(async () => {
+				await loadSettings();
+				if (!isProject.value) window.api.onUpdaterEvent((type, data) => {
+					switch (type) {
+						case "checking":
+							updateStatus.value = "checking…";
+							break;
+						case "update-available":
+							updateStatus.value = `v${data.version} available`;
+							break;
+						case "update-not-available":
+							updateStatus.value = "up to date";
+							break;
+						case "download-progress":
+							updateStatus.value = `downloading ${Math.round(data.percent)}%`;
+							break;
+						case "update-downloaded":
+							updateStatus.value = `v${data.version} ready, restart to update`;
+							break;
+						case "error":
+							updateStatus.value = "check failed";
+							break;
+					}
+				});
+			});
+			return (_ctx, _cache) => {
+				return openBlock(), createElementBlock("div", _hoisted_1$3, [createBaseVNode("div", _hoisted_2$3, [createBaseVNode("span", _hoisted_3$3, toDisplayString(title.value), 1)]), createBaseVNode("div", _hoisted_4$3, [loading.value ? (openBlock(), createElementBlock("div", _hoisted_5$3, "Loading…")) : (openBlock(), createElementBlock("div", _hoisted_6$3, [
+					createBaseVNode("div", _hoisted_7$3, [
+						_cache[38] || (_cache[38] = createBaseVNode("div", { class: "settings-section-title" }, "Claude CLI Options", -1)),
+						createBaseVNode("div", _hoisted_8$2, [createBaseVNode("div", _hoisted_9$2, [createBaseVNode("div", _hoisted_10$2, [_cache[23] || (_cache[23] = createBaseVNode("span", { class: "settings-label" }, "Permission Mode", -1)), isProject.value ? (openBlock(), createElementBlock("label", _hoisted_11$2, [createBaseVNode("input", {
+							type: "checkbox",
+							checked: useGlobal.permissionMode,
+							onChange: _cache[0] || (_cache[0] = ($event) => toggleGlobal("permissionMode", $event.target.checked))
+						}, null, 40, _hoisted_12$2), _cache[22] || (_cache[22] = createTextVNode(" Use global default ", -1))])) : createCommentVNode("", true)]), _cache[24] || (_cache[24] = createBaseVNode("div", { class: "settings-description" }, [
+							createTextVNode("Permission mode passed to the "),
+							createBaseVNode("code", null, "claude"),
+							createTextVNode(" command")
+						], -1))]), createBaseVNode("div", _hoisted_13$2, [withDirectives(createBaseVNode("select", {
+							class: "settings-select",
+							"onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => form.permissionMode = $event),
+							disabled: isProject.value && useGlobal.permissionMode
+						}, [..._cache[25] || (_cache[25] = [createStaticVNode("<option value=\"\">Default (none)</option><option value=\"acceptEdits\">Accept Edits</option><option value=\"plan\">Plan Mode</option><option value=\"dontAsk\">Don&#39;t Ask</option><option value=\"bypassPermissions\">Bypass</option>", 5)])], 8, _hoisted_14$2), [[vModelSelect, form.permissionMode]])])]),
+						createBaseVNode("div", _hoisted_15$2, [createBaseVNode("div", _hoisted_16$2, [createBaseVNode("div", _hoisted_17$2, [_cache[27] || (_cache[27] = createBaseVNode("span", { class: "settings-label" }, "Worktree", -1)), isProject.value ? (openBlock(), createElementBlock("label", _hoisted_18$1, [createBaseVNode("input", {
+							type: "checkbox",
+							checked: useGlobal.worktree,
+							onChange: _cache[2] || (_cache[2] = ($event) => toggleGlobal("worktree", $event.target.checked))
+						}, null, 40, _hoisted_19$1), _cache[26] || (_cache[26] = createTextVNode(" Use global default ", -1))])) : createCommentVNode("", true)]), _cache[28] || (_cache[28] = createBaseVNode("div", { class: "settings-description" }, "Enable worktree for new sessions", -1))]), createBaseVNode("div", _hoisted_20$1, [createVNode(_sfc_main$5, {
+							modelValue: form.worktree,
+							"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => form.worktree = $event),
+							disabled: isProject.value && useGlobal.worktree
+						}, null, 8, ["modelValue", "disabled"])])]),
+						createBaseVNode("div", _hoisted_21$1, [createBaseVNode("div", _hoisted_22$1, [createBaseVNode("div", _hoisted_23$1, [_cache[30] || (_cache[30] = createBaseVNode("span", { class: "settings-label" }, "Worktree Name", -1)), isProject.value ? (openBlock(), createElementBlock("label", _hoisted_24$1, [createBaseVNode("input", {
+							type: "checkbox",
+							checked: useGlobal.worktreeName,
+							onChange: _cache[4] || (_cache[4] = ($event) => toggleGlobal("worktreeName", $event.target.checked))
+						}, null, 40, _hoisted_25$1), _cache[29] || (_cache[29] = createTextVNode(" Use global default ", -1))])) : createCommentVNode("", true)]), _cache[31] || (_cache[31] = createBaseVNode("div", { class: "settings-description" }, "Custom name for worktree branches", -1))]), createBaseVNode("div", _hoisted_26$1, [withDirectives(createBaseVNode("input", {
+							type: "text",
+							class: "settings-input",
+							"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => form.worktreeName = $event),
+							placeholder: "auto",
+							disabled: isProject.value && useGlobal.worktreeName,
+							style: { "width": "140px" }
+						}, null, 8, _hoisted_27$1), [[vModelText, form.worktreeName]])])]),
+						createBaseVNode("div", _hoisted_28$1, [createBaseVNode("div", _hoisted_29$1, [createBaseVNode("div", _hoisted_30$1, [_cache[33] || (_cache[33] = createBaseVNode("span", { class: "settings-label" }, "Chrome", -1)), isProject.value ? (openBlock(), createElementBlock("label", _hoisted_31$1, [createBaseVNode("input", {
+							type: "checkbox",
+							checked: useGlobal.chrome,
+							onChange: _cache[6] || (_cache[6] = ($event) => toggleGlobal("chrome", $event.target.checked))
+						}, null, 40, _hoisted_32$1), _cache[32] || (_cache[32] = createTextVNode(" Use global default ", -1))])) : createCommentVNode("", true)]), _cache[34] || (_cache[34] = createBaseVNode("div", { class: "settings-description" }, "Enable Chrome browser automation", -1))]), createBaseVNode("div", _hoisted_33$1, [createVNode(_sfc_main$5, {
+							modelValue: form.chrome,
+							"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => form.chrome = $event),
+							disabled: isProject.value && useGlobal.chrome
+						}, null, 8, ["modelValue", "disabled"])])]),
+						createBaseVNode("div", _hoisted_34$1, [createBaseVNode("div", _hoisted_35$1, [createBaseVNode("div", _hoisted_36$1, [_cache[36] || (_cache[36] = createBaseVNode("span", { class: "settings-label" }, "Additional Directories", -1)), isProject.value ? (openBlock(), createElementBlock("label", _hoisted_37$1, [createBaseVNode("input", {
+							type: "checkbox",
+							checked: useGlobal.addDirs,
+							onChange: _cache[8] || (_cache[8] = ($event) => toggleGlobal("addDirs", $event.target.checked))
+						}, null, 40, _hoisted_38$1), _cache[35] || (_cache[35] = createTextVNode(" Use global default ", -1))])) : createCommentVNode("", true)]), _cache[37] || (_cache[37] = createBaseVNode("div", { class: "settings-description" }, "Extra directories to include in Claude sessions", -1))]), createBaseVNode("div", _hoisted_39$1, [withDirectives(createBaseVNode("input", {
+							type: "text",
+							class: "settings-input",
+							"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => form.addDirs = $event),
+							placeholder: "/path/to/dir1, /path/to/dir2",
+							disabled: isProject.value && useGlobal.addDirs
+						}, null, 8, _hoisted_40$1), [[vModelText, form.addDirs]])])])
+					]),
+					createBaseVNode("div", _hoisted_41$1, [_cache[42] || (_cache[42] = createBaseVNode("div", { class: "settings-section-title" }, "Session Launch", -1)), createBaseVNode("div", _hoisted_42$1, [createBaseVNode("div", _hoisted_43$1, [createBaseVNode("div", _hoisted_44$1, [_cache[40] || (_cache[40] = createBaseVNode("span", { class: "settings-label" }, "Pre-launch Command", -1)), isProject.value ? (openBlock(), createElementBlock("label", _hoisted_45$1, [createBaseVNode("input", {
+						type: "checkbox",
+						checked: useGlobal.preLaunchCmd,
+						onChange: _cache[10] || (_cache[10] = ($event) => toggleGlobal("preLaunchCmd", $event.target.checked))
+					}, null, 40, _hoisted_46$1), _cache[39] || (_cache[39] = createTextVNode(" Use global default ", -1))])) : createCommentVNode("", true)]), _cache[41] || (_cache[41] = createBaseVNode("div", { class: "settings-description" }, "Prepended to the claude command (e.g. \"aws-vault exec profile --\")", -1))]), createBaseVNode("div", _hoisted_47$1, [withDirectives(createBaseVNode("input", {
+						type: "text",
+						class: "settings-input",
+						"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => form.preLaunchCmd = $event),
+						placeholder: "e.g. aws-vault exec profile --",
+						disabled: isProject.value && useGlobal.preLaunchCmd
+					}, null, 8, _hoisted_48$1), [[vModelText, form.preLaunchCmd]])])])]),
+					!isProject.value ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
+						createBaseVNode("div", _hoisted_49$1, [
+							_cache[52] || (_cache[52] = createBaseVNode("div", { class: "settings-section-title" }, "Application", -1)),
+							createBaseVNode("div", _hoisted_50$1, [_cache[43] || (_cache[43] = createBaseVNode("div", { class: "settings-field-info" }, [createBaseVNode("span", { class: "settings-label" }, "Terminal Theme"), createBaseVNode("div", { class: "settings-description" }, "Color theme for terminal sessions")], -1)), createBaseVNode("div", _hoisted_51$1, [withDirectives(createBaseVNode("select", {
+								class: "settings-select",
+								"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => form.terminalTheme = $event)
+							}, [(openBlock(true), createElementBlock(Fragment, null, renderList(terminalThemes.value, (theme, key) => {
+								return openBlock(), createElementBlock("option", {
+									key,
+									value: key
+								}, toDisplayString(theme.label), 9, _hoisted_52$1);
+							}), 128))], 512), [[vModelSelect, form.terminalTheme]])])]),
+							createBaseVNode("div", _hoisted_53$1, [_cache[44] || (_cache[44] = createBaseVNode("div", { class: "settings-field-info" }, [createBaseVNode("span", { class: "settings-label" }, "Terminal Font"), createBaseVNode("div", { class: "settings-description" }, "Monospace font for terminal sessions")], -1)), createBaseVNode("div", _hoisted_54$1, [withDirectives(createBaseVNode("select", {
+								class: "settings-select",
+								"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => form.monoFont = $event)
+							}, [(openBlock(true), createElementBlock(Fragment, null, renderList(terminalFonts.value, (font, key) => {
+								return openBlock(), createElementBlock("option", {
+									key,
+									value: key
+								}, toDisplayString(font.label), 9, _hoisted_55$1);
+							}), 128))], 512), [[vModelSelect, form.monoFont]]), createBaseVNode("span", {
+								class: "settings-font-preview",
+								style: normalizeStyle({ fontFamily: terminalFonts.value[form.monoFont]?.family })
+							}, " fn main() { println!(\"Hello, 世界\"); } ", 4)])]),
+							createBaseVNode("div", _hoisted_56$1, [_cache[45] || (_cache[45] = createBaseVNode("div", { class: "settings-field-info" }, [createBaseVNode("span", { class: "settings-label" }, "App Font"), createBaseVNode("div", { class: "settings-description" }, "Font for the application interface (sidebar, labels, viewer)")], -1)), createBaseVNode("div", _hoisted_57$1, [withDirectives(createBaseVNode("select", {
+								class: "settings-select",
+								"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => form.uiFont = $event)
+							}, [(openBlock(true), createElementBlock(Fragment, null, renderList(terminalFonts.value, (font, key) => {
+								return openBlock(), createElementBlock("option", {
+									key,
+									value: key
+								}, toDisplayString(font.label), 9, _hoisted_58$1);
+							}), 128))], 512), [[vModelSelect, form.uiFont]]), createBaseVNode("span", {
+								class: "settings-font-preview",
+								style: normalizeStyle({ fontFamily: terminalFonts.value[form.uiFont]?.family })
+							}, " Switchboard — 42 sessions ", 4)])]),
+							createBaseVNode("div", _hoisted_59$1, [_cache[47] || (_cache[47] = createBaseVNode("div", { class: "settings-field-info" }, [createBaseVNode("span", { class: "settings-label" }, "Shell Profile"), createBaseVNode("div", { class: "settings-description" }, "Shell used for terminal and Claude sessions. Changes take effect for new sessions only.")], -1)), createBaseVNode("div", _hoisted_60$1, [withDirectives(createBaseVNode("select", {
+								class: "settings-select",
+								"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => form.shellProfile = $event)
+							}, [_cache[46] || (_cache[46] = createBaseVNode("option", { value: "auto" }, "Auto (detect)", -1)), (openBlock(true), createElementBlock(Fragment, null, renderList(shellProfiles.value, (p) => {
+								return openBlock(), createElementBlock("option", {
+									key: p.id,
+									value: p.id
+								}, toDisplayString(p.name), 9, _hoisted_61$1);
+							}), 128))], 512), [[vModelSelect, form.shellProfile]])])]),
+							createBaseVNode("div", _hoisted_62$1, [_cache[48] || (_cache[48] = createBaseVNode("div", { class: "settings-field-info" }, [createBaseVNode("span", { class: "settings-label" }, "Max Visible Sessions"), createBaseVNode("div", { class: "settings-description" }, "Show up to this many sessions before collapsing the rest behind \"+N older\"")], -1)), createBaseVNode("div", _hoisted_63$1, [withDirectives(createBaseVNode("input", {
+								type: "number",
+								class: "settings-input settings-input-compact",
+								"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => form.visibleSessionCount = $event),
+								min: "1",
+								max: "100"
+							}, null, 512), [[
+								vModelText,
+								form.visibleSessionCount,
+								void 0,
+								{ number: true }
+							]])])]),
+							createBaseVNode("div", _hoisted_64$1, [_cache[49] || (_cache[49] = createBaseVNode("div", { class: "settings-field-info" }, [createBaseVNode("span", { class: "settings-label" }, "Session Max Age (days)"), createBaseVNode("div", { class: "settings-description" }, "Sessions older than this are hidden behind \"+N older\" even if under the count limit")], -1)), createBaseVNode("div", _hoisted_65$1, [withDirectives(createBaseVNode("input", {
+								type: "number",
+								class: "settings-input settings-input-compact",
+								"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => form.sessionMaxAgeDays = $event),
+								min: "1",
+								max: "365"
+							}, null, 512), [[
+								vModelText,
+								form.sessionMaxAgeDays,
+								void 0,
+								{ number: true }
+							]])])]),
+							createBaseVNode("div", _hoisted_66$1, [_cache[50] || (_cache[50] = createBaseVNode("div", { class: "settings-field-info" }, [createBaseVNode("span", { class: "settings-label" }, "IDE Emulation"), createBaseVNode("div", { class: "settings-description" }, "Emulate an IDE so Claude can open files and diffs in a side panel. Disable to use your own IDE instead. Changes take effect for new sessions only.")], -1)), createBaseVNode("div", _hoisted_67$1, [createVNode(_sfc_main$5, {
+								modelValue: form.mcpEmulation,
+								"onUpdate:modelValue": _cache[18] || (_cache[18] = ($event) => form.mcpEmulation = $event)
+							}, null, 8, ["modelValue"])])]),
+							createBaseVNode("div", _hoisted_68$1, [_cache[51] || (_cache[51] = createBaseVNode("div", { class: "settings-field-info" }, [createBaseVNode("span", { class: "settings-label" }, "Show Avatars"), createBaseVNode("div", { class: "settings-description" }, "Show project initials avatars on session groups and grid cards")], -1)), createBaseVNode("div", _hoisted_69$1, [createVNode(_sfc_main$5, {
+								modelValue: form.showAvatars,
+								"onUpdate:modelValue": _cache[19] || (_cache[19] = ($event) => form.showAvatars = $event)
+							}, null, 8, ["modelValue"])])])
+						]),
+						createBaseVNode("div", _hoisted_70$1, [_cache[54] || (_cache[54] = createBaseVNode("div", { class: "settings-section-title" }, "Git", -1)), createBaseVNode("div", _hoisted_71$1, [_cache[53] || (_cache[53] = createBaseVNode("div", { class: "settings-field-info" }, [createBaseVNode("span", { class: "settings-label" }, "Commit Message Prompt"), createBaseVNode("div", { class: "settings-description" }, "Instruction sent to Claude CLI when generating a commit message. The git diff is appended automatically. Leave empty to use the default.")], -1)), createBaseVNode("div", _hoisted_72$1, [withDirectives(createBaseVNode("textarea", {
+							class: "settings-textarea",
+							"onUpdate:modelValue": _cache[20] || (_cache[20] = ($event) => form.commitMessagePrompt = $event),
+							placeholder: "Enter prompt…",
+							rows: "5"
+						}, null, 512), [[vModelText, form.commitMessagePrompt]]), form.commitMessagePrompt ? (openBlock(), createElementBlock("button", {
+							key: 0,
+							class: "settings-reset-btn",
+							onClick: _cache[21] || (_cache[21] = ($event) => form.commitMessagePrompt = "")
+						}, "Reset to default")) : createCommentVNode("", true)])])]),
+						createBaseVNode("div", _hoisted_73$1, [_cache[57] || (_cache[57] = createBaseVNode("div", { class: "settings-section-title" }, "Updates", -1)), createBaseVNode("div", _hoisted_74$1, [createBaseVNode("div", _hoisted_75$1, [_cache[55] || (_cache[55] = createBaseVNode("span", { class: "settings-label" }, "Version", -1)), createBaseVNode("div", _hoisted_76$1, [appVersion.value ? (openBlock(), createElementBlock("span", _hoisted_77$1, "v" + toDisplayString(appVersion.value), 1)) : createCommentVNode("", true), updateStatus.value ? (openBlock(), createElementBlock("span", _hoisted_78$1, " — " + toDisplayString(updateStatus.value), 1)) : createCommentVNode("", true)])]), createBaseVNode("div", _hoisted_79$1, [createVNode(_sfc_main$4, {
+							variant: "secondary",
+							size: "sm",
+							onClick: checkUpdates
+						}, {
+							default: withCtx(() => [..._cache[56] || (_cache[56] = [createTextVNode("Check for Updates", -1)])]),
+							_: 1
+						})])])])
+					], 64)) : createCommentVNode("", true),
+					createBaseVNode("div", _hoisted_80$1, [
+						createVNode(_sfc_main$4, {
+							variant: "secondary",
+							size: "sm",
+							onClick: close
+						}, {
+							default: withCtx(() => [..._cache[58] || (_cache[58] = [createTextVNode("Cancel", -1)])]),
+							_: 1
+						}),
+						createVNode(_sfc_main$4, {
+							variant: saveState.value === "saved" ? "success" : "primary",
+							size: "sm",
+							onClick: save,
+							disabled: saveState.value === "saved"
+						}, {
+							default: withCtx(() => [createTextVNode(toDisplayString(saveState.value === "saved" ? "✓ Saved" : "Save Settings"), 1)]),
+							_: 1
+						}, 8, ["variant", "disabled"]),
+						isProject.value ? (openBlock(), createBlock(_sfc_main$4, {
+							key: 0,
+							variant: "danger",
+							size: "sm",
+							onClick: removeProject
+						}, {
+							default: withCtx(() => [..._cache[59] || (_cache[59] = [createTextVNode("Hide Project", -1)])]),
+							_: 1
+						})) : createCommentVNode("", true),
+						ideNotice.value ? (openBlock(), createElementBlock("span", _hoisted_81$1, toDisplayString(ideNotice.value), 1)) : createCommentVNode("", true)
+					])
+				]))])]);
+			};
+		}
+	};
+	//#endregion
+	//#region src/vue/components/FileTreeNode.vue
+	var _hoisted_1$2 = { class: "pv-tree-node" };
+	var _hoisted_2$2 = ["title"];
+	var _hoisted_3$2 = {
+		key: 0,
+		class: "pv-tree-chevron"
+	};
+	var _hoisted_4$2 = {
+		key: 0,
+		width: "10",
+		height: "10",
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		"stroke-width": "2.5",
+		"stroke-linecap": "round",
+		"stroke-linejoin": "round"
+	};
+	var _hoisted_5$2 = {
+		key: 1,
+		width: "10",
+		height: "10",
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		"stroke-width": "2.5",
+		"stroke-linecap": "round",
+		"stroke-linejoin": "round"
+	};
+	var _hoisted_6$2 = {
+		key: 1,
+		class: "pv-tree-chevron pv-tree-file-icon"
+	};
+	var _hoisted_7$2 = { key: 0 };
+	var _sfc_main$2 = {
+		__name: "FileTreeNode",
+		props: {
+			node: {
+				type: Object,
+				required: true
+			},
+			depth: {
+				type: Number,
+				default: 0
+			},
+			search: {
+				type: String,
+				default: ""
+			}
+		},
+		emits: ["open"],
+		setup(__props, { emit: __emit }) {
+			const props = __props;
+			const emit = __emit;
+			const expanded = /* @__PURE__ */ ref(props.node._expanded ?? false);
+			function toggle() {
+				if (props.node.isDir) expanded.value = !expanded.value;
+				else emit("open", props.node.path);
+			}
+			return (_ctx, _cache) => {
+				const _component_FileTreeNode = resolveComponent("FileTreeNode", true);
+				return openBlock(), createElementBlock("div", _hoisted_1$2, [createBaseVNode("div", {
+					class: "pv-tree-row",
+					style: normalizeStyle({ paddingLeft: `${__props.depth * 14 + 4}px` }),
+					onClick: toggle,
+					title: __props.node.path
+				}, [__props.node.isDir ? (openBlock(), createElementBlock("span", _hoisted_3$2, [expanded.value ? (openBlock(), createElementBlock("svg", _hoisted_4$2, [..._cache[1] || (_cache[1] = [createBaseVNode("polyline", { points: "6 9 12 15 18 9" }, null, -1)])])) : (openBlock(), createElementBlock("svg", _hoisted_5$2, [..._cache[2] || (_cache[2] = [createBaseVNode("polyline", { points: "9 18 15 12 9 6" }, null, -1)])]))])) : (openBlock(), createElementBlock("span", _hoisted_6$2, [..._cache[3] || (_cache[3] = [createBaseVNode("svg", {
+					width: "10",
+					height: "10",
+					viewBox: "0 0 24 24",
+					fill: "none",
+					stroke: "currentColor",
+					"stroke-width": "2",
+					"stroke-linecap": "round",
+					"stroke-linejoin": "round"
+				}, [createBaseVNode("path", { d: "M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" }), createBaseVNode("polyline", { points: "14 2 14 8 20 8" })], -1)])])), createBaseVNode("span", { class: normalizeClass(["pv-tree-name", { dir: __props.node.isDir }]) }, toDisplayString(__props.node.name), 3)], 12, _hoisted_2$2), __props.node.isDir && expanded.value ? (openBlock(), createElementBlock("div", _hoisted_7$2, [(openBlock(true), createElementBlock(Fragment, null, renderList(__props.node.children, (child) => {
+					return openBlock(), createBlock(_component_FileTreeNode, {
+						key: child.path,
+						node: child,
+						depth: __props.depth + 1,
+						search: __props.search,
+						onOpen: _cache[0] || (_cache[0] = ($event) => _ctx.$emit("open", $event))
+					}, null, 8, [
+						"node",
+						"depth",
+						"search"
+					]);
+				}), 128))])) : createCommentVNode("", true)]);
+			};
+		}
+	};
+	//#endregion
+	//#region src/vue/components/ProjectViewerApp.vue
+	var _hoisted_1$1 = {
+		key: 0,
+		class: "pv-root"
+	};
+	var _hoisted_2$1 = { class: "pv-diff-nav" };
+	var _hoisted_3$1 = { class: "pv-nav-file" };
+	var _hoisted_4$1 = { class: "pv-nav-filename" };
+	var _hoisted_5$1 = { class: "pv-nav-filepath" };
+	var _hoisted_6$1 = {
+		key: 0,
+		class: "pv-nav-arrows"
+	};
+	var _hoisted_7$1 = ["disabled"];
+	var _hoisted_8$1 = { class: "pv-nav-counter" };
+	var _hoisted_9$1 = ["disabled"];
+	var _hoisted_10$1 = ["disabled"];
+	var _hoisted_11$1 = { class: "pv-header" };
+	var _hoisted_12$1 = { class: "pv-title-wrap" };
+	var _hoisted_13$1 = { class: "pv-name" };
+	var _hoisted_14$1 = ["title"];
+	var _hoisted_15$1 = { class: "pv-path" };
+	var _hoisted_16$1 = {
+		key: 0,
+		class: "pv-worktree-bar"
+	};
+	var _hoisted_17$1 = ["onClick"];
+	var _hoisted_18 = { class: "pv-tabs" };
+	var _hoisted_19 = ["onClick"];
+	var _hoisted_20 = { class: "pv-tab-body" };
+	var _hoisted_21 = {
+		key: 0,
+		class: "pv-loading"
+	};
+	var _hoisted_22 = { class: "pv-git-toolbar" };
+	var _hoisted_23 = { class: "pv-branch-wrap" };
+	var _hoisted_24 = ["value", "disabled"];
+	var _hoisted_25 = { label: "Local" };
+	var _hoisted_26 = ["value"];
+	var _hoisted_27 = {
+		key: 0,
+		label: "Remote"
+	};
+	var _hoisted_28 = ["value"];
+	var _hoisted_29 = ["disabled"];
+	var _hoisted_30 = ["disabled"];
+	var _hoisted_31 = {
+		key: 1,
+		class: "pv-git-stats"
+	};
+	var _hoisted_32 = {
+		key: 0,
+		class: "pv-added"
+	};
+	var _hoisted_33 = {
+		key: 1,
+		class: "pv-deleted"
+	};
+	var _hoisted_34 = { class: "pv-overview-grid" };
+	var _hoisted_35 = { class: "pv-col-left" };
+	var _hoisted_36 = {
+		key: 0,
+		class: "pv-card"
+	};
+	var _hoisted_37 = { class: "pv-card-title" };
+	var _hoisted_38 = { class: "pv-count-badge" };
+	var _hoisted_39 = { class: "pv-file-list" };
+	var _hoisted_40 = ["onClick", "title"];
+	var _hoisted_41 = { class: "pv-file-name" };
+	var _hoisted_42 = { class: "pv-file-diff" };
+	var _hoisted_43 = {
+		key: 0,
+		class: "pv-added"
+	};
+	var _hoisted_44 = {
+		key: 1,
+		class: "pv-deleted"
+	};
+	var _hoisted_45 = {
+		key: 1,
+		class: "pv-card pv-empty-changes"
+	};
+	var _hoisted_46 = {
+		width: "20",
+		height: "20",
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		"stroke-width": "1.5",
+		"stroke-linecap": "round",
+		"stroke-linejoin": "round",
+		style: { "opacity": ".3" }
+	};
+	var _hoisted_47 = { class: "pv-card pv-commit-card" };
+	var _hoisted_48 = {
+		key: 0,
+		class: "pv-generating-wrap"
+	};
+	var _hoisted_49 = { class: "pv-commit-actions" };
+	var _hoisted_50 = ["disabled"];
+	var _hoisted_51 = { class: "pv-commit-btns" };
+	var _hoisted_52 = ["disabled"];
+	var _hoisted_53 = ["disabled"];
+	var _hoisted_54 = { class: "pv-col-right" };
+	var _hoisted_55 = {
+		key: 0,
+		class: "pv-card"
+	};
+	var _hoisted_56 = { class: "pv-container-list" };
+	var _hoisted_57 = { class: "pv-container-name" };
+	var _hoisted_58 = { class: "pv-container-state" };
+	var _hoisted_59 = {
+		key: 0,
+		class: "pv-container-ports"
+	};
+	var _hoisted_60 = {
+		key: 1,
+		class: "pv-card"
+	};
+	var _hoisted_61 = { class: "pv-session-list" };
+	var _hoisted_62 = ["onClick"];
+	var _hoisted_63 = { class: "pv-session-name" };
+	var _hoisted_64 = { class: "pv-session-date" };
+	var _hoisted_65 = { class: "pv-commits-section-label pv-commits-section-label--unpushed" };
+	var _hoisted_66 = { class: "pv-commit-list-full pv-commit-list-full--unpushed" };
+	var _hoisted_67 = { class: "pv-commit-hash" };
+	var _hoisted_68 = { class: "pv-commit-msg" };
+	var _hoisted_69 = { class: "pv-commit-author" };
+	var _hoisted_70 = { class: "pv-commit-date" };
+	var _hoisted_71 = {
+		key: 1,
+		class: "pv-commits-section-label"
+	};
+	var _hoisted_72 = { class: "pv-commit-list-full" };
+	var _hoisted_73 = { class: "pv-commit-hash" };
+	var _hoisted_74 = { class: "pv-commit-msg" };
+	var _hoisted_75 = { class: "pv-commit-author" };
+	var _hoisted_76 = { class: "pv-commit-date" };
+	var _hoisted_77 = {
+		key: 0,
+		class: "pv-empty"
+	};
+	var _hoisted_78 = {
+		key: 3,
+		class: "pv-files-layout"
+	};
+	var _hoisted_79 = { class: "pv-tree-panel" };
+	var _hoisted_80 = { class: "pv-tree-search" };
+	var _hoisted_81 = { class: "pv-tree-scroll" };
+	var _hoisted_82 = {
+		key: 0,
+		class: "pv-loading"
+	};
+	var _hoisted_83 = {
+		key: 0,
+		class: "pv-active-sessions"
+	};
+	var _hoisted_84 = ["onClick"];
+	var _hoisted_85 = { class: "pv-asession-name" };
+	var _hoisted_86 = ["onClick"];
+	var _hoisted_87 = { class: "pv-asession-name" };
+	var _hoisted_88 = { class: "pv-session-date" };
+	var _hoisted_89 = {
+		key: 2,
+		class: "pv-empty"
+	};
+	var _hoisted_90 = { class: "pv-dialog" };
+	var _hoisted_91 = { class: "pv-dialog-actions" };
+	var _sfc_main$1 = {
+		__name: "ProjectViewerApp",
+		props: { callbacks: {
+			type: Object,
+			required: true
+		} },
+		setup(__props, { expose: __expose }) {
+			const TABS = computed(() => [
+				{
+					id: "overview",
+					label: "Overview"
+				},
+				{
+					id: "commits",
+					label: unpushedCount.value ? `Commits (${unpushedCount.value})` : "Commits"
+				},
+				{
+					id: "files",
+					label: "Files"
+				},
+				{
+					id: "sessions",
+					label: activeSessions.value.length ? `Sessions (${activeSessions.value.length})` : "Sessions"
+				}
+			]);
+			const props = __props;
+			const project = /* @__PURE__ */ ref(null);
+			const worktrees = /* @__PURE__ */ ref([]);
+			const viewedPath = /* @__PURE__ */ ref("");
+			const detail = /* @__PURE__ */ ref(null);
+			const loading = /* @__PURE__ */ ref(false);
+			const activeTab = /* @__PURE__ */ ref("overview");
+			watch(activeTab, (tab) => props.callbacks.onTabChange?.(tab));
+			const branches = /* @__PURE__ */ ref([]);
+			const remoteBranches = /* @__PURE__ */ ref([]);
+			const gitBusy = /* @__PURE__ */ ref(false);
+			const gitMessage = /* @__PURE__ */ ref("");
+			const gitError = /* @__PURE__ */ ref(false);
+			const commitMessage = /* @__PURE__ */ ref("");
+			const generating = /* @__PURE__ */ ref(false);
+			const confirmPush = /* @__PURE__ */ ref(false);
+			const loadingFile = /* @__PURE__ */ ref(null);
+			const activeDiff = /* @__PURE__ */ ref(null);
+			const activeFile = /* @__PURE__ */ ref(null);
+			const fileContent = /* @__PURE__ */ ref("");
+			const fileModified = /* @__PURE__ */ ref(false);
+			const fileSaving = /* @__PURE__ */ ref(false);
+			const diffContainerRef = /* @__PURE__ */ ref(null);
+			let editorView = null;
+			const fileTree = /* @__PURE__ */ ref([]);
+			const treeLoading = /* @__PURE__ */ ref(false);
+			const treeSearch = /* @__PURE__ */ ref("");
+			const sessions = /* @__PURE__ */ ref([]);
+			const activeSessions = /* @__PURE__ */ ref([]);
+			const avatar = computed(() => project.value && window.getProjectAvatar ? window.getProjectAvatar(project.value.projectPath) : {
+				initials: "?",
+				color: "#666"
+			});
+			const projectName = computed(() => project.value?.projectPath.split("/").filter(Boolean).pop() || "");
+			const changedFiles = computed(() => detail.value?.changedFiles || []);
+			const unpushedCommits = computed(() => detail.value?.unpushedCommits || []);
+			const unpushedCount = computed(() => unpushedCommits.value.length);
+			const currentFileIndex = computed(() => changedFiles.value.findIndex((f) => f.file === activeDiff.value?.filePath));
+			const overlayTitle = computed(() => {
+				if (activeDiff.value) return basename(activeDiff.value.filePath);
+				if (activeFile.value) return basename(activeFile.value);
+				return "";
+			});
+			const overlayPath = computed(() => activeDiff.value?.filePath || activeFile.value || "");
+			const filteredTree = computed(() => {
+				if (!treeSearch.value) return fileTree.value;
+				return filterTree(fileTree.value, treeSearch.value.toLowerCase());
+			});
+			function basename(p) {
+				return p ? p.replace(/\\/g, "/").split("/").pop() || p : "";
+			}
+			function fmtDate(t) {
+				if (!t) return "";
+				try {
+					return window.formatDate ? window.formatDate(new Date(t)) : new Date(t).toLocaleDateString();
+				} catch {
+					return "";
+				}
+			}
+			function fileStatus(f) {
+				if (!f.added && f.deleted) return "deleted";
+				if (f.added && !f.deleted) return "added";
+				return "modified";
+			}
+			function fileStatusChar(f) {
+				if (!f.added && f.deleted) return "D";
+				if (f.added && !f.deleted) return "A";
+				return "M";
+			}
+			function filterTree(nodes, q) {
+				const result = [];
+				for (const n of nodes) if (n.isDir) {
+					const children = filterTree(n.children || [], q);
+					if (children.length) result.push({
+						...n,
+						children,
+						_expanded: true
+					});
+				} else if (n.name.toLowerCase().includes(q)) result.push(n);
+				return result;
+			}
+			watch(viewedPath, async (p) => {
+				if (!p) return;
+				activeDiff.value = null;
+				activeFile.value = null;
+				commitMessage.value = "";
+				const cached = await window.api.getProjectGitCache(p).catch(() => null);
+				if (cached) {
+					detail.value = cached;
+					loading.value = false;
+				} else {
+					detail.value = null;
+					loading.value = true;
+				}
+				const rootPath = project.value?.projectPath;
+				const [det, br, sess, terminals] = await Promise.all([
+					window.api.getProjectDetail(p).catch(() => null),
+					window.api.gitBranches(p).catch(() => null),
+					window.api.getProjectSessions(rootPath || p).catch(() => null),
+					window.api.getActiveTerminals().catch(() => null)
+				]);
+				detail.value = det || detail.value;
+				branches.value = br?.ok ? br.branches : [];
+				remoteBranches.value = br?.ok ? br.remotes || [] : [];
+				if (sess?.ok) sessions.value = sess.sessions;
+				if (terminals) activeSessions.value = Object.values(terminals).filter((t) => t.projectPath === (rootPath || p) && !t.exited).map((t) => ({
+					id: t.id,
+					name: t.title || t.id?.slice(0, 12),
+					busy: t.busy || false
+				}));
+				loading.value = false;
+			});
+			watch(activeTab, async (tab) => {
+				if (tab === "files" && !fileTree.value.length && viewedPath.value) {
+					treeLoading.value = true;
+					const res = await window.api.getFileTree(viewedPath.value).catch(() => null);
+					if (res?.ok) fileTree.value = res.tree;
+					treeLoading.value = false;
+				}
+			});
+			watch([activeDiff, activeFile], async ([diff, file]) => {
+				if (editorView) {
+					try {
+						typeof editorView.destroy === "function" ? editorView.destroy() : editorView.a?.destroy();
+					} catch {}
+					editorView = null;
+				}
+				if (!diff && !file) return;
+				await nextTick();
+				const el = diffContainerRef.value;
+				if (!el) return;
+				el.innerHTML = "";
+				if (diff) editorView = window.createReadOnlyMergeViewer?.(el, diff.oldContent, diff.newContent, diff.filePath);
+				else if (file) {
+					editorView = window.createEditableViewer?.(el, fileContent.value, file);
+					if (editorView) editorView.dom?.addEventListener("input", () => {
+						fileModified.value = true;
+					});
+				}
+			});
+			async function openDiff(filePath) {
+				if (loadingFile.value) return;
+				loadingFile.value = filePath;
+				try {
+					const result = await window.api.getFileDiff(viewedPath.value, filePath);
+					if (!result?.ok) return;
+					activeFile.value = null;
+					activeDiff.value = {
+						filePath,
+						oldContent: result.oldContent,
+						newContent: result.newContent
+					};
+				} finally {
+					loadingFile.value = null;
+				}
+			}
+			async function openFileFromTree(path) {
+				const fullPath = `${viewedPath.value}/${path}`;
+				const res = await window.api.readFileForPanel(fullPath).catch(() => null);
+				if (!res?.ok) return;
+				fileContent.value = res.content;
+				fileModified.value = false;
+				activeDiff.value = null;
+				activeFile.value = fullPath;
+			}
+			async function saveFile() {
+				if (!activeFile.value || !editorView) return;
+				fileSaving.value = true;
+				const content = editorView.state?.doc?.toString?.() ?? fileContent.value;
+				await window.api.saveFileForPanel(activeFile.value, content).catch(() => {});
+				fileModified.value = false;
+				fileSaving.value = false;
+			}
+			function closeOverlay() {
+				activeDiff.value = null;
+				activeFile.value = null;
+			}
+			function prevFile() {
+				const i = currentFileIndex.value;
+				if (i > 0) openDiff(changedFiles.value[i - 1].file);
+			}
+			function nextFile() {
+				const i = currentFileIndex.value;
+				if (i < changedFiles.value.length - 1) openDiff(changedFiles.value[i + 1].file);
+			}
+			function showGitMsg(msg, isError = false, ms = 4e3) {
+				gitMessage.value = msg;
+				gitError.value = isError;
+				setTimeout(() => {
+					gitMessage.value = "";
+					gitError.value = false;
+				}, ms);
+			}
+			async function switchBranch(branch) {
+				if (branch === detail.value?.branch) return;
+				gitBusy.value = true;
+				const res = await window.api.gitCheckout(viewedPath.value, branch);
+				gitBusy.value = false;
+				if (res.ok) {
+					showGitMsg(`Switched to ${branch}`);
+					await reload();
+				} else showGitMsg(res.error || "Checkout failed", true);
+			}
+			async function doFetch() {
+				gitBusy.value = true;
+				showGitMsg("Fetching…");
+				const res = await window.api.gitFetch(viewedPath.value);
+				gitBusy.value = false;
+				if (res.ok) {
+					showGitMsg("Fetched");
+					const br = await window.api.gitBranches(viewedPath.value);
+					if (br?.ok) {
+						branches.value = br.branches;
+						remoteBranches.value = br.remotes || [];
+					}
+				} else showGitMsg(res.error || "Fetch failed", true);
+			}
+			async function doPull() {
+				gitBusy.value = true;
+				showGitMsg("Pulling…");
+				const res = await window.api.gitPull(viewedPath.value);
+				gitBusy.value = false;
+				if (res.ok) {
+					showGitMsg("Pulled");
+					await reload();
+				} else showGitMsg(res.error || "Pull failed", true);
+			}
+			async function generateCommitMsg() {
+				generating.value = true;
+				gitBusy.value = true;
+				const res = await window.api.gitGenerateCommitMsg(viewedPath.value);
+				generating.value = false;
+				gitBusy.value = false;
+				if (res.ok) commitMessage.value = res.message;
+				else showGitMsg(res.error || "Generation failed", true);
+			}
+			async function doCommit() {
+				if (!commitMessage.value.trim()) return;
+				gitBusy.value = true;
+				const res = await window.api.gitCommit(viewedPath.value, commitMessage.value.trim());
+				gitBusy.value = false;
+				if (res.ok) {
+					showGitMsg("Committed");
+					commitMessage.value = "";
+					await reload();
+				} else showGitMsg(res.error || "Commit failed", true);
+			}
+			async function doPush() {
+				confirmPush.value = false;
+				gitBusy.value = true;
+				showGitMsg("Pushing…");
+				const res = await window.api.gitPush(viewedPath.value);
+				gitBusy.value = false;
+				if (res.ok) showGitMsg("Pushed successfully");
+				else showGitMsg(res.error || "Push failed", true);
+			}
+			async function reload() {
+				const p = viewedPath.value;
+				if (!p) return;
+				const det = await window.api.getProjectDetail(p).catch(() => null);
+				detail.value = det;
+			}
+			function setViewedPath(path) {
+				if (path === viewedPath.value) return;
+				fileTree.value = [];
+				viewedPath.value = path;
+			}
+			function openSession(s) {
+				window.__sb?.openSessionById?.(s.id);
+			}
+			function newSession() {
+				if (project.value) props.callbacks.newSession?.(project.value);
+			}
+			__expose({
+				open(proj, wts = []) {
+					project.value = proj;
+					worktrees.value = wts;
+					viewedPath.value = proj?.projectPath || "";
+				},
+				close() {
+					project.value = null;
+					worktrees.value = [];
+					viewedPath.value = "";
+					detail.value = null;
+					activeDiff.value = null;
+					activeFile.value = null;
+				},
+				setTab(tab) {
+					activeTab.value = tab;
+				},
+				setViewedPath
+			});
+			return (_ctx, _cache) => {
+				return project.value ? (openBlock(), createElementBlock("div", _hoisted_1$1, [activeDiff.value || activeFile.value ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [createBaseVNode("div", _hoisted_2$1, [
+					createBaseVNode("button", {
+						class: "pv-nav-btn pv-nav-back",
+						onClick: closeOverlay
+					}, [..._cache[7] || (_cache[7] = [createBaseVNode("svg", {
+						width: "14",
+						height: "14",
+						viewBox: "0 0 24 24",
+						fill: "none",
+						stroke: "currentColor",
+						"stroke-width": "2.5",
+						"stroke-linecap": "round",
+						"stroke-linejoin": "round"
+					}, [createBaseVNode("polyline", { points: "15 18 9 12 15 6" })], -1), createTextVNode(" Back ", -1)])]),
+					createBaseVNode("span", _hoisted_3$1, [createBaseVNode("span", _hoisted_4$1, toDisplayString(overlayTitle.value), 1), createBaseVNode("span", _hoisted_5$1, toDisplayString(overlayPath.value), 1)]),
+					activeDiff.value ? (openBlock(), createElementBlock("div", _hoisted_6$1, [
+						createBaseVNode("button", {
+							class: "pv-nav-btn",
+							onClick: prevFile,
+							disabled: currentFileIndex.value <= 0,
+							title: "Previous file"
+						}, [..._cache[8] || (_cache[8] = [createBaseVNode("svg", {
+							width: "14",
+							height: "14",
+							viewBox: "0 0 24 24",
+							fill: "none",
+							stroke: "currentColor",
+							"stroke-width": "2.5",
+							"stroke-linecap": "round",
+							"stroke-linejoin": "round"
+						}, [createBaseVNode("polyline", { points: "15 18 9 12 15 6" })], -1)])], 8, _hoisted_7$1),
+						createBaseVNode("span", _hoisted_8$1, toDisplayString(currentFileIndex.value + 1) + " / " + toDisplayString(changedFiles.value.length), 1),
+						createBaseVNode("button", {
+							class: "pv-nav-btn",
+							onClick: nextFile,
+							disabled: currentFileIndex.value >= changedFiles.value.length - 1,
+							title: "Next file"
+						}, [..._cache[9] || (_cache[9] = [createBaseVNode("svg", {
+							width: "14",
+							height: "14",
+							viewBox: "0 0 24 24",
+							fill: "none",
+							stroke: "currentColor",
+							"stroke-width": "2.5",
+							"stroke-linecap": "round",
+							"stroke-linejoin": "round"
+						}, [createBaseVNode("polyline", { points: "9 18 15 12 9 6" })], -1)])], 8, _hoisted_9$1)
+					])) : createCommentVNode("", true),
+					activeFile.value ? (openBlock(), createElementBlock("button", {
+						key: 1,
+						class: "pv-nav-btn pv-save-btn",
+						onClick: saveFile,
+						disabled: !fileModified.value || fileSaving.value
+					}, toDisplayString(fileSaving.value ? "Saving…" : "Save"), 9, _hoisted_10$1)) : createCommentVNode("", true)
+				]), createBaseVNode("div", {
+					ref_key: "diffContainerRef",
+					ref: diffContainerRef,
+					class: "pv-diff-container"
+				}, null, 512)], 64)) : (openBlock(), createElementBlock(Fragment, { key: 1 }, [
+					createBaseVNode("div", _hoisted_11$1, [
+						createBaseVNode("span", {
+							class: "pv-avatar",
+							style: normalizeStyle({ background: avatar.value.color })
+						}, toDisplayString(avatar.value.initials), 5),
+						createBaseVNode("div", _hoisted_12$1, [createBaseVNode("div", _hoisted_13$1, [createTextVNode(toDisplayString(projectName.value) + " ", 1), unpushedCount.value ? (openBlock(), createElementBlock("span", {
+							key: 0,
+							class: "pv-header-unpushed-badge",
+							title: `${unpushedCount.value} unpushed commit${unpushedCount.value > 1 ? "s" : ""}`
+						}, toDisplayString(unpushedCount.value), 9, _hoisted_14$1)) : createCommentVNode("", true)]), createBaseVNode("div", _hoisted_15$1, toDisplayString(viewedPath.value), 1)]),
+						createBaseVNode("button", {
+							class: "pv-new-btn",
+							onClick: newSession
+						}, "+ New session")
+					]),
+					worktrees.value.length ? (openBlock(), createElementBlock("div", _hoisted_16$1, [createBaseVNode("button", {
+						class: normalizeClass(["pv-wt-btn", { active: viewedPath.value === project.value.projectPath }]),
+						onClick: _cache[0] || (_cache[0] = ($event) => setViewedPath(project.value.projectPath))
+					}, "main", 2), (openBlock(true), createElementBlock(Fragment, null, renderList(worktrees.value, (wt) => {
+						return openBlock(), createElementBlock("button", {
+							key: wt.projectPath,
+							class: normalizeClass(["pv-wt-btn", { active: viewedPath.value === wt.projectPath }]),
+							onClick: ($event) => setViewedPath(wt.projectPath)
+						}, toDisplayString(wt.name), 11, _hoisted_17$1);
+					}), 128))])) : createCommentVNode("", true),
+					createBaseVNode("div", _hoisted_18, [(openBlock(true), createElementBlock(Fragment, null, renderList(TABS.value, (t) => {
+						return openBlock(), createElementBlock("button", {
+							key: t.id,
+							class: normalizeClass(["pv-tab", { active: activeTab.value === t.id }]),
+							onClick: ($event) => activeTab.value = t.id
+						}, toDisplayString(t.label), 11, _hoisted_19);
+					}), 128))]),
+					createBaseVNode("div", _hoisted_20, [loading.value ? (openBlock(), createElementBlock("div", _hoisted_21, "Loading…")) : activeTab.value === "overview" && detail.value ? (openBlock(), createElementBlock(Fragment, { key: 1 }, [createBaseVNode("div", _hoisted_22, [
+						createBaseVNode("div", _hoisted_23, [_cache[10] || (_cache[10] = createStaticVNode("<svg class=\"pv-branch-icon\" width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><line x1=\"6\" y1=\"3\" x2=\"6\" y2=\"15\"></line><circle cx=\"18\" cy=\"6\" r=\"3\"></circle><circle cx=\"6\" cy=\"18\" r=\"3\"></circle><path d=\"M18 9a9 9 0 0 1-9 9\"></path></svg>", 1)), createBaseVNode("select", {
+							class: "pv-branch-select",
+							value: detail.value.branch,
+							onChange: _cache[1] || (_cache[1] = ($event) => switchBranch($event.target.value)),
+							disabled: gitBusy.value
+						}, [createBaseVNode("optgroup", _hoisted_25, [(openBlock(true), createElementBlock(Fragment, null, renderList(branches.value, (b) => {
+							return openBlock(), createElementBlock("option", {
+								key: b,
+								value: b
+							}, toDisplayString(b), 9, _hoisted_26);
+						}), 128))]), remoteBranches.value.length ? (openBlock(), createElementBlock("optgroup", _hoisted_27, [(openBlock(true), createElementBlock(Fragment, null, renderList(remoteBranches.value, (b) => {
+							return openBlock(), createElementBlock("option", {
+								key: b,
+								value: b
+							}, toDisplayString(b), 9, _hoisted_28);
+						}), 128))])) : createCommentVNode("", true)], 40, _hoisted_24)]),
+						createBaseVNode("button", {
+							class: "pv-git-btn",
+							onClick: doFetch,
+							disabled: gitBusy.value,
+							title: "git fetch --prune"
+						}, [..._cache[11] || (_cache[11] = [createBaseVNode("svg", {
+							width: "13",
+							height: "13",
+							viewBox: "0 0 24 24",
+							fill: "none",
+							stroke: "currentColor",
+							"stroke-width": "2",
+							"stroke-linecap": "round",
+							"stroke-linejoin": "round"
+						}, [createBaseVNode("polyline", { points: "23 4 23 10 17 10" }), createBaseVNode("path", { d: "M20.49 15a9 9 0 1 1-2.12-9.36L23 10" })], -1), createTextVNode(" Fetch ", -1)])], 8, _hoisted_29),
+						createBaseVNode("button", {
+							class: "pv-git-btn",
+							onClick: doPull,
+							disabled: gitBusy.value,
+							title: "git pull"
+						}, [..._cache[12] || (_cache[12] = [createBaseVNode("svg", {
+							width: "13",
+							height: "13",
+							viewBox: "0 0 24 24",
+							fill: "none",
+							stroke: "currentColor",
+							"stroke-width": "2",
+							"stroke-linecap": "round",
+							"stroke-linejoin": "round"
+						}, [createBaseVNode("line", {
+							x1: "12",
+							y1: "5",
+							x2: "12",
+							y2: "19"
+						}), createBaseVNode("polyline", { points: "19 12 12 19 5 12" })], -1), createTextVNode(" Pull ", -1)])], 8, _hoisted_30),
+						gitMessage.value ? (openBlock(), createElementBlock("span", {
+							key: 0,
+							class: normalizeClass(["pv-git-msg", { error: gitError.value }])
+						}, toDisplayString(gitMessage.value), 3)) : createCommentVNode("", true),
+						detail.value.totalAdded || detail.value.totalDeleted ? (openBlock(), createElementBlock("span", _hoisted_31, [detail.value.totalAdded ? (openBlock(), createElementBlock("span", _hoisted_32, "+" + toDisplayString(detail.value.totalAdded), 1)) : createCommentVNode("", true), detail.value.totalDeleted ? (openBlock(), createElementBlock("span", _hoisted_33, "−" + toDisplayString(detail.value.totalDeleted), 1)) : createCommentVNode("", true)])) : createCommentVNode("", true)
+					]), createBaseVNode("div", _hoisted_34, [createBaseVNode("div", _hoisted_35, [detail.value.changedFiles.length ? (openBlock(), createElementBlock("div", _hoisted_36, [createBaseVNode("div", _hoisted_37, [_cache[13] || (_cache[13] = createBaseVNode("span", null, "Uncommitted changes", -1)), createBaseVNode("span", _hoisted_38, toDisplayString(detail.value.changedFiles.length), 1)]), createBaseVNode("div", _hoisted_39, [(openBlock(true), createElementBlock(Fragment, null, renderList(detail.value.changedFiles, (f) => {
+						return openBlock(), createElementBlock("div", {
+							key: f.file,
+							class: normalizeClass(["pv-file-row pv-file-row--clickable", { loading: loadingFile.value === f.file }]),
+							onClick: ($event) => openDiff(f.file),
+							title: f.file
+						}, [
+							createBaseVNode("span", { class: normalizeClass(["pv-file-status", fileStatus(f)]) }, toDisplayString(fileStatusChar(f)), 3),
+							createBaseVNode("span", _hoisted_41, toDisplayString(f.file), 1),
+							createBaseVNode("span", _hoisted_42, [f.added ? (openBlock(), createElementBlock("span", _hoisted_43, "+" + toDisplayString(f.added), 1)) : createCommentVNode("", true), f.deleted ? (openBlock(), createElementBlock("span", _hoisted_44, "−" + toDisplayString(f.deleted), 1)) : createCommentVNode("", true)])
+						], 10, _hoisted_40);
+					}), 128))])])) : (openBlock(), createElementBlock("div", _hoisted_45, [(openBlock(), createElementBlock("svg", _hoisted_46, [..._cache[14] || (_cache[14] = [createBaseVNode("polyline", { points: "20 6 9 17 4 12" }, null, -1)])])), _cache[15] || (_cache[15] = createBaseVNode("span", null, "Working tree clean", -1))])), createBaseVNode("div", _hoisted_47, [
+						_cache[19] || (_cache[19] = createBaseVNode("div", { class: "pv-card-title" }, "Commit", -1)),
+						generating.value ? (openBlock(), createElementBlock("div", _hoisted_48, [..._cache[16] || (_cache[16] = [createBaseVNode("span", { class: "pv-generating-text" }, "Generating…", -1)])])) : withDirectives((openBlock(), createElementBlock("textarea", {
+							key: 1,
+							class: "pv-commit-input",
+							placeholder: "Commit message…",
+							"onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => commitMessage.value = $event),
+							rows: "3"
+						}, null, 512)), [[vModelText, commitMessage.value]]),
+						createBaseVNode("div", _hoisted_49, [createBaseVNode("button", {
+							class: "pv-git-btn pv-gen-btn",
+							onClick: generateCommitMsg,
+							disabled: gitBusy.value || generating.value
+						}, [..._cache[17] || (_cache[17] = [createBaseVNode("svg", {
+							width: "13",
+							height: "13",
+							viewBox: "0 0 24 24",
+							fill: "none",
+							stroke: "currentColor",
+							"stroke-width": "2",
+							"stroke-linecap": "round",
+							"stroke-linejoin": "round"
+						}, [
+							createBaseVNode("path", { d: "M12 2L2 7l10 5 10-5-10-5z" }),
+							createBaseVNode("path", { d: "M2 17l10 5 10-5" }),
+							createBaseVNode("path", { d: "M2 12l10 5 10-5" })
+						], -1), createTextVNode(" Generate with Claude ", -1)])], 8, _hoisted_50), createBaseVNode("div", _hoisted_51, [createBaseVNode("button", {
+							class: "pv-action-btn",
+							onClick: doCommit,
+							disabled: gitBusy.value || !commitMessage.value.trim()
+						}, " Commit ", 8, _hoisted_52), createBaseVNode("button", {
+							class: "pv-action-btn pv-push-btn",
+							onClick: _cache[3] || (_cache[3] = ($event) => confirmPush.value = true),
+							disabled: gitBusy.value,
+							title: "Push to remote"
+						}, [..._cache[18] || (_cache[18] = [createBaseVNode("svg", {
+							width: "13",
+							height: "13",
+							viewBox: "0 0 24 24",
+							fill: "none",
+							stroke: "currentColor",
+							"stroke-width": "2",
+							"stroke-linecap": "round",
+							"stroke-linejoin": "round"
+						}, [createBaseVNode("line", {
+							x1: "12",
+							y1: "19",
+							x2: "12",
+							y2: "5"
+						}), createBaseVNode("polyline", { points: "5 12 12 5 19 12" })], -1), createTextVNode(" Push ", -1)])], 8, _hoisted_53)])])
+					])]), createBaseVNode("div", _hoisted_54, [detail.value.containers.length ? (openBlock(), createElementBlock("div", _hoisted_55, [_cache[21] || (_cache[21] = createBaseVNode("div", { class: "pv-card-title" }, "Docker Compose", -1)), createBaseVNode("div", _hoisted_56, [(openBlock(true), createElementBlock(Fragment, null, renderList(detail.value.containers, (c) => {
+						return openBlock(), createElementBlock("div", {
+							key: c.name,
+							class: normalizeClass(["pv-container-row", { running: c.state.includes("running") }])
+						}, [
+							_cache[20] || (_cache[20] = createBaseVNode("span", { class: "pv-container-dot" }, null, -1)),
+							createBaseVNode("span", _hoisted_57, toDisplayString(c.name), 1),
+							createBaseVNode("span", _hoisted_58, toDisplayString(c.status || c.state), 1),
+							c.ports ? (openBlock(), createElementBlock("span", _hoisted_59, toDisplayString(c.ports), 1)) : createCommentVNode("", true)
+						], 2);
+					}), 128))])])) : createCommentVNode("", true), sessions.value.length ? (openBlock(), createElementBlock("div", _hoisted_60, [_cache[22] || (_cache[22] = createBaseVNode("div", { class: "pv-card-title" }, "Recent sessions", -1)), createBaseVNode("div", _hoisted_61, [(openBlock(true), createElementBlock(Fragment, null, renderList(sessions.value, (s) => {
+						return openBlock(), createElementBlock("div", {
+							key: s.id,
+							class: "pv-session-row",
+							onClick: ($event) => openSession(s)
+						}, [createBaseVNode("div", _hoisted_63, toDisplayString(s.name), 1), createBaseVNode("div", _hoisted_64, toDisplayString(fmtDate(s.updatedAt)), 1)], 8, _hoisted_62);
+					}), 128))])])) : createCommentVNode("", true)])])], 64)) : activeTab.value === "commits" && detail.value ? (openBlock(), createElementBlock(Fragment, { key: 2 }, [
+						unpushedCommits.value.length ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [createBaseVNode("div", _hoisted_65, [_cache[23] || (_cache[23] = createBaseVNode("svg", {
+							width: "11",
+							height: "11",
+							viewBox: "0 0 24 24",
+							fill: "none",
+							stroke: "currentColor",
+							"stroke-width": "2.5",
+							"stroke-linecap": "round",
+							"stroke-linejoin": "round"
+						}, [createBaseVNode("line", {
+							x1: "12",
+							y1: "19",
+							x2: "12",
+							y2: "5"
+						}), createBaseVNode("polyline", { points: "5 12 12 5 19 12" })], -1)), createTextVNode(" " + toDisplayString(unpushedCommits.value.length) + " unpushed ", 1)]), createBaseVNode("div", _hoisted_66, [(openBlock(true), createElementBlock(Fragment, null, renderList(unpushedCommits.value, (c) => {
+							return openBlock(), createElementBlock("div", {
+								key: c.hash,
+								class: "pv-commit-item"
+							}, [
+								createBaseVNode("span", _hoisted_67, toDisplayString(c.hash), 1),
+								createBaseVNode("span", _hoisted_68, toDisplayString(c.message), 1),
+								createBaseVNode("span", _hoisted_69, toDisplayString(c.author), 1),
+								createBaseVNode("span", _hoisted_70, toDisplayString(c.date), 1)
+							]);
+						}), 128))])], 64)) : createCommentVNode("", true),
+						detail.value.commits.length ? (openBlock(), createElementBlock("div", _hoisted_71, "History")) : createCommentVNode("", true),
+						createBaseVNode("div", _hoisted_72, [(openBlock(true), createElementBlock(Fragment, null, renderList(detail.value.commits, (c) => {
+							return openBlock(), createElementBlock("div", {
+								key: c.hash,
+								class: "pv-commit-item"
+							}, [
+								createBaseVNode("span", _hoisted_73, toDisplayString(c.hash), 1),
+								createBaseVNode("span", _hoisted_74, toDisplayString(c.message), 1),
+								createBaseVNode("span", _hoisted_75, toDisplayString(c.author), 1),
+								createBaseVNode("span", _hoisted_76, toDisplayString(c.date), 1)
+							]);
+						}), 128)), !detail.value.commits.length ? (openBlock(), createElementBlock("div", _hoisted_77, "No commits found.")) : createCommentVNode("", true)])
+					], 64)) : activeTab.value === "files" ? (openBlock(), createElementBlock("div", _hoisted_78, [createBaseVNode("div", _hoisted_79, [createBaseVNode("div", _hoisted_80, [withDirectives(createBaseVNode("input", {
+						"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => treeSearch.value = $event),
+						class: "pv-tree-search-input",
+						placeholder: "Filter files…"
+					}, null, 512), [[vModelText, treeSearch.value]])]), createBaseVNode("div", _hoisted_81, [treeLoading.value ? (openBlock(), createElementBlock("div", _hoisted_82, "Loading…")) : (openBlock(true), createElementBlock(Fragment, { key: 1 }, renderList(filteredTree.value, (node) => {
+						return openBlock(), createBlock(_sfc_main$2, {
+							key: node.path,
+							node,
+							search: treeSearch.value,
+							onOpen: openFileFromTree
+						}, null, 8, ["node", "search"]);
+					}), 128))])])])) : activeTab.value === "sessions" ? (openBlock(), createElementBlock(Fragment, { key: 4 }, [
+						activeSessions.value.length ? (openBlock(), createElementBlock("div", _hoisted_83, [_cache[24] || (_cache[24] = createBaseVNode("div", {
+							class: "pv-commits-section-label",
+							style: { "margin-top": "0" }
+						}, [createBaseVNode("svg", {
+							width: "8",
+							height: "8",
+							viewBox: "0 0 8 8"
+						}, [createBaseVNode("circle", {
+							cx: "4",
+							cy: "4",
+							r: "4",
+							fill: "#34d399"
+						})]), createTextVNode(" Active ")], -1)), (openBlock(true), createElementBlock(Fragment, null, renderList(activeSessions.value, (s) => {
+							return openBlock(), createElementBlock("div", {
+								key: s.id,
+								class: "pv-asession-row",
+								onClick: ($event) => openSession(s)
+							}, [createBaseVNode("div", _hoisted_85, toDisplayString(s.name || s.id.slice(0, 12)), 1), createBaseVNode("span", { class: normalizeClass(["pv-asession-badge", s.busy ? "busy" : "idle"]) }, toDisplayString(s.busy ? "working" : "idle"), 3)], 8, _hoisted_84);
+						}), 128))])) : createCommentVNode("", true),
+						sessions.value.length ? (openBlock(), createElementBlock("div", {
+							key: 1,
+							class: "pv-active-sessions",
+							style: normalizeStyle(activeSessions.value.length ? "margin-top:16px" : "")
+						}, [createBaseVNode("div", {
+							class: "pv-commits-section-label",
+							style: normalizeStyle(activeSessions.value.length ? "" : "margin-top:0")
+						}, "Recent", 4), (openBlock(true), createElementBlock(Fragment, null, renderList(sessions.value, (s) => {
+							return openBlock(), createElementBlock("div", {
+								key: s.id,
+								class: "pv-asession-row",
+								onClick: ($event) => openSession(s)
+							}, [createBaseVNode("div", _hoisted_87, toDisplayString(s.name), 1), createBaseVNode("div", _hoisted_88, toDisplayString(fmtDate(s.updatedAt)), 1)], 8, _hoisted_86);
+						}), 128))], 4)) : createCommentVNode("", true),
+						!activeSessions.value.length && !sessions.value.length ? (openBlock(), createElementBlock("div", _hoisted_89, "No sessions found.")) : createCommentVNode("", true)
+					], 64)) : createCommentVNode("", true)])
+				], 64)), confirmPush.value ? (openBlock(), createElementBlock("div", {
+					key: 2,
+					class: "pv-dialog-overlay",
+					onClick: _cache[6] || (_cache[6] = withModifiers(($event) => confirmPush.value = false, ["self"]))
+				}, [createBaseVNode("div", _hoisted_90, [
+					_cache[25] || (_cache[25] = createBaseVNode("div", { class: "pv-dialog-title" }, "Push to remote?", -1)),
+					_cache[26] || (_cache[26] = createBaseVNode("div", { class: "pv-dialog-body" }, "This will push the current branch to origin. Are you sure?", -1)),
+					createBaseVNode("div", _hoisted_91, [createBaseVNode("button", {
+						class: "pv-dialog-cancel",
+						onClick: _cache[5] || (_cache[5] = ($event) => confirmPush.value = false)
+					}, "Cancel"), createBaseVNode("button", {
+						class: "pv-action-btn pv-push-btn",
+						onClick: doPush
+					}, "Push")])
+				])])) : createCommentVNode("", true)])) : createCommentVNode("", true);
+			};
+		}
+	};
+	//#endregion
+	//#region src/vue/components/App.vue
+	var _hoisted_1 = { id: "account-selector" };
+	var _hoisted_2 = { id: "sidebar-header" };
+	var _hoisted_3 = { id: "sidebar-tabs" };
+	var _hoisted_4 = [
+		"data-tab",
+		"data-tooltip",
+		"onClick",
+		"innerHTML"
+	];
+	var _hoisted_5 = { id: "session-filters" };
+	var _hoisted_6 = ["placeholder", "value"];
+	var _hoisted_7 = { id: "sidebar-content" };
+	var _hoisted_8 = {
+		key: 0,
+		id: "account-switch-overlay",
+		class: "account-switch-preloader"
+	};
+	var _hoisted_9 = { id: "plans-content" };
+	var _hoisted_10 = { id: "stats-content" };
+	var _hoisted_11 = { id: "memory-content" };
+	var _hoisted_12 = { id: "accounts-content" };
+	var _hoisted_13 = { id: "projects-content" };
+	var _hoisted_14 = { id: "main" };
+	var _hoisted_15 = {
+		id: "project-viewer",
+		style: { "display": "none" }
+	};
+	var _hoisted_16 = { id: "terminal-area" };
+	var _hoisted_17 = { id: "vue-session-header" };
+	var EXPAND_SVG = "<svg stroke=\"currentColor\" fill=\"currentColor\" stroke-width=\"0\" viewBox=\"0 0 24 24\" height=\"20\" width=\"20\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M18 3a3 3 0 0 1 2.995 2.824l.005 .176v12a3 3 0 0 1 -2.824 2.995l-.176 .005h-12a3 3 0 0 1 -2.995 -2.824l-.005 -.176v-12a3 3 0 0 1 2.824 -2.995l.176 -.005h12zm-3 2h-9a1 1 0 0 0 -.993 .883l-.007 .117v12a1 1 0 0 0 .883 .993l.117 .007h9v-14zm-5.387 4.21l.094 .083l2 2a1 1 0 0 1 .083 1.32l-.083 .094l-2 2a1 1 0 0 1 -1.497 -1.32l.083 -.094l1.292 -1.293l-1.292 -1.293a1 1 0 0 1 -.083 -1.32l.083 -.094a1 1 0 0 1 1.32 -.083z\"></path></svg>";
+	var COLLAPSE_SVG = "<svg stroke=\"currentColor\" fill=\"currentColor\" stroke-width=\"0\" viewBox=\"0 0 24 24\" height=\"20\" width=\"20\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M18 3a3 3 0 0 1 2.995 2.824l.005 .176v12a3 3 0 0 1 -2.824 2.995l-.176 .005h-12a3 3 0 0 1 -2.995 -2.824l-.005 -.176v-12a3 3 0 0 1 2.824 -2.995l.176 -.005h12zm0 2h-9v14h9a1 1 0 0 0 .993 -.883l.007 -.117v-12a1 1 0 0 0 -.883 -.993l-.117 -.007zm-2.293 4.293a1 1 0 0 1 .083 1.32l-.083 .094l-1.292 1.293l1.292 1.293a1 1 0 0 1 .083 1.32l-.083 .094a1 1 0 0 1 -1.32 .083l-.094 -.083l-2 -2a1 1 0 0 1 -.083 -1.32l.083 -.094l2 -2a1 1 0 0 1 1.414 0z\"></path></svg>";
+	var GEAR_SVG = "<svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"currentColor\" stroke=\"currentColor\" stroke-width=\"0\"><path d=\"M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Zm-1.5 0a2.5 2.5 0 1 0-5 0 2.5 2.5 0 0 0 5 0Z\"></path><path d=\"M12 1c.266 0 .532.009.797.028.763.055 1.345.617 1.512 1.304l.352 1.45c.019.078.09.171.225.221.247.089.49.19.728.302.13.061.246.044.315.002l1.275-.776c.603-.368 1.411-.353 1.99.147.402.349.78.726 1.128 1.129.501.578.515 1.386.147 1.99l-.776 1.274c-.042.069-.058.185.002.315.112.238.213.481.303.728.048.135.142.205.22.225l1.45.352c.687.167 1.249.749 1.303 1.512.038.531.038 1.063 0 1.594-.054.763-.616 1.345-1.303 1.512l-1.45.352c-.078.019-.171.09-.221.225-.089.248-.19.491-.302.728-.061.13-.044.246-.002.315l.776 1.275c.368.603.353 1.411-.147 1.99-.349.402-.726.78-1.129 1.128-.578.501-1.386.515-1.99.147l-1.274-.776c-.069-.042-.185-.058-.314.002a8.606 8.606 0 0 1-.729.303c-.135.048-.205.142-.225.22l-.352 1.45c-.167.687-.749 1.249-1.512 1.303-.531.038-1.063.038-1.594 0-.763-.054-1.345-.616-1.512-1.303l-.352-1.45c-.019-.078-.09-.171-.225-.221a8.138 8.138 0 0 1-.728-.302c-.13-.061-.246-.044-.315-.002l-1.275.776c-.603.368-1.411.353-1.99-.147-.402-.349-.78-.726-1.128-1.129-.501-.578-.515-1.386-.147-1.99l.776-1.274c.042-.069.058-.185-.002-.314a8.606 8.606 0 0 1-.303-.729c-.048-.135-.142-.205-.22-.225l-1.45-.352c-.687-.167-1.249-.749-1.304-1.512a11.158 11.158 0 0 1 0-1.594c.055-.763.617-1.345 1.304-1.512l1.45-.352c.078-.019.171-.09.221-.225.089-.248.19-.491.302-.728.061-.13.044-.246.002-.315l-.776-1.275c-.368-.603-.353-1.411.147-1.99.349-.402.726-.78 1.129-1.128.578-.501 1.386-.515 1.99-.147l1.274.776c.069.042.185.058.315-.002.238-.112.481-.213.728-.303.135-.048.205-.142.225-.22l.352-1.45c.167-.687.749-1.249 1.512-1.304C11.466 1.01 11.732 1 12 1Zm-.69 1.525c-.055.004-.135.05-.161.161l-.353 1.45a1.832 1.832 0 0 1-1.172 1.277 7.147 7.147 0 0 0-.6.249 1.833 1.833 0 0 1-1.734-.074l-1.274-.776c-.098-.06-.186-.036-.228 0a9.774 9.774 0 0 0-.976.976c-.036.042-.06.131 0 .228l.776 1.274c.314.529.342 1.18.074 1.734a7.147 7.147 0 0 0-.249.6 1.831 1.831 0 0 1-1.278 1.173l-1.45.351c-.11.027-.156.107-.16.162a9.63 9.63 0 0 0 0 1.38c.004.055.05.135.161.161l1.45.353a1.832 1.832 0 0 1 1.277 1.172c.074.204.157.404.249.6.268.553.24 1.204-.074 1.733l-.776 1.275c-.06.098-.036.186 0 .228.301.348.628.675.976.976.042.036.131.06.228 0l1.274-.776a1.83 1.83 0 0 1 1.734-.075c.196.093.396.176.6.25a1.831 1.831 0 0 1 1.173 1.278l.351 1.45c.027.11.107.156.162.16a9.63 9.63 0 0 0 1.38 0c.055-.004.135-.05.161-.161l.353-1.45a1.834 1.834 0 0 1 1.172-1.278 6.82 6.82 0 0 0 .6-.248 1.831 1.831 0 0 1 1.733.074l1.275.776c.098.06.186.036.228 0 .348-.301.675-.628.976-.976.036-.042.06-.131 0-.228l-.776-1.275a1.834 1.834 0 0 1-.075-1.733c.093-.196.176-.396.25-.6a1.831 1.831 0 0 1 1.278-1.173l1.45-.351c.11-.027.156-.107.16-.162a9.63 9.63 0 0 0 0-1.38c-.004-.055-.05-.135-.161-.161l-1.45-.353c-.626-.152-1.08-.625-1.278-1.172a6.576 6.576 0 0 0-.248-.6 1.833 1.833 0 0 1 .074-1.734l.776-1.274c.06-.098.036-.186 0-.228a9.774 9.774 0 0 0-.976-.976c-.042-.036-.131-.06-.228 0l-1.275.776a1.831 1.831 0 0 1-1.733.074 6.88 6.88 0 0 0-.6-.249 1.835 1.835 0 0 1-1.173-1.278l-.351-1.45c-.027-.11-.107-.156-.162-.16a9.63 9.63 0 0 0-1.38 0Z\"></path></svg>";
+	var RUNNING_SVG = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"currentColor\"><circle cx=\"8\" cy=\"8\" r=\"4\"/></svg>";
+	var STAR_SVG = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"currentColor\"><path d=\"M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1-.707.707c-.28-.28-.576-.49-.888-.656L10.073 9.333l-.07 3.181a.5.5 0 0 1-.853.354l-3.535-3.536-4.243 4.243a.5.5 0 1 1-.707-.707l4.243-4.243L1.372 5.11a.5.5 0 0 1 .354-.854l3.18-.07L8.37.722A3.37 3.37 0 0 1 9.12.074a.5.5 0 0 1 .708.002l-.707.707z\"/></svg>";
+	var TODAY_SVG = "<svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-12a2 2 0 0 1-2-2v-12z\"/><path d=\"M16 3v4\"/><path d=\"M8 3v4\"/><path d=\"M4 11h16\"/><path d=\"M11 15h1\"/><path d=\"M12 15v3\"/></svg>";
+	var ARCHIVE_SVG = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"currentColor\" stroke=\"currentColor\" stroke-width=\"0\"><path d=\"m21.706 5.292-2.999-2.999A.996.996 0 0 0 18 2H6a.996.996 0 0 0-.707.293L2.294 5.292A.994.994 0 0 0 2 6v13c0 1.103.897 2 2 2h16c1.103 0 2-.897 2-2V6a.994.994 0 0 0-.294-.708zM6.414 4h11.172l1 1H5.414l1-1zM4 19V7h16l.002 12H4z\"/><path d=\"M14 9h-4v3H7l5 5 5-5h-3z\"/></svg>";
+	var GRID_SVG = "<svg width=\"14\" height=\"14\" stroke=\"currentColor\" fill=\"none\" stroke-width=\"2\" viewBox=\"0 0 24 24\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><rect x=\"3\" y=\"3\" width=\"7\" height=\"7\"></rect><rect x=\"14\" y=\"3\" width=\"7\" height=\"7\"></rect><rect x=\"14\" y=\"14\" width=\"7\" height=\"7\"></rect><rect x=\"3\" y=\"14\" width=\"7\" height=\"7\"></rect></svg>";
+	var RESORT_SVG = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15\"/></svg>";
+	var ADD_PROJECT_SVG = "<svg width=\"14\" height=\"14\" viewBox=\"0 0 512 512\" fill=\"currentColor\" stroke=\"currentColor\" stroke-width=\"0\"><path d=\"M512 416c0 35.3-28.7 64-64 64L64 480c-35.3 0-64-28.7-64-64L0 96C0 60.7 28.7 32 64 32l128 0c20.1 0 39.1 9.5 51.2 25.6l19.2 25.6c6 8.1 15.5 12.8 25.6 12.8l160 0c35.3 0 64 28.7 64 64l0 256zM232 376c0 13.3 10.7 24 24 24s24-10.7 24-24l0-64 64 0c13.3 0 24-10.7 24-24s-10.7-24-24-24l-64 0 0-64c0-13.3-10.7-24-24-24s-24 10.7-24 24l0 64-64 0c-13.3 0-24 10.7-24 24s10.7 24 24 24l64 0 0 64z\"/></svg>";
+	var _sfc_main = {
+		__name: "App",
+		setup(__props) {
+			const plansRef = /* @__PURE__ */ ref(null);
+			const memoryRef = /* @__PURE__ */ ref(null);
+			const accountsRef = /* @__PURE__ */ ref(null);
+			const accountDropdownRef = /* @__PURE__ */ ref(null);
+			const projectsRef = /* @__PURE__ */ ref(null);
+			const statusBarRef = /* @__PURE__ */ ref(null);
+			const gridCardsRef = /* @__PURE__ */ ref(null);
+			const projectViewerRef = /* @__PURE__ */ ref(null);
+			const TABS = [
+				{
+					id: "sessions",
+					label: "Sessions",
+					svg: "<svg width=\"18\" height=\"18\" viewBox=\"0 0 1200 1200\" fill=\"#d97757\" stroke=\"none\"><path d=\"M 233.959793 800.214905 L 468.644287 668.536987 L 472.590637 657.100647 L 468.644287 650.738403 L 457.208069 650.738403 L 417.986633 648.322144 L 283.892639 644.69812 L 167.597321 639.865845 L 54.926208 633.825623 L 26.577238 627.785339 L 3.3e-05 592.751709 L 2.73832 575.27533 L 26.577238 559.248352 L 60.724873 562.228149 L 136.187973 567.382629 L 249.422867 575.194763 L 331.570496 580.026978 L 453.261841 592.671082 L 472.590637 592.671082 L 475.328857 584.859009 L 468.724915 580.026978 L 463.570557 575.194763 L 346.389313 495.785217 L 219.543671 411.865906 L 153.100723 363.543762 L 117.181267 339.060425 L 99.060455 316.107361 L 91.248367 266.01355 L 123.865784 230.093994 L 167.677887 233.073853 L 178.872513 236.053772 L 223.248367 270.201477 L 318.040283 343.570496 L 441.825592 434.738342 L 459.946411 449.798706 L 467.194672 444.64447 L 468.080597 441.020203 L 459.946411 427.409485 L 392.617493 305.718323 L 320.778564 181.932983 L 288.80542 130.630859 L 280.348999 99.865845 C 277.369171 87.221436 275.194641 76.590698 275.194641 63.624268 L 312.322174 13.20813 L 332.8591 6.604126 L 382.389313 13.20813 L 403.248352 31.328979 L 434.013519 101.71814 L 483.865753 212.537048 L 561.181274 363.221497 L 583.812134 407.919434 L 595.892639 449.315491 L 600.40271 461.959839 L 608.214783 461.959839 L 608.214783 454.711609 L 614.577271 369.825623 L 626.335632 265.61084 L 637.771851 131.516846 L 641.718201 93.745117 L 660.402832 48.483276 L 697.530334 24.000122 L 726.52356 37.852417 L 750.362549 72 L 747.060486 94.067139 L 732.886047 186.201416 L 705.100708 330.52356 L 686.979919 427.167847 L 697.530334 427.167847 L 709.61084 415.087341 L 758.496704 350.174561 L 840.644348 247.490051 L 876.885925 206.738342 L 919.167847 161.71814 L 946.308838 140.29541 L 997.61084 140.29541 L 1035.38269 196.429626 L 1018.469849 254.416199 L 965.637634 321.422852 L 921.825562 378.201538 L 859.006714 462.765259 L 819.785278 530.41626 L 823.409424 535.812073 L 832.75177 534.92627 L 974.657776 504.724915 L 1051.328979 490.872559 L 1142.818848 475.167786 L 1184.214844 494.496582 L 1188.724854 514.147644 L 1172.456421 554.335693 L 1074.604126 578.496765 L 959.838989 601.449829 L 788.939636 641.879272 L 786.845764 643.409485 L 789.261841 646.389343 L 866.255127 653.637634 L 899.194702 655.409424 L 979.812134 655.409424 L 1129.932861 666.604187 L 1169.154419 692.537109 L 1192.671265 724.268677 L 1188.724854 748.429688 L 1128.322144 779.194641 L 1046.818848 759.865845 L 856.590759 714.604126 L 791.355774 698.335754 L 782.335693 698.335754 L 782.335693 703.731567 L 836.69812 756.885986 L 936.322205 846.845581 L 1061.073975 962.81897 L 1067.436279 991.490112 L 1051.409424 1014.120911 L 1034.496704 1011.704712 L 924.885986 929.234924 L 882.604126 892.107544 L 786.845764 811.48999 L 780.483276 811.48999 L 780.483276 819.946289 L 802.550415 852.241699 L 919.087341 1027.409424 L 925.127625 1081.127686 L 916.671204 1098.604126 L 886.469849 1109.154419 L 853.288696 1103.114136 L 785.073914 1007.355835 L 714.684631 899.516785 L 657.906067 802.872498 L 650.979858 806.81897 L 617.476624 1167.704834 L 601.771851 1186.147705 L 565.530212 1200 L 535.328857 1177.046997 L 519.302124 1139.919556 L 535.328857 1066.550537 L 554.657776 970.792053 L 570.362488 894.68457 L 584.536926 800.134277 L 592.993347 768.724976 L 592.429626 766.630859 L 585.503479 767.516968 L 514.22821 865.369263 L 405.825531 1011.865906 L 320.053711 1103.677979 L 299.516815 1111.812256 L 263.919525 1093.369263 L 267.221497 1060.429688 L 287.114136 1031.114136 L 405.825531 880.107361 L 477.422913 786.52356 L 523.651062 732.483276 L 523.328918 724.671265 L 520.590698 724.671265 L 205.288605 929.395935 L 149.154434 936.644409 L 124.993355 914.01355 L 127.973183 876.885986 L 139.409409 864.80542 L 234.201385 799.570435 L 233.879227 799.8927 Z\"/></svg>"
+				},
+				{
+					id: "plans",
+					label: "Plans",
+					svg: "<svg width=\"18\" height=\"18\" viewBox=\"0 0 17 17\" fill=\"currentColor\" stroke=\"currentColor\" stroke-width=\"0\"><path d=\"M14 2v-2h-13v17h13v-2h2v-13h-2zM2 16v-15h2v15h-2zM13 16h-8v-15h8v15zM15 14h-1v-3h1v3zM15 10h-1v-3h1v3zM14 6v-3h1v3h-1zM6 4h5v1h-5v-1zM6 6h4v1h-4v-1z\"/></svg>"
+				},
+				{
+					id: "memory",
+					label: "Agent Files",
+					svg: "<svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z\"/><path d=\"M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z\"/><path d=\"M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4\"/><path d=\"M17.599 6.5a3 3 0 0 0 .399-1.375\"/><path d=\"M6.003 5.125A3 3 0 0 0 6.401 6.5\"/><path d=\"M3.477 10.896a4 4 0 0 1 .585-.396\"/><path d=\"M19.938 10.5a4 4 0 0 1 .585.396\"/><path d=\"M6 18a4 4 0 0 1-1.967-.516\"/><path d=\"M19.967 17.484A4 4 0 0 1 18 18\"/></svg>"
+				},
+				{
+					id: "stats",
+					label: "Stats",
+					svg: "<svg width=\"18\" height=\"18\" viewBox=\"0 0 512 512\" fill=\"currentColor\" stroke=\"currentColor\" stroke-width=\"0\"><path d=\"M128 496H48V304h80zm224 0h-80V208h80zm112 0h-80V96h80zm-224 0h-80V16h80z\"/></svg>"
+				},
+				{
+					id: "projects",
+					label: "Projects",
+					svg: "<svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M3 6a2 2 0 0 1 2-2h3.17a1 1 0 0 1 .71.29L10.24 5.7A1 1 0 0 0 11 6h9a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6z\"/><line x1=\"7\" y1=\"12\" x2=\"17\" y2=\"12\"/><line x1=\"7\" y1=\"15.5\" x2=\"13\" y2=\"15.5\"/></svg>"
+				},
+				{
+					id: "accounts",
+					label: "Accounts",
+					svg: "<svg width=\"18\" height=\"18\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"8\" cy=\"6\" r=\"3.5\"/><path d=\"M1.5 21c0-4 2.9-7 6.5-7s6.5 3 6.5 7\"/><circle cx=\"17\" cy=\"8.5\" r=\"2.5\"/><path d=\"M14.5 21c0-2.8 1.8-5 4.5-5s4.5 2.2 4.5 5\"/></svg>"
+				}
+			];
+			const searchPlaceholder = computed(() => {
+				switch (store.activeTab) {
+					case "plans": return "Search plans...";
+					case "memory": return "Search agent files...";
+					case "projects": return "Search projects…";
+					default: return "Search sessions...";
+				}
+			});
+			let searchDebounceTimer = null;
+			function onSearchInput(e) {
+				store.searchQuery = e.target.value;
+				if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+				searchDebounceTimer = setTimeout(async () => {
+					searchDebounceTimer = null;
+					const query = store.searchQuery.trim();
+					if (!query) {
+						doClearSearch();
+						return;
+					}
+					window.__sb?.search?.(query, store.searchTitlesOnly);
+				}, 200);
+			}
+			function doClearSearch() {
+				store.searchQuery = "";
+				if (searchDebounceTimer) {
+					clearTimeout(searchDebounceTimer);
+					searchDebounceTimer = null;
+				}
+				window.__sb?.clearSearch?.();
+			}
+			async function toggleTitlesOnly() {
+				store.searchTitlesOnly = !store.searchTitlesOnly;
+				await window.api?.setSetting("searchTitlesOnly", store.searchTitlesOnly);
+				if (store.searchQuery.trim()) window.__sb?.search?.(store.searchQuery.trim(), store.searchTitlesOnly);
+			}
+			function setTab(tabId) {
+				if (tabId === store.activeTab) return;
+				store.activeTab = tabId;
+				store.searchQuery = "";
+				store.searchMatchIds = null;
+				store.searchMatchProjectPaths = null;
+				window.__sb?.onTabChange?.(tabId);
+			}
+			function toggleFilter(filterName) {
+				store[filterName] = !store[filterName];
+				if (filterName === "showStarredOnly" && store.showStarredOnly) store.showRunningOnly = false;
+				if (filterName === "showRunningOnly" && store.showRunningOnly) store.showStarredOnly = false;
+				localStorage.setItem(filterName, store[filterName] ? "1" : "0");
+				window.__sb?.onFilterChange?.({
+					showStarredOnly: store.showStarredOnly,
+					showRunningOnly: store.showRunningOnly,
+					showTodayOnly: store.showTodayOnly,
+					showArchived: store.showArchived
+				});
+			}
+			function onGlobalSettings() {
+				window.__sb?.openGlobalSettings?.();
+			}
+			function onResort() {
+				window.__sb?.resort?.();
+			}
+			function onAddProject() {
+				window.__sb?.addProject?.();
+			}
+			function onToggleGrid() {
+				window.__sb?.toggleGridView?.();
+			}
+			const sidebarCallbacks = {
+				openSession: (s) => window.__sb?.openSession?.(s),
+				stopSession: (id) => window.__sb?.stopSession?.(id),
+				toggleStar: (id) => window.__sb?.toggleStar?.(id),
+				archiveSession: (id) => window.__sb?.archiveSession?.(id),
+				forkSession: (id) => window.__sb?.forkSession?.(id),
+				showJsonl: (id) => window.__sb?.showJsonl?.(id),
+				launchConfig: (id) => window.__sb?.launchConfig?.(id),
+				renameSession: (id, name) => window.__sb?.renameSession?.(id, name),
+				newSession: (project) => window.__sb?.newSession?.(project),
+				openSettings: (path) => window.__sb?.openSettings?.(path),
+				archiveSessions: (sessions) => window.__sb?.archiveSessions?.(sessions),
+				removeProject: (path) => window.__sb?.removeProject?.(path)
+			};
+			const planCallbacks = { openPlan: (plan) => window.__sb?.openPlan?.(plan) };
+			const memoryCallbacks = { openMemory: (file) => window.__sb?.openMemory?.(file) };
+			const accountsCallbacks = {
+				switchAccount: (id) => window.__sb?.switchAccount?.(id),
+				openAccountHomeSession: (acc) => window.__sb?.openAccountHomeSession?.(acc),
+				renameAccount: (id, name) => window.__sb?.renameAccount?.(id, name),
+				deleteAccount: (id) => window.__sb?.deleteAccount?.(id),
+				createAccount: (name) => window.__sb?.createAccount?.(name)
+			};
+			const accountDropdownCallbacks = { switchAccount: (id) => window.__sb?.switchAccount?.(id) };
+			const projectsCallbacks = {
+				openProject: (p) => window.__sb?.openProject?.(p),
+				newSession: (p) => window.__sb?.newSession?.(p),
+				addProject: () => window.__sb?.addProject?.(),
+				projectRemoved: () => window.__sb?.projectRemoved?.()
+			};
+			const projectViewerCallbacks = {
+				newSession: (p) => window.__sb?.newSession?.(p),
+				onTabChange: (tab) => window.__sb?.onPvTabChange?.(tab)
+			};
+			onMounted(async () => {
+				Object.assign(window.vuePlans, {
+					setPlans: (list) => plansRef.value?.setPlans(list),
+					setActive: (f) => plansRef.value?.setActive(f),
+					clearActive: () => plansRef.value?.clearActive()
+				});
+				Object.assign(window.vueMemory, {
+					setMemories: (data, ids) => memoryRef.value?.setMemories(data, ids),
+					setFilter: (ids) => memoryRef.value?.setFilter(ids),
+					setActive: (f) => memoryRef.value?.setActive(f),
+					clearActive: () => memoryRef.value?.clearActive()
+				});
+				Object.assign(window.vueAccounts, {
+					setAccounts: (list, id) => accountsRef.value?.setAccounts(list, id),
+					setActiveAccount: (id) => accountsRef.value?.setActiveAccount(id),
+					setUsage: (usage) => accountsRef.value?.setUsage(usage)
+				});
+				Object.assign(window.vueAccountDropdown, {
+					setAccounts: (list, id, usage) => accountDropdownRef.value?.setAccounts(list, id, usage),
+					setActiveAccount: (id) => accountDropdownRef.value?.setActiveAccount(id),
+					setUsage: (usage) => accountDropdownRef.value?.setUsage(usage),
+					close: () => accountDropdownRef.value?.close()
+				});
+				Object.assign(window.vueProjects, {
+					setProjects: (list) => projectsRef.value?.setProjects(list),
+					setSearch: (q) => projectsRef.value?.setSearch(q),
+					clearActive: () => projectsRef.value?.clearActive()
+				});
+				Object.assign(window.vueStatusBar, {
+					setInfo: (text) => statusBarRef.value?.setInfo(text),
+					setActivity: (text, type) => statusBarRef.value?.setActivity(text, type),
+					setUpdater: (text, duration) => statusBarRef.value?.setUpdater(text, duration)
+				});
+				window.vueGrid = gridCardsRef.value;
+				const worktreePattern = /^(.+?)\/\.claude\/worktrees\/([^/]+)\/?$/;
+				window.vueProjectViewer = {
+					open: (proj) => {
+						const worktrees = store.projects.filter((p) => {
+							const m = p.projectPath.match(worktreePattern);
+							return m && m[1] === proj.projectPath;
+						}).map((p) => ({
+							projectPath: p.projectPath,
+							name: p.projectPath.match(worktreePattern)?.[2] || p.projectPath
+						}));
+						projectViewerRef.value?.open(proj, worktrees);
+					},
+					close: () => projectViewerRef.value?.close(),
+					setTab: (tab) => projectViewerRef.value?.setTab(tab)
+				};
+				window.vueApp = { setTab };
+				window.openSettingsViewer = (scope, projectPath) => {
+					for (const id of [
+						"terminal-area",
+						"placeholder",
+						"plan-viewer",
+						"stats-viewer",
+						"memory-viewer",
+						"jsonl-viewer",
+						"project-viewer"
+					]) {
+						const el = document.getElementById(id);
+						if (el) el.style.display = "none";
+					}
+					store.settingsScope = scope || "global";
+					store.settingsProjectPath = projectPath || null;
+					store.settingsOpen = true;
+				};
+				window.closeSettingsViewer = () => {
+					store.settingsOpen = false;
+					window._restoreAfterSettings?.();
+				};
+				if (await window.api?.getSetting("searchTitlesOnly")) store.searchTitlesOnly = true;
+				store.showRunningOnly = localStorage.getItem("showRunningOnly") === "1";
+				store.showStarredOnly = localStorage.getItem("showStarredOnly") === "1";
+				store.showTodayOnly = localStorage.getItem("showTodayOnly") === "1";
+				store.showArchived = localStorage.getItem("showArchived") === "1";
+			});
+			return (_ctx, _cache) => {
+				return openBlock(), createElementBlock(Fragment, null, [
+					createBaseVNode("div", {
+						id: "sidebar",
+						class: normalizeClass({ collapsed: unref(store).sidebarCollapsed })
+					}, [
+						createBaseVNode("button", {
+							id: "sidebar-expand-btn",
+							"data-tooltip": "Show sidebar",
+							onClick: _cache[0] || (_cache[0] = ($event) => unref(store).sidebarCollapsed = false),
+							innerHTML: EXPAND_SVG
+						}),
+						createBaseVNode("div", _hoisted_1, [createVNode(_sfc_main$9, {
+							ref_key: "accountDropdownRef",
+							ref: accountDropdownRef,
+							callbacks: accountDropdownCallbacks
+						}, null, 512)]),
+						createBaseVNode("div", _hoisted_2, [createBaseVNode("div", _hoisted_3, [
+							(openBlock(), createElementBlock(Fragment, null, renderList(TABS, (tab) => {
+								return createBaseVNode("button", {
+									key: tab.id,
+									class: normalizeClass(["sidebar-tab", { active: unref(store).activeTab === tab.id }]),
+									"data-tab": tab.id,
+									"data-tooltip": tab.label,
+									onClick: ($event) => setTab(tab.id),
+									innerHTML: tab.svg
+								}, null, 10, _hoisted_4);
+							}), 64)),
+							createBaseVNode("button", {
+								id: "global-settings-btn",
+								"data-tooltip": "Global settings",
+								onClick: onGlobalSettings,
+								innerHTML: GEAR_SVG
+							}),
+							createBaseVNode("button", {
+								id: "sidebar-collapse-btn",
+								"data-tooltip": "Hide sidebar",
+								onClick: _cache[1] || (_cache[1] = ($event) => unref(store).sidebarCollapsed = true),
+								innerHTML: COLLAPSE_SVG
+							})
+						]), withDirectives(createBaseVNode("div", _hoisted_5, [
+							createBaseVNode("button", {
+								id: "running-toggle",
+								class: normalizeClass({ active: unref(store).showRunningOnly }),
+								"data-tooltip": "Show running only",
+								onClick: _cache[2] || (_cache[2] = ($event) => toggleFilter("showRunningOnly")),
+								innerHTML: RUNNING_SVG
+							}, null, 2),
+							createBaseVNode("button", {
+								id: "star-toggle",
+								class: normalizeClass({ active: unref(store).showStarredOnly }),
+								"data-tooltip": "Show pinned only",
+								onClick: _cache[3] || (_cache[3] = ($event) => toggleFilter("showStarredOnly")),
+								innerHTML: STAR_SVG
+							}, null, 2),
+							createBaseVNode("button", {
+								id: "today-toggle",
+								class: normalizeClass({ active: unref(store).showTodayOnly }),
+								"data-tooltip": "Show today's sessions only",
+								onClick: _cache[4] || (_cache[4] = ($event) => toggleFilter("showTodayOnly")),
+								innerHTML: TODAY_SVG
+							}, null, 2),
+							createBaseVNode("button", {
+								id: "archive-toggle",
+								class: normalizeClass({ active: unref(store).showArchived }),
+								"data-tooltip": "Show archived sessions",
+								onClick: _cache[5] || (_cache[5] = ($event) => toggleFilter("showArchived")),
+								innerHTML: ARCHIVE_SVG
+							}, null, 2),
+							withDirectives(createBaseVNode("span", { id: "loading-status" }, toDisplayString(unref(store).loadingStatus), 513), [[vShow, unref(store).loadingStatus]]),
+							createBaseVNode("button", {
+								id: "grid-toggle-btn",
+								"data-tooltip": "Session overview",
+								onClick: onToggleGrid,
+								innerHTML: GRID_SVG
+							}),
+							createBaseVNode("button", {
+								id: "resort-btn",
+								"data-tooltip": "Re-sort sessions",
+								onClick: onResort,
+								innerHTML: RESORT_SVG
+							}),
+							createBaseVNode("button", {
+								id: "add-project-btn",
+								"data-tooltip": "Add project",
+								onClick: onAddProject,
+								innerHTML: ADD_PROJECT_SVG
+							})
+						], 512), [[vShow, unref(store).activeTab === "sessions"]])]),
+						createBaseVNode("div", {
+							id: "search-bar",
+							class: normalizeClass({ "has-query": unref(store).searchQuery })
+						}, [
+							createBaseVNode("input", {
+								id: "search-input",
+								type: "text",
+								placeholder: searchPlaceholder.value,
+								value: unref(store).searchQuery,
+								onInput: onSearchInput
+							}, null, 40, _hoisted_6),
+							createBaseVNode("button", {
+								id: "search-clear",
+								type: "button",
+								"aria-label": "Clear search",
+								onClick: doClearSearch
+							}, "×"),
+							createBaseVNode("button", {
+								id: "search-titles-toggle",
+								type: "button",
+								class: normalizeClass({ active: unref(store).searchTitlesOnly }),
+								"data-tooltip": "Search titles only",
+								"aria-label": "Search titles only",
+								onClick: toggleTitlesOnly
+							}, "Tt", 2)
+						], 2),
+						withDirectives(createBaseVNode("div", _hoisted_7, [createVNode(_sfc_main$16, { callbacks: sidebarCallbacks })], 512), [[vShow, unref(store).activeTab === "sessions" && !unref(store).accountSwitching]]),
+						unref(store).accountSwitching && unref(store).activeTab === "sessions" ? (openBlock(), createElementBlock("div", _hoisted_8, [..._cache[6] || (_cache[6] = [createBaseVNode("div", { class: "acct-spinner" }, null, -1), createBaseVNode("span", null, "Switching account…", -1)])])) : createCommentVNode("", true),
+						withDirectives(createBaseVNode("div", _hoisted_9, [createVNode(_sfc_main$13, {
+							ref_key: "plansRef",
+							ref: plansRef,
+							callbacks: planCallbacks
+						}, null, 512)], 512), [[vShow, unref(store).activeTab === "plans"]]),
+						withDirectives(createBaseVNode("div", _hoisted_10, [..._cache[7] || (_cache[7] = [createBaseVNode("div", { class: "plans-empty" }, "Click the Stats tab to view activity heatmap.", -1)])], 512), [[vShow, unref(store).activeTab === "stats"]]),
+						withDirectives(createBaseVNode("div", _hoisted_11, [createVNode(_sfc_main$11, {
+							ref_key: "memoryRef",
+							ref: memoryRef,
+							callbacks: memoryCallbacks
+						}, null, 512)], 512), [[vShow, unref(store).activeTab === "memory"]]),
+						withDirectives(createBaseVNode("div", _hoisted_12, [createVNode(_sfc_main$10, {
+							ref_key: "accountsRef",
+							ref: accountsRef,
+							callbacks: accountsCallbacks
+						}, null, 512)], 512), [[vShow, unref(store).activeTab === "accounts"]]),
+						withDirectives(createBaseVNode("div", _hoisted_13, [createVNode(_sfc_main$8, {
+							ref_key: "projectsRef",
+							ref: projectsRef,
+							callbacks: projectsCallbacks
+						}, null, 512)], 512), [[vShow, unref(store).activeTab === "projects"]])
+					], 2),
+					_cache[11] || (_cache[11] = createBaseVNode("div", { id: "sidebar-resize-handle" }, null, -1)),
+					createBaseVNode("div", _hoisted_14, [
+						_cache[9] || (_cache[9] = createStaticVNode("<div id=\"placeholder\"><p>Select a session from the sidebar to begin.</p></div><div id=\"stats-viewer\" style=\"display:none;\"><div id=\"stats-viewer-header\"><span id=\"stats-viewer-title\">Activity</span></div><div id=\"stats-viewer-body\"></div></div><div id=\"memory-viewer\" style=\"display:none;\"></div><div id=\"plan-viewer\" style=\"display:none;\"></div>", 4)),
+						unref(store).settingsOpen ? (openBlock(), createBlock(_sfc_main$3, { key: 0 })) : createCommentVNode("", true),
+						createBaseVNode("div", _hoisted_15, [createVNode(_sfc_main$1, {
+							ref_key: "projectViewerRef",
+							ref: projectViewerRef,
+							callbacks: projectViewerCallbacks
+						}, null, 512)]),
+						_cache[10] || (_cache[10] = createStaticVNode("<div id=\"jsonl-viewer\" style=\"display:none;\"><div id=\"jsonl-viewer-header\"><span id=\"jsonl-viewer-title\">Message History</span><span id=\"jsonl-viewer-session-id\"></span></div><div id=\"jsonl-viewer-body\"></div></div>", 1)),
+						createBaseVNode("div", _hoisted_16, [createBaseVNode("div", _hoisted_17, [createVNode(_sfc_main$15)]), _cache[8] || (_cache[8] = createStaticVNode("<div id=\"terminal-header\" style=\"display:none;\"><div id=\"terminal-header-info\"><span id=\"terminal-header-name\"></span><span id=\"terminal-header-pty-title\" style=\"display:none;\"></span><span id=\"terminal-header-id\"></span><span id=\"terminal-header-shell\" style=\"display:none;\"></span><span id=\"terminal-header-account\" class=\"terminal-account-badge\" style=\"display:none;\"></span></div><div id=\"terminal-header-controls\"><span id=\"terminal-header-status\"></span><button id=\"terminal-stop-btn\" data-tooltip=\"Stop process\"><svg width=\"12\" height=\"12\" viewBox=\"0 0 12 12\" fill=\"currentColor\"><rect x=\"2\" y=\"2\" width=\"8\" height=\"8\" rx=\"1\"></rect></svg></button></div></div><div id=\"grid-viewer\" style=\"display:none;\"><div id=\"grid-viewer-header\"><span id=\"grid-viewer-title\">Session Overview</span><span id=\"grid-viewer-count\"></span></div></div><div id=\"terminals\"></div>", 3))])
+					]),
+					(openBlock(), createBlock(Teleport, { to: "#status-bar" }, [createVNode(_sfc_main$7, {
+						ref_key: "statusBarRef",
+						ref: statusBarRef
+					}, null, 512)])),
+					(openBlock(), createBlock(Teleport, { to: "#vue-grid-cards" }, [createVNode(_sfc_main$6, {
+						ref_key: "gridCardsRef",
+						ref: gridCardsRef
+					}, null, 512)]))
+				], 64);
+			};
+		}
+	};
+	//#endregion
 	//#region src/vue/main.js
+	window.vueStore = store;
 	window.vueSidebar = {
 		store,
-		mount(sidebarEl, headerEl, callbacks) {
-			createApp(_sfc_main$1, { callbacks }).mount(sidebarEl);
-			createApp(_sfc_main).mount(headerEl);
-		},
 		setProjects(projects) {
 			store.projects = projects;
 		},
@@ -5103,5 +8715,13 @@
 			store.headerAccount = null;
 		}
 	};
+	window.vuePlans = {};
+	window.vueMemory = {};
+	window.vueAccounts = {};
+	window.vueProjects = {};
+	window.vueStatusBar = {};
+	window.vueAccountDropdown = {};
+	window.vueGrid = {};
+	createApp(_sfc_main).mount("#app-container");
 	//#endregion
 })();
