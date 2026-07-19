@@ -5306,7 +5306,7 @@
 					createBaseVNode("button", {
 						class: "project-new-btn worktree-new-btn",
 						"data-tooltip": "New session in worktree",
-						onClick: _cache[1] || (_cache[1] = withModifiers(($event) => _ctx.$emit("new-session", __props.project), ["stop"])),
+						onClick: _cache[1] || (_cache[1] = withModifiers(($event) => _ctx.$emit("new-session", __props.project, $event.currentTarget), ["stop"])),
 						innerHTML: plusSmSvg
 					})
 				], 10, _hoisted_2$12)) : (openBlock(), createElementBlock("div", {
@@ -5343,7 +5343,7 @@
 					createBaseVNode("button", {
 						class: "project-new-btn",
 						"data-tooltip": "New session",
-						onClick: _cache[3] || (_cache[3] = withModifiers(($event) => _ctx.$emit("new-session", __props.project), ["stop"])),
+						onClick: _cache[3] || (_cache[3] = withModifiers(($event) => _ctx.$emit("new-session", __props.project, $event.currentTarget), ["stop"])),
 						innerHTML: plusSvg
 					})
 				], 10, _hoisted_3$12)), createBaseVNode("div", {
@@ -5498,7 +5498,7 @@
 							onJsonl: _cache[30] || (_cache[30] = (id) => _ctx.$emit("jsonl", id)),
 							onLaunchConfig: _cache[31] || (_cache[31] = (id) => _ctx.$emit("launch-config", id)),
 							onRename: _cache[32] || (_cache[32] = (id, name) => _ctx.$emit("rename", id, name)),
-							onNewSession: _cache[33] || (_cache[33] = (p) => _ctx.$emit("new-session", p)),
+							onNewSession: _cache[33] || (_cache[33] = (p, btn) => _ctx.$emit("new-session", p, btn)),
 							onSettings: _cache[34] || (_cache[34] = (path) => _ctx.$emit("settings", path)),
 							onArchiveSessions: _cache[35] || (_cache[35] = (sessions) => _ctx.$emit("archive-sessions", sessions)),
 							onRemoveProject: _cache[36] || (_cache[36] = (path) => _ctx.$emit("remove-project", path))
@@ -5591,8 +5591,8 @@
 			function onRename(id, name) {
 				props.callbacks.renameSession?.(id, name);
 			}
-			function onNewSession(project) {
-				props.callbacks.newSession?.(project);
+			function onNewSession(project, btn) {
+				props.callbacks.newSession?.(project, btn);
 			}
 			function onSettings(path) {
 				props.callbacks.openSettings?.(path);
@@ -6414,22 +6414,26 @@
 	var _hoisted_15$3 = { class: "session-meta" };
 	var _hoisted_16$3 = {
 		key: 0,
-		class: "project-env-added"
+		class: "session-meta project-branch-meta"
 	};
 	var _hoisted_17$3 = {
+		key: 0,
+		class: "project-env-added"
+	};
+	var _hoisted_18$2 = {
 		key: 1,
 		class: "project-env-deleted"
 	};
-	var _hoisted_18$2 = {
-		key: 0,
+	var _hoisted_19$2 = {
+		key: 1,
 		class: "project-card-env"
 	};
-	var _hoisted_19$2 = { class: "project-env-containers-box" };
-	var _hoisted_20$2 = { class: "project-env-containers-hdr" };
-	var _hoisted_21$2 = { class: "project-env-cname" };
-	var _hoisted_22$2 = { class: "project-env-cuptime" };
-	var _hoisted_23$2 = ["onClick"];
+	var _hoisted_20$2 = { class: "project-env-containers-box" };
+	var _hoisted_21$2 = { class: "project-env-containers-hdr" };
+	var _hoisted_22$2 = { class: "project-env-cname" };
+	var _hoisted_23$2 = { class: "project-env-cuptime" };
 	var _hoisted_24$2 = ["onClick"];
+	var _hoisted_25$2 = ["onClick"];
 	var trashSvg = "<svg width=\"11\" height=\"11\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"3 6 5 6 21 6\"/><path d=\"M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6\"/><path d=\"M10 11v6M14 11v6\"/><path d=\"M9 6V4h6v2\"/></svg>";
 	var _sfc_main$8 = {
 		__name: "ProjectsApp",
@@ -6446,11 +6450,13 @@
 			const activeProjectPath = /* @__PURE__ */ ref(null);
 			const sortOptions = [["name", "Name"], ["changes", "Changes"]];
 			let queueGen = 0;
+			const WORKTREE_RE = /\/\.claude\/worktrees\/[^/]+\/?$/;
 			const filteredProjects = computed(() => {
 				const q = searchQuery.value.trim().toLowerCase();
-				let list = q ? projects.value.filter((p) => {
+				const base = projects.value.filter((p) => !WORKTREE_RE.test(p.projectPath));
+				let list = q ? base.filter((p) => {
 					return (p.projectPath.split("/").filter(Boolean).pop() || "").toLowerCase().includes(q) || p.projectPath.toLowerCase().includes(q);
-				}) : [...projects.value];
+				}) : [...base];
 				if (sortOrder.value === "name") list.sort((a, b) => {
 					const na = a.projectPath.split("/").filter(Boolean).pop() || "";
 					const nb = b.projectPath.split("/").filter(Boolean).pop() || "";
@@ -6564,14 +6570,14 @@
 								class: "session-subtitle",
 								title: project.projectPath
 							}, toDisplayString(project.projectPath), 9, _hoisted_14$3),
-							createBaseVNode("div", _hoisted_15$3, [createTextVNode(toDisplayString(baseMeta(project)), 1), projectInfo[project.projectPath]?.branch ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [
-								_cache[3] || (_cache[3] = createTextVNode(" \xA0·\xA0", -1)),
-								_cache[4] || (_cache[4] = createBaseVNode("span", { class: "project-env-branch-icon" }, "⎇", -1)),
+							createBaseVNode("div", _hoisted_15$3, toDisplayString(baseMeta(project)), 1),
+							projectInfo[project.projectPath]?.branch ? (openBlock(), createElementBlock("div", _hoisted_16$3, [
+								_cache[3] || (_cache[3] = createBaseVNode("span", { class: "project-env-branch-icon" }, "⎇", -1)),
 								createTextVNode(" " + toDisplayString(projectInfo[project.projectPath].branch) + " ", 1),
-								projectInfo[project.projectPath].added ? (openBlock(), createElementBlock("span", _hoisted_16$3, " +" + toDisplayString(projectInfo[project.projectPath].added), 1)) : createCommentVNode("", true),
-								projectInfo[project.projectPath].deleted ? (openBlock(), createElementBlock("span", _hoisted_17$3, " −" + toDisplayString(projectInfo[project.projectPath].deleted), 1)) : createCommentVNode("", true)
-							], 64)) : createCommentVNode("", true)]),
-							projectInfo[project.projectPath]?.containers?.length ? (openBlock(), createElementBlock("div", _hoisted_18$2, [createBaseVNode("div", _hoisted_19$2, [createBaseVNode("div", _hoisted_20$2, [_cache[5] || (_cache[5] = createBaseVNode("svg", {
+								projectInfo[project.projectPath].added ? (openBlock(), createElementBlock("span", _hoisted_17$3, "+" + toDisplayString(projectInfo[project.projectPath].added), 1)) : createCommentVNode("", true),
+								projectInfo[project.projectPath].deleted ? (openBlock(), createElementBlock("span", _hoisted_18$2, "−" + toDisplayString(projectInfo[project.projectPath].deleted), 1)) : createCommentVNode("", true)
+							])) : createCommentVNode("", true),
+							projectInfo[project.projectPath]?.containers?.length ? (openBlock(), createElementBlock("div", _hoisted_19$2, [createBaseVNode("div", _hoisted_20$2, [createBaseVNode("div", _hoisted_21$2, [_cache[4] || (_cache[4] = createBaseVNode("svg", {
 								width: "12",
 								height: "12",
 								viewBox: "0 0 24 24",
@@ -6593,8 +6599,8 @@
 										running: c.state.includes("running"),
 										starting: !c.state.includes("running") && (c.state.includes("starting") || c.status?.toLowerCase().includes("starting"))
 									}]) }, null, 2),
-									createBaseVNode("span", _hoisted_21$2, toDisplayString(c.name), 1),
-									createBaseVNode("span", _hoisted_22$2, toDisplayString(parseUptime(c.status)), 1),
+									createBaseVNode("span", _hoisted_22$2, toDisplayString(c.name), 1),
+									createBaseVNode("span", _hoisted_23$2, toDisplayString(parseUptime(c.status)), 1),
 									!c.state.includes("running") && c.state && c.state !== "exited" ? (openBlock(), createElementBlock("span", {
 										key: 0,
 										class: normalizeClass(["project-env-cbadge", { starting: c.state.includes("starting") || c.status?.toLowerCase().includes("starting") }])
@@ -6608,8 +6614,8 @@
 						}, [createBaseVNode("button", {
 							class: "project-card-new-btn",
 							"data-tooltip": "New session",
-							onClick: withModifiers(($event) => __props.callbacks.newSession?.(project), ["stop"])
-						}, [..._cache[6] || (_cache[6] = [createBaseVNode("svg", {
+							onClick: withModifiers(($event) => __props.callbacks.newSession?.(project, $event.currentTarget), ["stop"])
+						}, [..._cache[5] || (_cache[5] = [createBaseVNode("svg", {
 							width: "13",
 							height: "13",
 							viewBox: "0 0 12 12",
@@ -6627,12 +6633,12 @@
 							y1: "6",
 							x2: "11",
 							y2: "6"
-						})], -1)])], 8, _hoisted_23$2), createBaseVNode("button", {
+						})], -1)])], 8, _hoisted_24$2), createBaseVNode("button", {
 							class: "project-card-del-btn",
 							"data-tooltip": "Remove project",
 							onClick: withModifiers(($event) => removeProject(project), ["stop"]),
 							innerHTML: trashSvg
-						}, null, 8, _hoisted_24$2)])
+						}, null, 8, _hoisted_25$2)])
 					])], 10, _hoisted_8$3);
 				}), 128))])])]);
 			};
@@ -7435,68 +7441,70 @@
 	var _hoisted_12$1 = { class: "pv-title-wrap" };
 	var _hoisted_13$1 = { class: "pv-name" };
 	var _hoisted_14$1 = ["title"];
-	var _hoisted_15$1 = { class: "pv-path" };
-	var _hoisted_16$1 = {
+	var _hoisted_15$1 = ["title"];
+	var _hoisted_16$1 = { class: "pv-path" };
+	var _hoisted_17$1 = {
 		key: 0,
 		class: "pv-worktree-bar"
 	};
-	var _hoisted_17$1 = ["onClick"];
-	var _hoisted_18 = { class: "pv-tabs" };
+	var _hoisted_18 = ["onClick"];
 	var _hoisted_19 = ["onClick"];
-	var _hoisted_20 = { class: "pv-tab-body" };
-	var _hoisted_21 = {
+	var _hoisted_20 = { class: "pv-tabs" };
+	var _hoisted_21 = ["onClick"];
+	var _hoisted_22 = { class: "pv-tab-body" };
+	var _hoisted_23 = {
 		key: 0,
 		class: "pv-loading"
 	};
-	var _hoisted_22 = { class: "pv-git-toolbar" };
-	var _hoisted_23 = { class: "pv-branch-wrap" };
-	var _hoisted_24 = ["value", "disabled"];
-	var _hoisted_25 = { label: "Local" };
-	var _hoisted_26 = ["value"];
-	var _hoisted_27 = {
+	var _hoisted_24 = { class: "pv-git-toolbar" };
+	var _hoisted_25 = { class: "pv-branch-wrap" };
+	var _hoisted_26 = ["value", "disabled"];
+	var _hoisted_27 = { label: "Local" };
+	var _hoisted_28 = ["value"];
+	var _hoisted_29 = {
 		key: 0,
 		label: "Remote"
 	};
-	var _hoisted_28 = ["value"];
-	var _hoisted_29 = ["disabled"];
-	var _hoisted_30 = ["disabled"];
-	var _hoisted_31 = {
+	var _hoisted_30 = ["value"];
+	var _hoisted_31 = ["disabled"];
+	var _hoisted_32 = ["disabled"];
+	var _hoisted_33 = {
 		key: 1,
 		class: "pv-git-stats"
 	};
-	var _hoisted_32 = {
+	var _hoisted_34 = {
 		key: 0,
 		class: "pv-added"
 	};
-	var _hoisted_33 = {
+	var _hoisted_35 = {
 		key: 1,
 		class: "pv-deleted"
 	};
-	var _hoisted_34 = { class: "pv-overview-grid" };
-	var _hoisted_35 = { class: "pv-col-left" };
-	var _hoisted_36 = {
+	var _hoisted_36 = { class: "pv-overview-grid" };
+	var _hoisted_37 = { class: "pv-col-left" };
+	var _hoisted_38 = {
 		key: 0,
 		class: "pv-card"
 	};
-	var _hoisted_37 = { class: "pv-card-title" };
-	var _hoisted_38 = { class: "pv-count-badge" };
-	var _hoisted_39 = { class: "pv-file-list" };
-	var _hoisted_40 = ["onClick", "title"];
-	var _hoisted_41 = { class: "pv-file-name" };
-	var _hoisted_42 = { class: "pv-file-diff" };
-	var _hoisted_43 = {
+	var _hoisted_39 = { class: "pv-card-title" };
+	var _hoisted_40 = { class: "pv-count-badge" };
+	var _hoisted_41 = { class: "pv-file-list" };
+	var _hoisted_42 = ["onClick", "title"];
+	var _hoisted_43 = { class: "pv-file-name" };
+	var _hoisted_44 = { class: "pv-file-diff" };
+	var _hoisted_45 = {
 		key: 0,
 		class: "pv-added"
 	};
-	var _hoisted_44 = {
+	var _hoisted_46 = {
 		key: 1,
 		class: "pv-deleted"
 	};
-	var _hoisted_45 = {
+	var _hoisted_47 = {
 		key: 1,
 		class: "pv-card pv-empty-changes"
 	};
-	var _hoisted_46 = {
+	var _hoisted_48 = {
 		width: "20",
 		height: "20",
 		viewBox: "0 0 24 24",
@@ -7507,81 +7515,141 @@
 		"stroke-linejoin": "round",
 		style: { "opacity": ".3" }
 	};
-	var _hoisted_47 = { class: "pv-card pv-commit-card" };
-	var _hoisted_48 = {
+	var _hoisted_49 = { class: "pv-card pv-commit-card" };
+	var _hoisted_50 = {
 		key: 0,
 		class: "pv-generating-wrap"
 	};
-	var _hoisted_49 = { class: "pv-commit-actions" };
-	var _hoisted_50 = ["disabled"];
-	var _hoisted_51 = { class: "pv-commit-btns" };
-	var _hoisted_52 = ["disabled"];
-	var _hoisted_53 = ["disabled"];
-	var _hoisted_54 = { class: "pv-col-right" };
-	var _hoisted_55 = {
+	var _hoisted_51 = {
+		key: 2,
+		class: "pv-git-user"
+	};
+	var _hoisted_52 = { class: "pv-git-user-name" };
+	var _hoisted_53 = {
+		key: 0,
+		class: "pv-git-user-email"
+	};
+	var _hoisted_54 = { class: "pv-gen-row" };
+	var _hoisted_55 = ["disabled"];
+	var _hoisted_56 = ["disabled"];
+	var _hoisted_57 = { class: "pv-commit-actions" };
+	var _hoisted_58 = ["disabled"];
+	var _hoisted_59 = { class: "pv-col-right" };
+	var _hoisted_60 = {
 		key: 0,
 		class: "pv-card"
 	};
-	var _hoisted_56 = { class: "pv-container-list" };
-	var _hoisted_57 = { class: "pv-container-name" };
-	var _hoisted_58 = { class: "pv-container-state" };
-	var _hoisted_59 = {
+	var _hoisted_61 = { class: "pv-container-list" };
+	var _hoisted_62 = { class: "pv-container-name" };
+	var _hoisted_63 = { class: "pv-container-state" };
+	var _hoisted_64 = {
 		key: 0,
 		class: "pv-container-ports"
 	};
-	var _hoisted_60 = {
+	var _hoisted_65 = {
 		key: 1,
 		class: "pv-card"
 	};
-	var _hoisted_61 = { class: "pv-session-list" };
-	var _hoisted_62 = ["onClick"];
-	var _hoisted_63 = { class: "pv-session-name" };
-	var _hoisted_64 = { class: "pv-session-date" };
-	var _hoisted_65 = { class: "pv-commits-section-label pv-commits-section-label--unpushed" };
-	var _hoisted_66 = { class: "pv-commit-list-full pv-commit-list-full--unpushed" };
-	var _hoisted_67 = { class: "pv-commit-hash" };
-	var _hoisted_68 = { class: "pv-commit-msg" };
-	var _hoisted_69 = { class: "pv-commit-author" };
-	var _hoisted_70 = { class: "pv-commit-date" };
-	var _hoisted_71 = {
+	var _hoisted_66 = { class: "pv-session-list" };
+	var _hoisted_67 = ["onClick"];
+	var _hoisted_68 = { class: "pv-session-name" };
+	var _hoisted_69 = { class: "pv-session-date" };
+	var _hoisted_70 = { class: "pv-push-panel" };
+	var _hoisted_71 = { class: "pv-push-panel-row" };
+	var _hoisted_72 = {
+		key: 0,
+		class: "pv-push-panel-val"
+	};
+	var _hoisted_73 = {
+		key: 1,
+		class: "pv-push-panel-val pv-push-panel-val--muted"
+	};
+	var _hoisted_74 = ["title"];
+	var _hoisted_75 = {
+		key: 0,
+		class: "pv-push-panel-row"
+	};
+	var _hoisted_76 = { class: "pv-push-panel-tags" };
+	var _hoisted_77 = {
+		key: 1,
+		class: "pv-push-panel-row pv-push-panel-row--mr"
+	};
+	var _hoisted_78 = {
+		key: 0,
+		width: "12",
+		height: "12",
+		viewBox: "0 0 380 380",
+		fill: "currentColor",
+		style: {
+			"color": "#fc6d26",
+			"flex-shrink": "0"
+		}
+	};
+	var _hoisted_79 = {
+		key: 1,
+		width: "12",
+		height: "12",
+		viewBox: "0 0 24 24",
+		fill: "currentColor",
+		style: {
+			"color": "#e6edf3",
+			"flex-shrink": "0"
+		}
+	};
+	var _hoisted_80 = { class: "pv-push-panel-label" };
+	var _hoisted_81 = { class: "pv-mr-links" };
+	var _hoisted_82 = ["href"];
+	var _hoisted_83 = { class: "pv-push-panel-actions" };
+	var _hoisted_84 = ["disabled"];
+	var _hoisted_85 = { class: "pv-commits-section-label pv-commits-section-label--unpushed" };
+	var _hoisted_86 = { class: "pv-commit-panel" };
+	var _hoisted_87 = { class: "pv-commit-panel-meta" };
+	var _hoisted_88 = { class: "pv-commit-panel-stat" };
+	var _hoisted_89 = { class: "pv-commit-panel-stat" };
+	var _hoisted_90 = { class: "pv-commit-list-full pv-commit-list-full--unpushed" };
+	var _hoisted_91 = { class: "pv-commit-hash" };
+	var _hoisted_92 = { class: "pv-commit-msg" };
+	var _hoisted_93 = { class: "pv-commit-author" };
+	var _hoisted_94 = { class: "pv-commit-date" };
+	var _hoisted_95 = {
 		key: 1,
 		class: "pv-commits-section-label"
 	};
-	var _hoisted_72 = { class: "pv-commit-list-full" };
-	var _hoisted_73 = { class: "pv-commit-hash" };
-	var _hoisted_74 = { class: "pv-commit-msg" };
-	var _hoisted_75 = { class: "pv-commit-author" };
-	var _hoisted_76 = { class: "pv-commit-date" };
-	var _hoisted_77 = {
+	var _hoisted_96 = { class: "pv-commit-list-full" };
+	var _hoisted_97 = { class: "pv-commit-hash" };
+	var _hoisted_98 = { class: "pv-commit-msg" };
+	var _hoisted_99 = { class: "pv-commit-author" };
+	var _hoisted_100 = { class: "pv-commit-date" };
+	var _hoisted_101 = {
 		key: 0,
 		class: "pv-empty"
 	};
-	var _hoisted_78 = {
+	var _hoisted_102 = {
 		key: 3,
 		class: "pv-files-layout"
 	};
-	var _hoisted_79 = { class: "pv-tree-panel" };
-	var _hoisted_80 = { class: "pv-tree-search" };
-	var _hoisted_81 = { class: "pv-tree-scroll" };
-	var _hoisted_82 = {
+	var _hoisted_103 = { class: "pv-tree-panel" };
+	var _hoisted_104 = { class: "pv-tree-search" };
+	var _hoisted_105 = { class: "pv-tree-scroll" };
+	var _hoisted_106 = {
 		key: 0,
 		class: "pv-loading"
 	};
-	var _hoisted_83 = {
+	var _hoisted_107 = {
 		key: 0,
 		class: "pv-active-sessions"
 	};
-	var _hoisted_84 = ["onClick"];
-	var _hoisted_85 = { class: "pv-asession-name" };
-	var _hoisted_86 = ["onClick"];
-	var _hoisted_87 = { class: "pv-asession-name" };
-	var _hoisted_88 = { class: "pv-session-date" };
-	var _hoisted_89 = {
+	var _hoisted_108 = ["onClick"];
+	var _hoisted_109 = { class: "pv-asession-name" };
+	var _hoisted_110 = ["onClick"];
+	var _hoisted_111 = { class: "pv-asession-name" };
+	var _hoisted_112 = { class: "pv-session-date" };
+	var _hoisted_113 = {
 		key: 2,
 		class: "pv-empty"
 	};
-	var _hoisted_90 = { class: "pv-dialog" };
-	var _hoisted_91 = { class: "pv-dialog-actions" };
+	var _hoisted_114 = { class: "pv-dialog" };
+	var _hoisted_115 = { class: "pv-dialog-actions" };
 	var _sfc_main$1 = {
 		__name: "ProjectViewerApp",
 		props: { callbacks: {
@@ -7636,6 +7704,10 @@
 			const treeSearch = /* @__PURE__ */ ref("");
 			const sessions = /* @__PURE__ */ ref([]);
 			const activeSessions = /* @__PURE__ */ ref([]);
+			const gitUser = /* @__PURE__ */ ref({
+				name: "",
+				email: ""
+			});
 			const avatar = computed(() => project.value && window.getProjectAvatar ? window.getProjectAvatar(project.value.projectPath) : {
 				initials: "?",
 				color: "#666"
@@ -7654,6 +7726,26 @@
 			const filteredTree = computed(() => {
 				if (!treeSearch.value) return fileTree.value;
 				return filterTree(fileTree.value, treeSearch.value.toLowerCase());
+			});
+			const mrLink = computed(() => {
+				const url = detail.value?.remoteUrl;
+				detail.value?.branch;
+				if (!url) return null;
+				let base = url.trim();
+				const ssh = base.match(/^git@([^:]+):(.+?)(?:\.git)?$/);
+				if (ssh) base = `https://${ssh[1]}/${ssh[2]}`;
+				else base = base.replace(/\.git$/, "");
+				if (base.includes("github.com")) return {
+					type: "github",
+					label: "Pull Requests",
+					listUrl: `${base}/pulls`
+				};
+				if (base.includes("gitlab")) return {
+					type: "gitlab",
+					label: "Merge Requests",
+					listUrl: `${base}/-/merge_requests`
+				};
+				return null;
 			});
 			function basename(p) {
 				return p ? p.replace(/\\/g, "/").split("/").pop() || p : "";
@@ -7702,21 +7794,44 @@
 					loading.value = true;
 				}
 				const rootPath = project.value?.projectPath;
-				const [det, br, sess, terminals] = await Promise.all([
+				const [det, br, sess, terminals, userInfo] = await Promise.all([
 					window.api.getProjectDetail(p).catch(() => null),
 					window.api.gitBranches(p).catch(() => null),
 					window.api.getProjectSessions(rootPath || p).catch(() => null),
-					window.api.getActiveTerminals().catch(() => null)
+					window.api.getActiveTerminals().catch(() => null),
+					window.api.getGitUserInfo(p).catch(() => null)
 				]);
 				detail.value = det || detail.value;
 				branches.value = br?.ok ? br.branches : [];
 				remoteBranches.value = br?.ok ? br.remotes || [] : [];
 				if (sess?.ok) sessions.value = sess.sessions;
+				if (userInfo?.ok) gitUser.value = {
+					name: userInfo.name,
+					email: userInfo.email
+				};
 				if (terminals) activeSessions.value = Object.values(terminals).filter((t) => t.projectPath === (rootPath || p) && !t.exited).map((t) => ({
 					id: t.id,
 					name: t.title || t.id?.slice(0, 12),
 					busy: t.busy || false
 				}));
+				if (det?.worktreePaths !== void 0) {
+					const wtPattern = /^(.+?)\/\.claude\/worktrees\/([^/]+)\/?$/;
+					const actualPaths = new Set(det.worktreePaths);
+					const stale = worktrees.value.filter((w) => !actualPaths.has(w.projectPath));
+					if (stale.length) {
+						stale.forEach((w) => props.callbacks.worktreeDeleted?.(w.projectPath));
+						if (!actualPaths.has(viewedPath.value)) setViewedPath(rootPath || p);
+					}
+					const known = new Set(worktrees.value.map((w) => w.projectPath));
+					const added = det.worktreePaths.filter((wp) => !known.has(wp)).map((wp) => {
+						const m = wp.match(wtPattern);
+						return m ? {
+							projectPath: wp,
+							name: m[2]
+						} : null;
+					}).filter(Boolean);
+					if (stale.length || added.length) worktrees.value = [...worktrees.value.filter((w) => actualPaths.has(w.projectPath)), ...added];
+				}
 				loading.value = false;
 			});
 			watch(activeTab, async (tab) => {
@@ -7834,10 +7949,10 @@
 					await reload();
 				} else showGitMsg(res.error || "Pull failed", true);
 			}
-			async function generateCommitMsg() {
+			async function generateCommitMsg(style = "short") {
 				generating.value = true;
 				gitBusy.value = true;
-				const res = await window.api.gitGenerateCommitMsg(viewedPath.value);
+				const res = await window.api.gitGenerateCommitMsg(viewedPath.value, style);
 				generating.value = false;
 				gitBusy.value = false;
 				if (res.ok) commitMessage.value = res.message;
@@ -7874,11 +7989,26 @@
 				fileTree.value = [];
 				viewedPath.value = path;
 			}
+			async function deleteWorktree(wt) {
+				if (!confirm(`Delete worktree "${wt.name}" and its branch?\n\nThis cannot be undone.`)) return;
+				const res = await window.api.deleteWorktree(project.value.projectPath, wt.projectPath);
+				if (!res.ok) {
+					showGitMsg(res.error || "Failed to delete worktree", true);
+					return;
+				}
+				if (viewedPath.value === wt.projectPath) setViewedPath(project.value.projectPath);
+				worktrees.value = worktrees.value.filter((w) => w.projectPath !== wt.projectPath);
+				showGitMsg(`Deleted worktree "${wt.name}"${res.branch ? ` and branch "${res.branch}"` : ""}`);
+				props.callbacks.worktreeDeleted?.(wt.projectPath);
+			}
 			function openSession(s) {
 				window.__sb?.openSessionById?.(s.id);
 			}
-			function newSession() {
-				if (project.value) props.callbacks.newSession?.(project.value);
+			function openExternal(url) {
+				window.api?.openExternal?.(url);
+			}
+			function newSession(e) {
+				if (project.value) props.callbacks.newSession?.(project.value, e?.currentTarget);
 			}
 			__expose({
 				open(proj, wts = []) {
@@ -7904,7 +8034,7 @@
 					createBaseVNode("button", {
 						class: "pv-nav-btn pv-nav-back",
 						onClick: closeOverlay
-					}, [..._cache[7] || (_cache[7] = [createBaseVNode("svg", {
+					}, [..._cache[11] || (_cache[11] = [createBaseVNode("svg", {
 						width: "14",
 						height: "14",
 						viewBox: "0 0 24 24",
@@ -7921,7 +8051,7 @@
 							onClick: prevFile,
 							disabled: currentFileIndex.value <= 0,
 							title: "Previous file"
-						}, [..._cache[8] || (_cache[8] = [createBaseVNode("svg", {
+						}, [..._cache[12] || (_cache[12] = [createBaseVNode("svg", {
 							width: "14",
 							height: "14",
 							viewBox: "0 0 24 24",
@@ -7937,7 +8067,7 @@
 							onClick: nextFile,
 							disabled: currentFileIndex.value >= changedFiles.value.length - 1,
 							title: "Next file"
-						}, [..._cache[9] || (_cache[9] = [createBaseVNode("svg", {
+						}, [..._cache[13] || (_cache[13] = [createBaseVNode("svg", {
 							width: "14",
 							height: "14",
 							viewBox: "0 0 24 24",
@@ -7964,56 +8094,86 @@
 							class: "pv-avatar",
 							style: normalizeStyle({ background: avatar.value.color })
 						}, toDisplayString(avatar.value.initials), 5),
-						createBaseVNode("div", _hoisted_12$1, [createBaseVNode("div", _hoisted_13$1, [createTextVNode(toDisplayString(projectName.value) + " ", 1), unpushedCount.value ? (openBlock(), createElementBlock("span", {
-							key: 0,
-							class: "pv-header-unpushed-badge",
-							title: `${unpushedCount.value} unpushed commit${unpushedCount.value > 1 ? "s" : ""}`
-						}, toDisplayString(unpushedCount.value), 9, _hoisted_14$1)) : createCommentVNode("", true)]), createBaseVNode("div", _hoisted_15$1, toDisplayString(viewedPath.value), 1)]),
+						createBaseVNode("div", _hoisted_12$1, [createBaseVNode("div", _hoisted_13$1, [
+							createTextVNode(toDisplayString(projectName.value) + " ", 1),
+							worktrees.value.length ? (openBlock(), createElementBlock("span", {
+								key: 0,
+								class: "pv-wt-count-badge",
+								title: `${worktrees.value.length} worktree${worktrees.value.length > 1 ? "s" : ""}`
+							}, [_cache[14] || (_cache[14] = createStaticVNode("<svg width=\"10\" height=\"10\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><line x1=\"6\" y1=\"3\" x2=\"6\" y2=\"15\"></line><circle cx=\"18\" cy=\"6\" r=\"3\"></circle><circle cx=\"6\" cy=\"18\" r=\"3\"></circle><path d=\"M18 9a9 9 0 0 1-9 9\"></path></svg>", 1)), createTextVNode(" " + toDisplayString(worktrees.value.length), 1)], 8, _hoisted_14$1)) : createCommentVNode("", true),
+							unpushedCount.value ? (openBlock(), createElementBlock("span", {
+								key: 1,
+								class: "pv-header-unpushed-badge",
+								title: `${unpushedCount.value} unpushed commit${unpushedCount.value > 1 ? "s" : ""}`
+							}, toDisplayString(unpushedCount.value), 9, _hoisted_15$1)) : createCommentVNode("", true)
+						]), createBaseVNode("div", _hoisted_16$1, toDisplayString(viewedPath.value), 1)]),
 						createBaseVNode("button", {
 							class: "pv-new-btn",
-							onClick: newSession
+							onClick: _cache[0] || (_cache[0] = ($event) => newSession($event))
 						}, "+ New session")
 					]),
-					worktrees.value.length ? (openBlock(), createElementBlock("div", _hoisted_16$1, [createBaseVNode("button", {
+					worktrees.value.length ? (openBlock(), createElementBlock("div", _hoisted_17$1, [createBaseVNode("button", {
 						class: normalizeClass(["pv-wt-btn", { active: viewedPath.value === project.value.projectPath }]),
-						onClick: _cache[0] || (_cache[0] = ($event) => setViewedPath(project.value.projectPath))
+						onClick: _cache[1] || (_cache[1] = ($event) => setViewedPath(project.value.projectPath))
 					}, "main", 2), (openBlock(true), createElementBlock(Fragment, null, renderList(worktrees.value, (wt) => {
 						return openBlock(), createElementBlock("button", {
 							key: wt.projectPath,
-							class: normalizeClass(["pv-wt-btn", { active: viewedPath.value === wt.projectPath }]),
+							class: normalizeClass(["pv-wt-btn pv-wt-btn--deletable", { active: viewedPath.value === wt.projectPath }]),
 							onClick: ($event) => setViewedPath(wt.projectPath)
-						}, toDisplayString(wt.name), 11, _hoisted_17$1);
+						}, [createTextVNode(toDisplayString(wt.name) + " ", 1), createBaseVNode("span", {
+							class: "pv-wt-del",
+							onClick: withModifiers(($event) => deleteWorktree(wt), ["stop"]),
+							title: "Delete worktree and branch"
+						}, [..._cache[15] || (_cache[15] = [createBaseVNode("svg", {
+							width: "8",
+							height: "8",
+							viewBox: "0 0 12 12",
+							fill: "none",
+							stroke: "currentColor",
+							"stroke-width": "2.5",
+							"stroke-linecap": "round"
+						}, [createBaseVNode("line", {
+							x1: "1",
+							y1: "1",
+							x2: "11",
+							y2: "11"
+						}), createBaseVNode("line", {
+							x1: "11",
+							y1: "1",
+							x2: "1",
+							y2: "11"
+						})], -1)])], 8, _hoisted_19)], 10, _hoisted_18);
 					}), 128))])) : createCommentVNode("", true),
-					createBaseVNode("div", _hoisted_18, [(openBlock(true), createElementBlock(Fragment, null, renderList(TABS.value, (t) => {
+					createBaseVNode("div", _hoisted_20, [(openBlock(true), createElementBlock(Fragment, null, renderList(TABS.value, (t) => {
 						return openBlock(), createElementBlock("button", {
 							key: t.id,
 							class: normalizeClass(["pv-tab", { active: activeTab.value === t.id }]),
 							onClick: ($event) => activeTab.value = t.id
-						}, toDisplayString(t.label), 11, _hoisted_19);
+						}, toDisplayString(t.label), 11, _hoisted_21);
 					}), 128))]),
-					createBaseVNode("div", _hoisted_20, [loading.value ? (openBlock(), createElementBlock("div", _hoisted_21, "Loading…")) : activeTab.value === "overview" && detail.value ? (openBlock(), createElementBlock(Fragment, { key: 1 }, [createBaseVNode("div", _hoisted_22, [
-						createBaseVNode("div", _hoisted_23, [_cache[10] || (_cache[10] = createStaticVNode("<svg class=\"pv-branch-icon\" width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><line x1=\"6\" y1=\"3\" x2=\"6\" y2=\"15\"></line><circle cx=\"18\" cy=\"6\" r=\"3\"></circle><circle cx=\"6\" cy=\"18\" r=\"3\"></circle><path d=\"M18 9a9 9 0 0 1-9 9\"></path></svg>", 1)), createBaseVNode("select", {
+					createBaseVNode("div", _hoisted_22, [loading.value ? (openBlock(), createElementBlock("div", _hoisted_23, "Loading…")) : activeTab.value === "overview" && detail.value ? (openBlock(), createElementBlock(Fragment, { key: 1 }, [createBaseVNode("div", _hoisted_24, [
+						createBaseVNode("div", _hoisted_25, [_cache[16] || (_cache[16] = createStaticVNode("<svg class=\"pv-branch-icon\" width=\"13\" height=\"13\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><line x1=\"6\" y1=\"3\" x2=\"6\" y2=\"15\"></line><circle cx=\"18\" cy=\"6\" r=\"3\"></circle><circle cx=\"6\" cy=\"18\" r=\"3\"></circle><path d=\"M18 9a9 9 0 0 1-9 9\"></path></svg>", 1)), createBaseVNode("select", {
 							class: "pv-branch-select",
 							value: detail.value.branch,
-							onChange: _cache[1] || (_cache[1] = ($event) => switchBranch($event.target.value)),
+							onChange: _cache[2] || (_cache[2] = ($event) => switchBranch($event.target.value)),
 							disabled: gitBusy.value
-						}, [createBaseVNode("optgroup", _hoisted_25, [(openBlock(true), createElementBlock(Fragment, null, renderList(branches.value, (b) => {
-							return openBlock(), createElementBlock("option", {
-								key: b,
-								value: b
-							}, toDisplayString(b), 9, _hoisted_26);
-						}), 128))]), remoteBranches.value.length ? (openBlock(), createElementBlock("optgroup", _hoisted_27, [(openBlock(true), createElementBlock(Fragment, null, renderList(remoteBranches.value, (b) => {
+						}, [createBaseVNode("optgroup", _hoisted_27, [(openBlock(true), createElementBlock(Fragment, null, renderList(branches.value, (b) => {
 							return openBlock(), createElementBlock("option", {
 								key: b,
 								value: b
 							}, toDisplayString(b), 9, _hoisted_28);
-						}), 128))])) : createCommentVNode("", true)], 40, _hoisted_24)]),
+						}), 128))]), remoteBranches.value.length ? (openBlock(), createElementBlock("optgroup", _hoisted_29, [(openBlock(true), createElementBlock(Fragment, null, renderList(remoteBranches.value, (b) => {
+							return openBlock(), createElementBlock("option", {
+								key: b,
+								value: b
+							}, toDisplayString(b), 9, _hoisted_30);
+						}), 128))])) : createCommentVNode("", true)], 40, _hoisted_26)]),
 						createBaseVNode("button", {
 							class: "pv-git-btn",
 							onClick: doFetch,
 							disabled: gitBusy.value,
 							title: "git fetch --prune"
-						}, [..._cache[11] || (_cache[11] = [createBaseVNode("svg", {
+						}, [..._cache[17] || (_cache[17] = [createBaseVNode("svg", {
 							width: "13",
 							height: "13",
 							viewBox: "0 0 24 24",
@@ -8022,13 +8182,13 @@
 							"stroke-width": "2",
 							"stroke-linecap": "round",
 							"stroke-linejoin": "round"
-						}, [createBaseVNode("polyline", { points: "23 4 23 10 17 10" }), createBaseVNode("path", { d: "M20.49 15a9 9 0 1 1-2.12-9.36L23 10" })], -1), createTextVNode(" Fetch ", -1)])], 8, _hoisted_29),
+						}, [createBaseVNode("polyline", { points: "23 4 23 10 17 10" }), createBaseVNode("path", { d: "M20.49 15a9 9 0 1 1-2.12-9.36L23 10" })], -1), createTextVNode(" Fetch ", -1)])], 8, _hoisted_31),
 						createBaseVNode("button", {
 							class: "pv-git-btn",
 							onClick: doPull,
 							disabled: gitBusy.value,
 							title: "git pull"
-						}, [..._cache[12] || (_cache[12] = [createBaseVNode("svg", {
+						}, [..._cache[18] || (_cache[18] = [createBaseVNode("svg", {
 							width: "13",
 							height: "13",
 							viewBox: "0 0 24 24",
@@ -8042,13 +8202,13 @@
 							y1: "5",
 							x2: "12",
 							y2: "19"
-						}), createBaseVNode("polyline", { points: "19 12 12 19 5 12" })], -1), createTextVNode(" Pull ", -1)])], 8, _hoisted_30),
+						}), createBaseVNode("polyline", { points: "19 12 12 19 5 12" })], -1), createTextVNode(" Pull ", -1)])], 8, _hoisted_32),
 						gitMessage.value ? (openBlock(), createElementBlock("span", {
 							key: 0,
 							class: normalizeClass(["pv-git-msg", { error: gitError.value }])
 						}, toDisplayString(gitMessage.value), 3)) : createCommentVNode("", true),
-						detail.value.totalAdded || detail.value.totalDeleted ? (openBlock(), createElementBlock("span", _hoisted_31, [detail.value.totalAdded ? (openBlock(), createElementBlock("span", _hoisted_32, "+" + toDisplayString(detail.value.totalAdded), 1)) : createCommentVNode("", true), detail.value.totalDeleted ? (openBlock(), createElementBlock("span", _hoisted_33, "−" + toDisplayString(detail.value.totalDeleted), 1)) : createCommentVNode("", true)])) : createCommentVNode("", true)
-					]), createBaseVNode("div", _hoisted_34, [createBaseVNode("div", _hoisted_35, [detail.value.changedFiles.length ? (openBlock(), createElementBlock("div", _hoisted_36, [createBaseVNode("div", _hoisted_37, [_cache[13] || (_cache[13] = createBaseVNode("span", null, "Uncommitted changes", -1)), createBaseVNode("span", _hoisted_38, toDisplayString(detail.value.changedFiles.length), 1)]), createBaseVNode("div", _hoisted_39, [(openBlock(true), createElementBlock(Fragment, null, renderList(detail.value.changedFiles, (f) => {
+						detail.value.totalAdded || detail.value.totalDeleted ? (openBlock(), createElementBlock("span", _hoisted_33, [detail.value.totalAdded ? (openBlock(), createElementBlock("span", _hoisted_34, "+" + toDisplayString(detail.value.totalAdded), 1)) : createCommentVNode("", true), detail.value.totalDeleted ? (openBlock(), createElementBlock("span", _hoisted_35, "−" + toDisplayString(detail.value.totalDeleted), 1)) : createCommentVNode("", true)])) : createCommentVNode("", true)
+					]), createBaseVNode("div", _hoisted_36, [createBaseVNode("div", _hoisted_37, [detail.value.changedFiles.length ? (openBlock(), createElementBlock("div", _hoisted_38, [createBaseVNode("div", _hoisted_39, [_cache[19] || (_cache[19] = createBaseVNode("span", null, "Uncommitted changes", -1)), createBaseVNode("span", _hoisted_40, toDisplayString(detail.value.changedFiles.length), 1)]), createBaseVNode("div", _hoisted_41, [(openBlock(true), createElementBlock(Fragment, null, renderList(detail.value.changedFiles, (f) => {
 						return openBlock(), createElementBlock("div", {
 							key: f.file,
 							class: normalizeClass(["pv-file-row pv-file-row--clickable", { loading: loadingFile.value === f.file }]),
@@ -8056,77 +8216,148 @@
 							title: f.file
 						}, [
 							createBaseVNode("span", { class: normalizeClass(["pv-file-status", fileStatus(f)]) }, toDisplayString(fileStatusChar(f)), 3),
-							createBaseVNode("span", _hoisted_41, toDisplayString(f.file), 1),
-							createBaseVNode("span", _hoisted_42, [f.added ? (openBlock(), createElementBlock("span", _hoisted_43, "+" + toDisplayString(f.added), 1)) : createCommentVNode("", true), f.deleted ? (openBlock(), createElementBlock("span", _hoisted_44, "−" + toDisplayString(f.deleted), 1)) : createCommentVNode("", true)])
-						], 10, _hoisted_40);
-					}), 128))])])) : (openBlock(), createElementBlock("div", _hoisted_45, [(openBlock(), createElementBlock("svg", _hoisted_46, [..._cache[14] || (_cache[14] = [createBaseVNode("polyline", { points: "20 6 9 17 4 12" }, null, -1)])])), _cache[15] || (_cache[15] = createBaseVNode("span", null, "Working tree clean", -1))])), createBaseVNode("div", _hoisted_47, [
-						_cache[19] || (_cache[19] = createBaseVNode("div", { class: "pv-card-title" }, "Commit", -1)),
-						generating.value ? (openBlock(), createElementBlock("div", _hoisted_48, [..._cache[16] || (_cache[16] = [createBaseVNode("span", { class: "pv-generating-text" }, "Generating…", -1)])])) : withDirectives((openBlock(), createElementBlock("textarea", {
+							createBaseVNode("span", _hoisted_43, toDisplayString(f.file), 1),
+							createBaseVNode("span", _hoisted_44, [f.added ? (openBlock(), createElementBlock("span", _hoisted_45, "+" + toDisplayString(f.added), 1)) : createCommentVNode("", true), f.deleted ? (openBlock(), createElementBlock("span", _hoisted_46, "−" + toDisplayString(f.deleted), 1)) : createCommentVNode("", true)])
+						], 10, _hoisted_42);
+					}), 128))])])) : (openBlock(), createElementBlock("div", _hoisted_47, [(openBlock(), createElementBlock("svg", _hoisted_48, [..._cache[20] || (_cache[20] = [createBaseVNode("polyline", { points: "20 6 9 17 4 12" }, null, -1)])])), _cache[21] || (_cache[21] = createBaseVNode("span", null, "Working tree clean", -1))])), createBaseVNode("div", _hoisted_49, [
+						_cache[25] || (_cache[25] = createBaseVNode("div", { class: "pv-card-title" }, "Commit", -1)),
+						generating.value ? (openBlock(), createElementBlock("div", _hoisted_50, [..._cache[22] || (_cache[22] = [createBaseVNode("span", { class: "pv-generating-text" }, "Generating…", -1)])])) : withDirectives((openBlock(), createElementBlock("textarea", {
 							key: 1,
 							class: "pv-commit-input",
 							placeholder: "Commit message…",
-							"onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => commitMessage.value = $event),
+							"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => commitMessage.value = $event),
 							rows: "3"
 						}, null, 512)), [[vModelText, commitMessage.value]]),
-						createBaseVNode("div", _hoisted_49, [createBaseVNode("button", {
-							class: "pv-git-btn pv-gen-btn",
-							onClick: generateCommitMsg,
-							disabled: gitBusy.value || generating.value
-						}, [..._cache[17] || (_cache[17] = [createBaseVNode("svg", {
-							width: "13",
-							height: "13",
-							viewBox: "0 0 24 24",
-							fill: "none",
-							stroke: "currentColor",
-							"stroke-width": "2",
-							"stroke-linecap": "round",
-							"stroke-linejoin": "round"
-						}, [
-							createBaseVNode("path", { d: "M12 2L2 7l10 5 10-5-10-5z" }),
-							createBaseVNode("path", { d: "M2 17l10 5 10-5" }),
-							createBaseVNode("path", { d: "M2 12l10 5 10-5" })
-						], -1), createTextVNode(" Generate with Claude ", -1)])], 8, _hoisted_50), createBaseVNode("div", _hoisted_51, [createBaseVNode("button", {
+						gitUser.value.name || gitUser.value.email ? (openBlock(), createElementBlock("div", _hoisted_51, [
+							_cache[23] || (_cache[23] = createBaseVNode("svg", {
+								width: "11",
+								height: "11",
+								viewBox: "0 0 24 24",
+								fill: "none",
+								stroke: "currentColor",
+								"stroke-width": "2",
+								"stroke-linecap": "round",
+								"stroke-linejoin": "round"
+							}, [createBaseVNode("path", { d: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" }), createBaseVNode("circle", {
+								cx: "12",
+								cy: "7",
+								r: "4"
+							})], -1)),
+							createBaseVNode("span", _hoisted_52, toDisplayString(gitUser.value.name), 1),
+							gitUser.value.email ? (openBlock(), createElementBlock("span", _hoisted_53, "<" + toDisplayString(gitUser.value.email) + ">", 1)) : createCommentVNode("", true)
+						])) : createCommentVNode("", true),
+						createBaseVNode("div", _hoisted_54, [
+							_cache[24] || (_cache[24] = createStaticVNode("<svg class=\"pv-gen-icon\" width=\"12\" height=\"12\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M12 2L2 7l10 5 10-5-10-5z\"></path><path d=\"M2 17l10 5 10-5\"></path><path d=\"M2 12l10 5 10-5\"></path></svg><span class=\"pv-gen-label\">Generate with Claude:</span>", 2)),
+							createBaseVNode("button", {
+								class: "pv-gen-style-btn",
+								onClick: _cache[4] || (_cache[4] = ($event) => generateCommitMsg("short")),
+								disabled: gitBusy.value || generating.value,
+								title: "One-sentence commit message"
+							}, "short", 8, _hoisted_55),
+							createBaseVNode("button", {
+								class: "pv-gen-style-btn",
+								onClick: _cache[5] || (_cache[5] = ($event) => generateCommitMsg("descriptive")),
+								disabled: gitBusy.value || generating.value,
+								title: "Title + bullet list of key changes"
+							}, "detailed", 8, _hoisted_56)
+						]),
+						createBaseVNode("div", _hoisted_57, [createBaseVNode("button", {
 							class: "pv-action-btn",
 							onClick: doCommit,
 							disabled: gitBusy.value || !commitMessage.value.trim()
-						}, " Commit ", 8, _hoisted_52), createBaseVNode("button", {
-							class: "pv-action-btn pv-push-btn",
-							onClick: _cache[3] || (_cache[3] = ($event) => confirmPush.value = true),
-							disabled: gitBusy.value,
-							title: "Push to remote"
-						}, [..._cache[18] || (_cache[18] = [createBaseVNode("svg", {
-							width: "13",
-							height: "13",
-							viewBox: "0 0 24 24",
-							fill: "none",
-							stroke: "currentColor",
-							"stroke-width": "2",
-							"stroke-linecap": "round",
-							"stroke-linejoin": "round"
-						}, [createBaseVNode("line", {
-							x1: "12",
-							y1: "19",
-							x2: "12",
-							y2: "5"
-						}), createBaseVNode("polyline", { points: "5 12 12 5 19 12" })], -1), createTextVNode(" Push ", -1)])], 8, _hoisted_53)])])
-					])]), createBaseVNode("div", _hoisted_54, [detail.value.containers.length ? (openBlock(), createElementBlock("div", _hoisted_55, [_cache[21] || (_cache[21] = createBaseVNode("div", { class: "pv-card-title" }, "Docker Compose", -1)), createBaseVNode("div", _hoisted_56, [(openBlock(true), createElementBlock(Fragment, null, renderList(detail.value.containers, (c) => {
+						}, " Commit ", 8, _hoisted_58)])
+					])]), createBaseVNode("div", _hoisted_59, [detail.value.containers.length ? (openBlock(), createElementBlock("div", _hoisted_60, [_cache[27] || (_cache[27] = createBaseVNode("div", { class: "pv-card-title" }, "Docker Compose", -1)), createBaseVNode("div", _hoisted_61, [(openBlock(true), createElementBlock(Fragment, null, renderList(detail.value.containers, (c) => {
 						return openBlock(), createElementBlock("div", {
 							key: c.name,
 							class: normalizeClass(["pv-container-row", { running: c.state.includes("running") }])
 						}, [
-							_cache[20] || (_cache[20] = createBaseVNode("span", { class: "pv-container-dot" }, null, -1)),
-							createBaseVNode("span", _hoisted_57, toDisplayString(c.name), 1),
-							createBaseVNode("span", _hoisted_58, toDisplayString(c.status || c.state), 1),
-							c.ports ? (openBlock(), createElementBlock("span", _hoisted_59, toDisplayString(c.ports), 1)) : createCommentVNode("", true)
+							_cache[26] || (_cache[26] = createBaseVNode("span", { class: "pv-container-dot" }, null, -1)),
+							createBaseVNode("span", _hoisted_62, toDisplayString(c.name), 1),
+							createBaseVNode("span", _hoisted_63, toDisplayString(c.status || c.state), 1),
+							c.ports ? (openBlock(), createElementBlock("span", _hoisted_64, toDisplayString(c.ports), 1)) : createCommentVNode("", true)
 						], 2);
-					}), 128))])])) : createCommentVNode("", true), sessions.value.length ? (openBlock(), createElementBlock("div", _hoisted_60, [_cache[22] || (_cache[22] = createBaseVNode("div", { class: "pv-card-title" }, "Recent sessions", -1)), createBaseVNode("div", _hoisted_61, [(openBlock(true), createElementBlock(Fragment, null, renderList(sessions.value, (s) => {
+					}), 128))])])) : createCommentVNode("", true), sessions.value.length ? (openBlock(), createElementBlock("div", _hoisted_65, [_cache[28] || (_cache[28] = createBaseVNode("div", { class: "pv-card-title" }, "Recent sessions", -1)), createBaseVNode("div", _hoisted_66, [(openBlock(true), createElementBlock(Fragment, null, renderList(sessions.value, (s) => {
 						return openBlock(), createElementBlock("div", {
 							key: s.id,
 							class: "pv-session-row",
 							onClick: ($event) => openSession(s)
-						}, [createBaseVNode("div", _hoisted_63, toDisplayString(s.name), 1), createBaseVNode("div", _hoisted_64, toDisplayString(fmtDate(s.updatedAt)), 1)], 8, _hoisted_62);
+						}, [createBaseVNode("div", _hoisted_68, toDisplayString(s.name), 1), createBaseVNode("div", _hoisted_69, toDisplayString(fmtDate(s.updatedAt)), 1)], 8, _hoisted_67);
 					}), 128))])])) : createCommentVNode("", true)])])], 64)) : activeTab.value === "commits" && detail.value ? (openBlock(), createElementBlock(Fragment, { key: 2 }, [
-						unpushedCommits.value.length ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [createBaseVNode("div", _hoisted_65, [_cache[23] || (_cache[23] = createBaseVNode("svg", {
+						createBaseVNode("div", _hoisted_70, [
+							createBaseVNode("div", _hoisted_71, [
+								_cache[29] || (_cache[29] = createBaseVNode("svg", {
+									width: "12",
+									height: "12",
+									viewBox: "0 0 24 24",
+									fill: "none",
+									stroke: "currentColor",
+									"stroke-width": "2",
+									"stroke-linecap": "round",
+									"stroke-linejoin": "round"
+								}, [createBaseVNode("polyline", { points: "22 12 18 12 15 21 9 3 6 12 2 12" })], -1)),
+								_cache[30] || (_cache[30] = createBaseVNode("span", { class: "pv-push-panel-label" }, "Remote", -1)),
+								detail.value.upstream ? (openBlock(), createElementBlock("span", _hoisted_72, toDisplayString(detail.value.upstream), 1)) : (openBlock(), createElementBlock("span", _hoisted_73, "no upstream set")),
+								detail.value.remoteUrl ? (openBlock(), createElementBlock("span", {
+									key: 2,
+									class: "pv-push-panel-url",
+									title: detail.value.remoteUrl
+								}, toDisplayString(detail.value.remoteUrl), 9, _hoisted_74)) : createCommentVNode("", true)
+							]),
+							detail.value.tags && detail.value.tags.length ? (openBlock(), createElementBlock("div", _hoisted_75, [
+								_cache[31] || (_cache[31] = createBaseVNode("svg", {
+									width: "12",
+									height: "12",
+									viewBox: "0 0 24 24",
+									fill: "none",
+									stroke: "currentColor",
+									"stroke-width": "2",
+									"stroke-linecap": "round",
+									"stroke-linejoin": "round"
+								}, [createBaseVNode("path", { d: "M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z" }), createBaseVNode("line", {
+									x1: "7",
+									y1: "7",
+									x2: "7.01",
+									y2: "7"
+								})], -1)),
+								_cache[32] || (_cache[32] = createBaseVNode("span", { class: "pv-push-panel-label" }, "Tags", -1)),
+								createBaseVNode("div", _hoisted_76, [(openBlock(true), createElementBlock(Fragment, null, renderList(detail.value.tags, (tag) => {
+									return openBlock(), createElementBlock("span", {
+										key: tag,
+										class: "pv-push-tag"
+									}, toDisplayString(tag), 1);
+								}), 128))])
+							])) : createCommentVNode("", true),
+							mrLink.value ? (openBlock(), createElementBlock("div", _hoisted_77, [
+								mrLink.value.type === "gitlab" ? (openBlock(), createElementBlock("svg", _hoisted_78, [..._cache[33] || (_cache[33] = [createStaticVNode("<path d=\"M190 340.1L254.5 143H125.5L190 340.1z\"></path><path d=\"M190 340.1L125.5 143H28.6L190 340.1z\" opacity=\".7\"></path><path d=\"M28.6 143L9.4 201.8a13.3 13.3 0 0 0 4.8 14.9L190 340.1 28.6 143z\" opacity=\".4\"></path><path d=\"M28.6 143h96.9L83.9 16.6c-1.8-5.5-9.4-5.5-11.2 0L28.6 143z\"></path><path d=\"M190 340.1L254.5 143h96.9L190 340.1z\" opacity=\".7\"></path><path d=\"M351.4 143l19.2 58.8a13.3 13.3 0 0 1-4.8 14.9L190 340.1 351.4 143z\" opacity=\".4\"></path><path d=\"M351.4 143h-96.9l41.6-126.4c1.8-5.5 9.4-5.5 11.2 0L351.4 143z\"></path>", 7)])])) : mrLink.value.type === "github" ? (openBlock(), createElementBlock("svg", _hoisted_79, [..._cache[34] || (_cache[34] = [createBaseVNode("path", { d: "M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844a9.59 9.59 0 0 1 2.504.337c1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.02 10.02 0 0 0 22 12.017C22 6.484 17.522 2 12 2z" }, null, -1)])])) : createCommentVNode("", true),
+								createBaseVNode("span", _hoisted_80, toDisplayString(mrLink.value.label), 1),
+								createBaseVNode("div", _hoisted_81, [createBaseVNode("a", {
+									class: "pv-mr-link",
+									href: mrLink.value.listUrl,
+									onClick: _cache[6] || (_cache[6] = withModifiers(($event) => openExternal(mrLink.value.listUrl), ["prevent"]))
+								}, "Open list", 8, _hoisted_82)])
+							])) : createCommentVNode("", true),
+							createBaseVNode("div", _hoisted_83, [createBaseVNode("button", {
+								class: "pv-action-btn pv-push-btn",
+								onClick: _cache[7] || (_cache[7] = ($event) => confirmPush.value = true),
+								disabled: gitBusy.value || !detail.value.upstream,
+								title: "Push to remote"
+							}, [_cache[35] || (_cache[35] = createBaseVNode("svg", {
+								width: "11",
+								height: "11",
+								viewBox: "0 0 24 24",
+								fill: "none",
+								stroke: "currentColor",
+								"stroke-width": "2",
+								"stroke-linecap": "round",
+								"stroke-linejoin": "round"
+							}, [createBaseVNode("line", {
+								x1: "12",
+								y1: "19",
+								x2: "12",
+								y2: "5"
+							}), createBaseVNode("polyline", { points: "5 12 12 5 19 12" })], -1)), createTextVNode(" Push" + toDisplayString(unpushedCount.value ? ` (${unpushedCount.value})` : ""), 1)], 8, _hoisted_84)])
+						]),
+						unpushedCommits.value.length ? (openBlock(), createElementBlock(Fragment, { key: 0 }, [createBaseVNode("div", _hoisted_85, [_cache[36] || (_cache[36] = createBaseVNode("svg", {
 							width: "11",
 							height: "11",
 							viewBox: "0 0 24 24",
@@ -8140,34 +8371,34 @@
 							y1: "19",
 							x2: "12",
 							y2: "5"
-						}), createBaseVNode("polyline", { points: "5 12 12 5 19 12" })], -1)), createTextVNode(" " + toDisplayString(unpushedCommits.value.length) + " unpushed ", 1)]), createBaseVNode("div", _hoisted_66, [(openBlock(true), createElementBlock(Fragment, null, renderList(unpushedCommits.value, (c) => {
+						}), createBaseVNode("polyline", { points: "5 12 12 5 19 12" })], -1)), createTextVNode(" " + toDisplayString(unpushedCommits.value.length) + " unpushed commit" + toDisplayString(unpushedCommits.value.length > 1 ? "s" : ""), 1)]), createBaseVNode("div", _hoisted_86, [createBaseVNode("div", _hoisted_87, [createBaseVNode("span", _hoisted_88, [_cache[37] || (_cache[37] = createStaticVNode("<svg width=\"10\" height=\"10\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2.5\"><circle cx=\"12\" cy=\"12\" r=\"4\"></circle><line x1=\"12\" y1=\"2\" x2=\"12\" y2=\"6\"></line><line x1=\"12\" y1=\"18\" x2=\"12\" y2=\"22\"></line><line x1=\"4.93\" y1=\"4.93\" x2=\"7.76\" y2=\"7.76\"></line><line x1=\"16.24\" y1=\"16.24\" x2=\"19.07\" y2=\"19.07\"></line><line x1=\"2\" y1=\"12\" x2=\"6\" y2=\"12\"></line><line x1=\"18\" y1=\"12\" x2=\"22\" y2=\"12\"></line></svg>", 1)), createTextVNode(" " + toDisplayString(unpushedCommits.value[0]?.author), 1)]), createBaseVNode("span", _hoisted_89, toDisplayString(unpushedCommits.value[unpushedCommits.value.length - 1]?.date) + " – " + toDisplayString(unpushedCommits.value[0]?.date), 1)]), createBaseVNode("div", _hoisted_90, [(openBlock(true), createElementBlock(Fragment, null, renderList(unpushedCommits.value, (c) => {
 							return openBlock(), createElementBlock("div", {
 								key: c.hash,
 								class: "pv-commit-item"
 							}, [
-								createBaseVNode("span", _hoisted_67, toDisplayString(c.hash), 1),
-								createBaseVNode("span", _hoisted_68, toDisplayString(c.message), 1),
-								createBaseVNode("span", _hoisted_69, toDisplayString(c.author), 1),
-								createBaseVNode("span", _hoisted_70, toDisplayString(c.date), 1)
+								createBaseVNode("span", _hoisted_91, toDisplayString(c.hash), 1),
+								createBaseVNode("span", _hoisted_92, toDisplayString(c.message), 1),
+								createBaseVNode("span", _hoisted_93, toDisplayString(c.author), 1),
+								createBaseVNode("span", _hoisted_94, toDisplayString(c.date), 1)
 							]);
-						}), 128))])], 64)) : createCommentVNode("", true),
-						detail.value.commits.length ? (openBlock(), createElementBlock("div", _hoisted_71, "History")) : createCommentVNode("", true),
-						createBaseVNode("div", _hoisted_72, [(openBlock(true), createElementBlock(Fragment, null, renderList(detail.value.commits, (c) => {
+						}), 128))])])], 64)) : createCommentVNode("", true),
+						detail.value.commits.length ? (openBlock(), createElementBlock("div", _hoisted_95, "History")) : createCommentVNode("", true),
+						createBaseVNode("div", _hoisted_96, [(openBlock(true), createElementBlock(Fragment, null, renderList(detail.value.commits, (c) => {
 							return openBlock(), createElementBlock("div", {
 								key: c.hash,
 								class: "pv-commit-item"
 							}, [
-								createBaseVNode("span", _hoisted_73, toDisplayString(c.hash), 1),
-								createBaseVNode("span", _hoisted_74, toDisplayString(c.message), 1),
-								createBaseVNode("span", _hoisted_75, toDisplayString(c.author), 1),
-								createBaseVNode("span", _hoisted_76, toDisplayString(c.date), 1)
+								createBaseVNode("span", _hoisted_97, toDisplayString(c.hash), 1),
+								createBaseVNode("span", _hoisted_98, toDisplayString(c.message), 1),
+								createBaseVNode("span", _hoisted_99, toDisplayString(c.author), 1),
+								createBaseVNode("span", _hoisted_100, toDisplayString(c.date), 1)
 							]);
-						}), 128)), !detail.value.commits.length ? (openBlock(), createElementBlock("div", _hoisted_77, "No commits found.")) : createCommentVNode("", true)])
-					], 64)) : activeTab.value === "files" ? (openBlock(), createElementBlock("div", _hoisted_78, [createBaseVNode("div", _hoisted_79, [createBaseVNode("div", _hoisted_80, [withDirectives(createBaseVNode("input", {
-						"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => treeSearch.value = $event),
+						}), 128)), !detail.value.commits.length ? (openBlock(), createElementBlock("div", _hoisted_101, "No commits found.")) : createCommentVNode("", true)])
+					], 64)) : activeTab.value === "files" ? (openBlock(), createElementBlock("div", _hoisted_102, [createBaseVNode("div", _hoisted_103, [createBaseVNode("div", _hoisted_104, [withDirectives(createBaseVNode("input", {
+						"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => treeSearch.value = $event),
 						class: "pv-tree-search-input",
 						placeholder: "Filter files…"
-					}, null, 512), [[vModelText, treeSearch.value]])]), createBaseVNode("div", _hoisted_81, [treeLoading.value ? (openBlock(), createElementBlock("div", _hoisted_82, "Loading…")) : (openBlock(true), createElementBlock(Fragment, { key: 1 }, renderList(filteredTree.value, (node) => {
+					}, null, 512), [[vModelText, treeSearch.value]])]), createBaseVNode("div", _hoisted_105, [treeLoading.value ? (openBlock(), createElementBlock("div", _hoisted_106, "Loading…")) : (openBlock(true), createElementBlock(Fragment, { key: 1 }, renderList(filteredTree.value, (node) => {
 						return openBlock(), createBlock(_sfc_main$2, {
 							key: node.path,
 							node,
@@ -8175,7 +8406,7 @@
 							onOpen: openFileFromTree
 						}, null, 8, ["node", "search"]);
 					}), 128))])])])) : activeTab.value === "sessions" ? (openBlock(), createElementBlock(Fragment, { key: 4 }, [
-						activeSessions.value.length ? (openBlock(), createElementBlock("div", _hoisted_83, [_cache[24] || (_cache[24] = createBaseVNode("div", {
+						activeSessions.value.length ? (openBlock(), createElementBlock("div", _hoisted_107, [_cache[38] || (_cache[38] = createBaseVNode("div", {
 							class: "pv-commits-section-label",
 							style: { "margin-top": "0" }
 						}, [createBaseVNode("svg", {
@@ -8192,7 +8423,7 @@
 								key: s.id,
 								class: "pv-asession-row",
 								onClick: ($event) => openSession(s)
-							}, [createBaseVNode("div", _hoisted_85, toDisplayString(s.name || s.id.slice(0, 12)), 1), createBaseVNode("span", { class: normalizeClass(["pv-asession-badge", s.busy ? "busy" : "idle"]) }, toDisplayString(s.busy ? "working" : "idle"), 3)], 8, _hoisted_84);
+							}, [createBaseVNode("div", _hoisted_109, toDisplayString(s.name || s.id?.slice(0, 12) || "?"), 1), createBaseVNode("span", { class: normalizeClass(["pv-asession-badge", s.busy ? "busy" : "idle"]) }, toDisplayString(s.busy ? "working" : "idle"), 3)], 8, _hoisted_108);
 						}), 128))])) : createCommentVNode("", true),
 						sessions.value.length ? (openBlock(), createElementBlock("div", {
 							key: 1,
@@ -8206,20 +8437,20 @@
 								key: s.id,
 								class: "pv-asession-row",
 								onClick: ($event) => openSession(s)
-							}, [createBaseVNode("div", _hoisted_87, toDisplayString(s.name), 1), createBaseVNode("div", _hoisted_88, toDisplayString(fmtDate(s.updatedAt)), 1)], 8, _hoisted_86);
+							}, [createBaseVNode("div", _hoisted_111, toDisplayString(s.name), 1), createBaseVNode("div", _hoisted_112, toDisplayString(fmtDate(s.updatedAt)), 1)], 8, _hoisted_110);
 						}), 128))], 4)) : createCommentVNode("", true),
-						!activeSessions.value.length && !sessions.value.length ? (openBlock(), createElementBlock("div", _hoisted_89, "No sessions found.")) : createCommentVNode("", true)
+						!activeSessions.value.length && !sessions.value.length ? (openBlock(), createElementBlock("div", _hoisted_113, "No sessions found.")) : createCommentVNode("", true)
 					], 64)) : createCommentVNode("", true)])
 				], 64)), confirmPush.value ? (openBlock(), createElementBlock("div", {
 					key: 2,
 					class: "pv-dialog-overlay",
-					onClick: _cache[6] || (_cache[6] = withModifiers(($event) => confirmPush.value = false, ["self"]))
-				}, [createBaseVNode("div", _hoisted_90, [
-					_cache[25] || (_cache[25] = createBaseVNode("div", { class: "pv-dialog-title" }, "Push to remote?", -1)),
-					_cache[26] || (_cache[26] = createBaseVNode("div", { class: "pv-dialog-body" }, "This will push the current branch to origin. Are you sure?", -1)),
-					createBaseVNode("div", _hoisted_91, [createBaseVNode("button", {
+					onClick: _cache[10] || (_cache[10] = withModifiers(($event) => confirmPush.value = false, ["self"]))
+				}, [createBaseVNode("div", _hoisted_114, [
+					_cache[39] || (_cache[39] = createBaseVNode("div", { class: "pv-dialog-title" }, "Push to remote?", -1)),
+					_cache[40] || (_cache[40] = createBaseVNode("div", { class: "pv-dialog-body" }, "This will push the current branch to origin. Are you sure?", -1)),
+					createBaseVNode("div", _hoisted_115, [createBaseVNode("button", {
 						class: "pv-dialog-cancel",
-						onClick: _cache[5] || (_cache[5] = ($event) => confirmPush.value = false)
+						onClick: _cache[9] || (_cache[9] = ($event) => confirmPush.value = false)
 					}, "Cancel"), createBaseVNode("button", {
 						class: "pv-action-btn pv-push-btn",
 						onClick: doPush
@@ -8388,7 +8619,7 @@
 				showJsonl: (id) => window.__sb?.showJsonl?.(id),
 				launchConfig: (id) => window.__sb?.launchConfig?.(id),
 				renameSession: (id, name) => window.__sb?.renameSession?.(id, name),
-				newSession: (project) => window.__sb?.newSession?.(project),
+				newSession: (project, btn) => window.__sb?.newSession?.(project, btn),
 				openSettings: (path) => window.__sb?.openSettings?.(path),
 				archiveSessions: (sessions) => window.__sb?.archiveSessions?.(sessions),
 				removeProject: (path) => window.__sb?.removeProject?.(path)
@@ -8405,13 +8636,16 @@
 			const accountDropdownCallbacks = { switchAccount: (id) => window.__sb?.switchAccount?.(id) };
 			const projectsCallbacks = {
 				openProject: (p) => window.__sb?.openProject?.(p),
-				newSession: (p) => window.__sb?.newSession?.(p),
+				newSession: (p, btn) => window.__sb?.newSession?.(p, btn),
 				addProject: () => window.__sb?.addProject?.(),
 				projectRemoved: () => window.__sb?.projectRemoved?.()
 			};
 			const projectViewerCallbacks = {
-				newSession: (p) => window.__sb?.newSession?.(p),
-				onTabChange: (tab) => window.__sb?.onPvTabChange?.(tab)
+				newSession: (p, btn) => window.__sb?.newSession?.(p, btn),
+				onTabChange: (tab) => window.__sb?.onPvTabChange?.(tab),
+				worktreeDeleted: (worktreePath) => {
+					store.projects = store.projects.filter((p) => p.projectPath !== worktreePath);
+				}
 			};
 			onMounted(async () => {
 				Object.assign(window.vuePlans, {

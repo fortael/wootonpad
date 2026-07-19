@@ -6,7 +6,7 @@
       <span class="worktree-branch-icon" v-html="branchSvg" @click.stop="toggle"></span>
       <span class="worktree-name" @click.stop="toggle">{{ worktreeName }}</span>
       <button class="worktree-hide-btn" data-tooltip="Hide worktree" @click.stop="$emit('remove-project', project.projectPath)" v-html="closeSvg"></button>
-      <button class="project-new-btn worktree-new-btn" data-tooltip="New session in worktree" @click.stop="$emit('new-session', project)" v-html="plusSmSvg"></button>
+      <button class="project-new-btn worktree-new-btn" data-tooltip="New session in worktree" @click.stop="$emit('new-session', project, $event.currentTarget)" v-html="plusSmSvg"></button>
     </div>
 
     <!-- Project header -->
@@ -16,7 +16,7 @@
       <span class="project-name" @click.stop="toggle">{{ shortName }}</span>
       <button class="project-settings-btn" data-tooltip="Project settings" @click.stop="$emit('settings', project.projectPath)" v-html="gearSvg"></button>
       <button class="project-archive-btn" data-tooltip="Archive all sessions" @click.stop="archiveAll" v-html="archiveSvg"></button>
-      <button class="project-new-btn" data-tooltip="New session" @click.stop="$emit('new-session', project)" v-html="plusSvg"></button>
+      <button class="project-new-btn" data-tooltip="New session" @click.stop="$emit('new-session', project, $event.currentTarget)" v-html="plusSvg"></button>
     </div>
 
     <!-- Sessions list -->
@@ -137,7 +137,7 @@
         @jsonl="(id) => $emit('jsonl', id)"
         @launch-config="(id) => $emit('launch-config', id)"
         @rename="(id, name) => $emit('rename', id, name)"
-        @new-session="(p) => $emit('new-session', p)"
+        @new-session="(p, btn) => $emit('new-session', p, btn)"
         @settings="(path) => $emit('settings', path)"
         @archive-sessions="(sessions) => $emit('archive-sessions', sessions)"
         @remove-project="(path) => $emit('remove-project', path)"

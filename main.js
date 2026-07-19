@@ -467,7 +467,7 @@ ipcMain.handle('get-project-info', (_event, projectPath) => {
 ipcMain.handle('get-project-detail', (_event, projectPath) => {
   if (!projectPath || !fs.existsSync(projectPath)) return null;
   const { execSync } = require('child_process');
-  const detail = { branch: null, commits: [], unpushedCommits: [], changedFiles: [], totalAdded: 0, totalDeleted: 0, containers: [] };
+  const detail = { branch: null, upstream: null, remoteUrl: null, tags: [], worktreePaths: [], commits: [], unpushedCommits: [], changedFiles: [], totalAdded: 0, totalDeleted: 0, containers: [] };
   try {
     detail.branch = execSync('git rev-parse --abbrev-ref HEAD', {
       cwd: projectPath, encoding: 'utf8', timeout: 5000,
@@ -494,7 +494,37 @@ ipcMain.handle('get-project-detail', (_event, projectPath) => {
           return { hash, message, author, date };
         });
       }
+      const upstream = execSync('git rev-parse --abbrev-ref --symbolic-full-name @{u}', {
+        cwd: projectPath, encoding: 'utf8', timeout: 3000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      detail.upstream = upstream;
+      const remoteName = upstream.split('/')[0];
+      try {
+        detail.remoteUrl = execSync(`git remote get-url ${remoteName}`, {
+          cwd: projectPath, encoding: 'utf8', timeout: 3000,
+          stdio: ['ignore', 'pipe', 'ignore'],
+        }).trim();
+      } catch {}
     } catch {} // no upstream set — just leave empty
+    try {
+      const tagsRaw = execSync('git tag --sort=-version:refname', {
+        cwd: projectPath, encoding: 'utf8', timeout: 3000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      detail.tags = tagsRaw ? tagsRaw.split('\n').filter(Boolean).slice(0, 20) : [];
+    } catch { detail.tags = []; }
+    try {
+      const wtRaw = execSync('git worktree list --porcelain', {
+        cwd: projectPath, encoding: 'utf8', timeout: 3000,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      // Each worktree block is separated by blank line; first entry is the main worktree
+      detail.worktreePaths = wtRaw.split('\n\n').slice(1).map(block => {
+        const match = block.match(/^worktree (.+)/m);
+        return match ? match[1].trim() : null;
+      }).filter(Boolean);
+    } catch { detail.worktreePaths = []; }
     const numstat = execSync('git diff --numstat HEAD', {
       cwd: projectPath, encoding: 'utf8', timeout: 5000,
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -549,7 +579,7 @@ ipcMain.handle('git-branches', (_event, projectPath) => {
   try {
     const current = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 }).trim();
     const all = execFileSync('git', ['branch'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 }).trim();
-    const branches = all.split('\n').map(b => b.replace(/^\*\s*/, '').trim()).filter(Boolean);
+    const branches = all.split('\n').map(b => b.replace(/^[*+]\s*/, '').trim()).filter(Boolean);
     let remotes = [];
     try {
       const raw = execFileSync('git', ['branch', '-r'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 }).trim();
@@ -607,16 +637,19 @@ ipcMain.handle('git-push', (_event, projectPath) => {
   }
 });
 
-ipcMain.handle('git-generate-commit-msg', async (_event, projectPath) => {
+ipcMain.handle('git-generate-commit-msg', async (_event, projectPath, style = 'short') => {
   const { execSync, spawn } = require('child_process');
   try {
     const diff = execSync('git diff HEAD', { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] });
     if (!diff.trim()) return { ok: false, error: 'No changes to describe' };
     const globalSettings = getSetting('global') || {};
-    const instruction = globalSettings.commitMessagePrompt || COMMIT_MSG_PROMPT_DEFAULT;
-    const prompt = `${instruction}\n\n${diff.slice(0, 8000)}`;
+    const baseInstruction = globalSettings.commitMessagePrompt || COMMIT_MSG_PROMPT_DEFAULT;
+    const styleSuffix = style === 'descriptive'
+      ? ' Write a short title line followed by a blank line and a concise bullet list of key changes (3-5 bullets max). Use conventional commit format.'
+      : ' Write a single short sentence (max 72 chars). Use conventional commit format (feat/fix/refactor/docs/chore).';
+    const prompt = `${baseInstruction}${styleSuffix}\n\nOutput ONLY the commit message, no explanation:\n\n${diff.slice(0, 8000)}`;
     const msg = await new Promise((resolve, reject) => {
-      const child = spawn('claude', ['-p', prompt], { cwd: projectPath });
+      const child = spawn('claude', ['-p', prompt, '--no-session-persistence'], { cwd: projectPath });
       let stdout = '', stderr = '';
       child.stdout.on('data', d => { stdout += d; });
       child.stderr.on('data', d => { stderr += d; });
@@ -631,6 +664,45 @@ ipcMain.handle('git-generate-commit-msg', async (_event, projectPath) => {
     if (!msg) return { ok: false, error: 'No output from claude' };
     return { ok: true, message: msg };
   } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('delete-worktree', (_event, projectPath, worktreePath) => {
+  const { execFileSync } = require('child_process');
+  const { setProjectGitCache } = require('./db');
+  let branch = null;
+  try {
+    branch = execFileSync('git', ['-C', worktreePath, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+      encoding: 'utf8', timeout: 5000,
+    }).trim();
+  } catch {}
+  // Remove the worktree — idempotent: ignore "not a working tree" error
+  try {
+    execFileSync('git', ['-C', projectPath, 'worktree', 'remove', worktreePath, '--force'], {
+      encoding: 'utf8', timeout: 10000,
+    });
+  } catch (e) {
+    if (!e.message.includes('is not a working tree') && !e.message.includes('not a git')) {
+      return { ok: false, error: e.message };
+    }
+  }
+  // Prune stale worktree refs
+  try { execFileSync('git', ['-C', projectPath, 'worktree', 'prune'], { encoding: 'utf8', timeout: 5000 }); } catch {}
+  // Delete the branch
+  if (branch && branch !== 'HEAD' && branch !== 'main' && branch !== 'master') {
+    try { execFileSync('git', ['-C', projectPath, 'branch', '-D', branch], { encoding: 'utf8', timeout: 5000 }); } catch {}
+  }
+  // Clear project git cache for the worktree path so stale data doesn't show
+  try { setProjectGitCache(worktreePath, { branch: null, upstream: null, remoteUrl: null, tags: [], commits: [], unpushedCommits: [], changedFiles: [], totalAdded: 0, totalDeleted: 0, containers: [] }); } catch {}
+  return { ok: true, branch };
+});
+
+ipcMain.handle('get-git-user-info', (_event, projectPath) => {
+  const { execFileSync } = require('child_process');
+  try {
+    const name = execFileSync('git', ['config', 'user.name'], { cwd: projectPath, encoding: 'utf8' }).trim();
+    const email = execFileSync('git', ['config', 'user.email'], { cwd: projectPath, encoding: 'utf8' }).trim();
+    return { ok: true, name, email };
+  } catch { return { ok: false, name: '', email: '' }; }
 });
 
 ipcMain.handle('get-file-tree', (_event, projectPath) => {
@@ -1497,6 +1569,19 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
           claudeCmd += ` --permission-mode "${sessionOptions.permissionMode}"`;
         }
         if (sessionOptions.worktree) {
+          // Ensure .claude/worktrees/ is in .gitignore so worktree dirs aren't tracked
+          try {
+            const gitignorePath = path.join(projectPath, '.gitignore');
+            const entry = '.claude/worktrees/';
+            let content = '';
+            try { content = fs.readFileSync(gitignorePath, 'utf8'); } catch {}
+            const lines = content.split('\n').map(l => l.trim());
+            const alreadyCovered = lines.some(l => l === entry || l === '.claude/' || l === '.claude');
+            if (!alreadyCovered) {
+              const addition = (content.length && !content.endsWith('\n') ? '\n' : '') + entry + '\n';
+              fs.appendFileSync(gitignorePath, addition, 'utf8');
+            }
+          } catch {}
           claudeCmd += ' --worktree';
           if (sessionOptions.worktreeName) {
             claudeCmd += ` "${sessionOptions.worktreeName}"`;

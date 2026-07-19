@@ -283,7 +283,7 @@ body { display: flex; flex-direction: column; }
   background: var(--surface-panel);
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
   border-right: none;
   flex-shrink: 0;
 }
@@ -292,7 +292,7 @@ body { display: flex; flex-direction: column; }
   width: 4px;
   cursor: col-resize;
   background: transparent;
-  height: 100vh;
+  height: 100%;
   flex-shrink: 0;
   position: relative;
   z-index: 10;
@@ -5049,6 +5049,45 @@ body.hide-avatars .grid-card-avatar {
   border-color: rgba(99,102,241,0.5);
   color: #a5b4fc;
 }
+.pv-wt-btn--deletable {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.pv-wt-del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: transparent;
+  color: rgba(255,255,255,0.3);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.12s, color 0.12s;
+  flex-shrink: 0;
+  margin-left: 1px;
+}
+.pv-wt-del:hover {
+  background: rgba(239,68,68,0.2);
+  color: #f87171;
+}
+
+.pv-wt-count-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  background: rgba(99,102,241,0.15);
+  border: 1px solid rgba(99,102,241,0.3);
+  color: #a5b4fc;
+  border-radius: 8px;
+  padding: 1px 6px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
 
 .pv-new-btn {
   background: rgba(59,130,246,0.12);
@@ -5461,14 +5500,13 @@ body.hide-avatars .grid-card-avatar {
 .pv-commit-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
   margin-top: 8px;
-  flex-wrap: wrap;
 }
 .pv-commit-btns {
   display: flex;
   gap: 6px;
-  margin-left: auto;
 }
 .pv-gen-btn { flex-shrink: 0; }
 .pv-action-btn {
@@ -5500,6 +5538,57 @@ body.hide-avatars .grid-card-avatar {
   background: rgba(234,179,8,0.2);
   border-color: rgba(234,179,8,0.4);
 }
+.pv-push-btn--inline {
+  margin-left: auto;
+  padding: 2px 9px;
+  font-size: 11px;
+}
+
+/* ── Git user identity ──────────────────────────────────────────── */
+.pv-git-user {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.35);
+}
+.pv-git-user svg { flex-shrink: 0; opacity: 0.6; }
+.pv-git-user-name { color: rgba(255,255,255,0.5); }
+.pv-git-user-email { color: rgba(255,255,255,0.3); }
+
+/* ── Generate row ───────────────────────────────────────────────── */
+.pv-gen-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.pv-gen-icon { flex-shrink: 0; color: rgba(165,180,252,0.7); }
+.pv-gen-label {
+  font-size: 11px;
+  color: rgba(255,255,255,0.4);
+  white-space: nowrap;
+}
+.pv-gen-style-btn {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(99,102,241,0.3);
+  background: rgba(99,102,241,0.1);
+  color: #a5b4fc;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s, border-color 0.12s;
+  white-space: nowrap;
+}
+.pv-gen-style-btn:hover:not(:disabled) {
+  background: rgba(99,102,241,0.22);
+  border-color: rgba(99,102,241,0.5);
+}
+.pv-gen-style-btn:disabled { opacity: 0.35; cursor: default; }
 
 /* ── Container dot ──────────────────────────────────────────────── */
 .pv-container-dot {
@@ -5673,6 +5762,137 @@ body.hide-avatars .grid-card-avatar {
   border-left: 2px solid rgba(251,191,36,0.3);
   padding-left: 8px;
 }
+
+/* ── Push destination panel ─────────────────────────────────────── */
+.pv-push-panel {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pv-push-panel-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.pv-push-panel-row > svg { flex-shrink: 0; margin-top: 1px; opacity: 0.5; }
+.pv-push-panel-label {
+  flex-shrink: 0;
+  color: rgba(255,255,255,0.3);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  width: 42px;
+}
+.pv-push-panel-row--mr .pv-push-panel-label {
+  width: auto;
+}
+.pv-push-panel-val {
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  font-size: 12px;
+  color: #a5b4fc;
+  flex-shrink: 0;
+}
+.pv-push-panel-val--muted { color: rgba(255,255,255,0.25); font-style: italic; }
+.pv-push-panel-url {
+  font-size: 11px;
+  color: rgba(255,255,255,0.25);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-left: 4px;
+}
+.pv-push-panel-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  flex: 1;
+}
+.pv-push-tag {
+  font-size: 10px;
+  font-family: ui-monospace, 'Cascadia Code', monospace;
+  padding: 1px 7px;
+  border-radius: 8px;
+  background: rgba(52,211,153,0.1);
+  border: 1px solid rgba(52,211,153,0.2);
+  color: #6ee7b7;
+}
+.pv-push-panel-row--mr { align-items: center; }
+.pv-mr-links {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pv-mr-link {
+  font-size: 11px;
+  color: rgba(255,255,255,0.45);
+  text-decoration: none;
+  padding: 2px 8px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.1);
+  transition: color 0.12s, border-color 0.12s, background 0.12s;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pv-mr-link:hover {
+  color: rgba(255,255,255,0.8);
+  border-color: rgba(255,255,255,0.2);
+  background: rgba(255,255,255,0.05);
+}
+
+.pv-push-panel-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  margin-top: 2px;
+}
+
+/* ── Unpushed commits panel wrapper ─────────────────────────────── */
+.pv-commit-panel {
+  border: 1px solid rgba(251,191,36,0.15);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+.pv-commit-panel-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 12px;
+  background: rgba(251,191,36,0.05);
+  border-bottom: 1px solid rgba(251,191,36,0.1);
+  font-size: 11px;
+  color: rgba(255,255,255,0.35);
+}
+.pv-commit-panel-stat {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.pv-commit-panel-stat svg { opacity: 0.5; }
+.pv-commit-panel .pv-commit-list-full {
+  margin: 0;
+  border-radius: 0;
+  background: none;
+}
+.pv-commit-panel .pv-commit-list-full--unpushed .pv-commit-item {
+  border-left: none;
+  padding-left: 12px;
+}
+.pv-commit-panel .pv-commit-item {
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.pv-commit-panel .pv-commit-item:last-child { border-bottom: none; }
 
 /* ── Files tab / tree ───────────────────────────────────────────── */
 .pv-files-layout {

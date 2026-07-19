@@ -103,7 +103,7 @@ function onFork(id) { props.callbacks.forkSession?.(id); }
 function onJsonl(id) { props.callbacks.showJsonl?.(id); }
 function onLaunchConfig(id) { props.callbacks.launchConfig?.(id); }
 function onRename(id, name) { props.callbacks.renameSession?.(id, name); }
-function onNewSession(project) { props.callbacks.newSession?.(project); }
+function onNewSession(project, btn) { props.callbacks.newSession?.(project, btn); }
 function onSettings(path) { props.callbacks.openSettings?.(path); }
 function onArchiveSessions(sessions) { props.callbacks.archiveSessions?.(sessions); }
 function onRemoveProject(path) { props.callbacks.removeProject?.(path); }

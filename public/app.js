@@ -1533,6 +1533,7 @@ window.__sb = {
         loadProjects();
       }
     } else if (tabName === 'plans') {
+      hideAllViewers();
       loadPlans();
     } else if (tabName === 'stats') {
       saveUiState({ panel: 'stats' });
@@ -1541,8 +1542,10 @@ window.__sb = {
       loadStats();
     } else if (tabName === 'memory') {
       saveUiState({ panel: 'memory' });
+      hideAllViewers();
       loadMemories();
     } else if (tabName === 'accounts') {
+      hideAllViewers();
       renderAccountsPanel();
       refreshAccountUsage().then(() => renderAccountsPanel());
     } else if (tabName === 'projects') {
@@ -1660,8 +1663,8 @@ window.__sb = {
     refreshSidebar();
   },
 
-  newSession: (project) => {
-    if (typeof showNewSessionPopover === 'function') showNewSessionPopover(project);
+  newSession: (project, anchorEl) => {
+    if (typeof showNewSessionPopover === 'function') showNewSessionPopover(project, anchorEl);
   },
 
   openSettings: (path) => openSettingsViewer('project', path),

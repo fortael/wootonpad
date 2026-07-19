@@ -40,13 +40,12 @@
                 <span v-if="project.unpushedCount" class="project-unpushed-badge">{{ project.unpushedCount }}</span>
               </div>
               <div class="session-subtitle" :title="project.projectPath">{{ project.projectPath }}</div>
-              <div class="session-meta">
-                {{ baseMeta(project) }}<template v-if="projectInfo[project.projectPath]?.branch">
-                  &nbsp;·&nbsp;<span class="project-env-branch-icon">⎇</span>
-                  {{ projectInfo[project.projectPath].branch }}
-                  <span v-if="projectInfo[project.projectPath].added" class="project-env-added"> +{{ projectInfo[project.projectPath].added }}</span>
-                  <span v-if="projectInfo[project.projectPath].deleted" class="project-env-deleted"> −{{ projectInfo[project.projectPath].deleted }}</span>
-                </template>
+              <div class="session-meta">{{ baseMeta(project) }}</div>
+              <div v-if="projectInfo[project.projectPath]?.branch" class="session-meta project-branch-meta">
+                <span class="project-env-branch-icon">⎇</span>
+                {{ projectInfo[project.projectPath].branch }}
+                <span v-if="projectInfo[project.projectPath].added" class="project-env-added">+{{ projectInfo[project.projectPath].added }}</span>
+                <span v-if="projectInfo[project.projectPath].deleted" class="project-env-deleted">−{{ projectInfo[project.projectPath].deleted }}</span>
               </div>
               <div v-if="projectInfo[project.projectPath]?.containers?.length" class="project-card-env">
                 <div class="project-env-containers-box">
@@ -81,7 +80,7 @@
               <button
                 class="project-card-new-btn"
                 data-tooltip="New session"
-                @click.stop="callbacks.newSession?.(project)"
+                @click.stop="callbacks.newSession?.(project, $event.currentTarget)"
               >
                 <svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
                   <line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/>
@@ -117,14 +116,17 @@ const sortOptions = [['name', 'Name'], ['changes', 'Changes']];
 
 let queueGen = 0;
 
+const WORKTREE_RE = /\/\.claude\/worktrees\/[^/]+\/?$/;
+
 const filteredProjects = computed(() => {
   const q = searchQuery.value.trim().toLowerCase();
+  const base = projects.value.filter(p => !WORKTREE_RE.test(p.projectPath));
   let list = q
-    ? projects.value.filter(p => {
+    ? base.filter(p => {
         const name = p.projectPath.split('/').filter(Boolean).pop() || '';
         return name.toLowerCase().includes(q) || p.projectPath.toLowerCase().includes(q);
       })
-    : [...projects.value];
+    : [...base];
 
   if (sortOrder.value === 'name') {
     list.sort((a, b) => {

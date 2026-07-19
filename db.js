@@ -127,6 +127,14 @@ const migrations = [
       )
     `);
   },
+  // v6: Add upstream, remoteUrl, tags columns to project_git_cache.
+  (db) => {
+    db.exec(`
+      ALTER TABLE project_git_cache ADD COLUMN upstream TEXT;
+      ALTER TABLE project_git_cache ADD COLUMN remoteUrl TEXT;
+      ALTER TABLE project_git_cache ADD COLUMN tags TEXT NOT NULL DEFAULT '[]';
+    `);
+  },
 ];
 
 const currentDbVersion = (() => {
@@ -393,10 +401,13 @@ function pgc() {
     getAll: db.prepare('SELECT projectPath, unpushedCount, changedCount FROM project_git_cache'),
     upsert: db.prepare(`
       INSERT INTO project_git_cache
-        (projectPath, branch, unpushedCount, changedCount, totalAdded, totalDeleted, containers, unpushedCommits, changedFiles, commits, updatedAt)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (projectPath, branch, upstream, remoteUrl, tags, unpushedCount, changedCount, totalAdded, totalDeleted, containers, unpushedCommits, changedFiles, commits, updatedAt)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(projectPath) DO UPDATE SET
         branch = excluded.branch,
+        upstream = excluded.upstream,
+        remoteUrl = excluded.remoteUrl,
+        tags = excluded.tags,
         unpushedCount = excluded.unpushedCount,
         changedCount = excluded.changedCount,
         totalAdded = excluded.totalAdded,
@@ -416,6 +427,7 @@ function getProjectGitCache(projectPath) {
   if (!row) return null;
   return {
     ...row,
+    tags: JSON.parse(row.tags || '[]'),
     containers: JSON.parse(row.containers || '[]'),
     unpushedCommits: JSON.parse(row.unpushedCommits || '[]'),
     changedFiles: JSON.parse(row.changedFiles || '[]'),
@@ -427,6 +439,9 @@ function setProjectGitCache(projectPath, data) {
   pgc().upsert.run(
     projectPath,
     data.branch || null,
+    data.upstream || null,
+    data.remoteUrl || null,
+    JSON.stringify(data.tags || []),
     data.unpushedCommits?.length || 0,
     data.changedFiles?.length || 0,
     data.totalAdded || 0,

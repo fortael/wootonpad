@@ -268,7 +268,7 @@ const sidebarCallbacks = {
   showJsonl: (id) => window.__sb?.showJsonl?.(id),
   launchConfig: (id) => window.__sb?.launchConfig?.(id),
   renameSession: (id, name) => window.__sb?.renameSession?.(id, name),
-  newSession: (project) => window.__sb?.newSession?.(project),
+  newSession: (project, btn) => window.__sb?.newSession?.(project, btn),
   openSettings: (path) => window.__sb?.openSettings?.(path),
   archiveSessions: (sessions) => window.__sb?.archiveSessions?.(sessions),
   removeProject: (path) => window.__sb?.removeProject?.(path),
@@ -296,14 +296,17 @@ const accountDropdownCallbacks = {
 
 const projectsCallbacks = {
   openProject: (p) => window.__sb?.openProject?.(p),
-  newSession: (p) => window.__sb?.newSession?.(p),
+  newSession: (p, btn) => window.__sb?.newSession?.(p, btn),
   addProject: () => window.__sb?.addProject?.(),
   projectRemoved: () => window.__sb?.projectRemoved?.(),
 };
 
 const projectViewerCallbacks = {
-  newSession: (p) => window.__sb?.newSession?.(p),
+  newSession: (p, btn) => window.__sb?.newSession?.(p, btn),
   onTabChange: (tab) => window.__sb?.onPvTabChange?.(tab),
+  worktreeDeleted: (worktreePath) => {
+    store.projects = store.projects.filter(p => p.projectPath !== worktreePath);
+  },
 };
 
 // ── Mount lifecycle ───────────────────────────────────────────────
