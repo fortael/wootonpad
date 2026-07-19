@@ -88,7 +88,7 @@
     </div>
     <div id="stats-viewer" style="display:none;">
       <div id="stats-viewer-header"><span id="stats-viewer-title">Activity</span></div>
-      <div id="stats-viewer-body"></div>
+      <StatsApp ref="statsRef" />
     </div>
     <div id="memory-viewer" style="display:none;"></div>
     <div id="plan-viewer" style="display:none;"></div>
@@ -97,11 +97,7 @@
       <ProjectViewerApp ref="projectViewerRef" :callbacks="projectViewerCallbacks" />
     </div>
     <div id="jsonl-viewer" style="display:none;">
-      <div id="jsonl-viewer-header">
-        <span id="jsonl-viewer-title">Message History</span>
-        <span id="jsonl-viewer-session-id"></span>
-      </div>
-      <div id="jsonl-viewer-body"></div>
+      <JsonlViewerApp ref="jsonlRef" />
     </div>
     <div id="terminal-area">
       <div id="vue-session-header">
@@ -156,6 +152,8 @@ import StatusBarApp from './StatusBarApp.vue';
 import GridCardsApp from './GridCardsApp.vue';
 import SettingsPanelApp from './SettingsPanelApp.vue';
 import ProjectViewerApp from './ProjectViewerApp.vue';
+import StatsApp from './StatsApp.vue';
+import JsonlViewerApp from './JsonlViewerApp.vue';
 
 // ── Template refs ────────────────────────────────────────────────
 const plansRef = ref(null);
@@ -166,6 +164,8 @@ const projectsRef = ref(null);
 const statusBarRef = ref(null);
 const gridCardsRef = ref(null);
 const projectViewerRef = ref(null);
+const statsRef = ref(null);
+const jsonlRef = ref(null);
 
 // ── Tab config ───────────────────────────────────────────────────
 const TABS = [
@@ -359,6 +359,8 @@ onMounted(async () => {
     setTab: (tab) => projectViewerRef.value?.setTab(tab),
   };
   window.vueApp = { setTab };
+  window.vueStats = { load: () => statsRef.value?.load() };
+  window.vueJsonlViewer = { open: (s) => jsonlRef.value?.open(s) };
 
   // Settings panel — exposed so app.js and vanilla JS callers can open it.
   // Hides all vanilla-managed main-area content so the xterm canvas can't

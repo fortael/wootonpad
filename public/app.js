@@ -838,7 +838,7 @@ loadProjects().then(async () => {
     } else if (_uiState.panel === 'stats') {
       hideAllViewers();
       statsViewer.style.display = 'flex';
-      loadStats();
+      window.vueStats?.load();
     }
   } catch {}
 });
@@ -981,7 +981,7 @@ async function switchAccount(id) {
   if (window.vueStore) window.vueStore.accountSwitching = false;
 
   const activeTab = window.vueStore?.activeTab || 'sessions';
-  if (activeTab === 'stats') loadStats();
+  if (activeTab === 'stats') window.vueStats?.load();
   if (activeTab === 'projects') loadProjects().then(() => renderProjectsPanel());
 }
 
@@ -1539,7 +1539,7 @@ window.__sb = {
       saveUiState({ panel: 'stats' });
       hideAllViewers();
       statsViewer.style.display = 'flex';
-      loadStats();
+      window.vueStats?.load();
     } else if (tabName === 'memory') {
       saveUiState({ panel: 'memory' });
       hideAllViewers();
@@ -1648,7 +1648,10 @@ window.__sb = {
 
   showJsonl: (id) => {
     const session = sessionMap.get(id);
-    if (session && typeof showJsonlViewer === 'function') showJsonlViewer(session);
+    if (!session) return;
+    hideAllViewers();
+    jsonlViewer.style.display = 'flex';
+    window.vueJsonlViewer?.open(session);
   },
 
   launchConfig: (id) => {
