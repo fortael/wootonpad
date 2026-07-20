@@ -1,7 +1,7 @@
 // --- Plans & Memory viewers ---
 // Depends on globals: cachedPlans, plansContent, planPanel, planViewer,
-// memoryContent, memoryPanel, memoryViewer, placeholder, terminalArea,
-// statsViewer, settingsViewer, jsonlViewer (app.js)
+// memoryContent, memoryPanel, memoryViewer, placeholder, terminalArea (app.js)
+// Vue-managed panels (stats, jsonl, settings) are hidden via window.vueStore
 // Depends on: formatDate (utils.js)
 
 let currentPlanContent = "";
@@ -34,9 +34,8 @@ async function openPlan(plan) {
   // Hide terminal area and placeholder, show plan viewer
   placeholder.style.display = 'none';
   terminalArea.style.display = 'none';
-  statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
-  if (window.vueStore) window.vueStore.settingsOpen = false;
+  if (window.vueStore) { window.vueStore.settingsOpen = false; window.vueStore.showStats = false; window.vueStore.showJsonl = false; }
   planViewer.style.display = 'flex';
 
   planPanel.open(plan.title, currentPlanFilePath, currentPlanContent);
@@ -44,13 +43,14 @@ async function openPlan(plan) {
 
 function hideAllViewers() {
   planViewer.style.display = 'none';
-  statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
-  // settingsViewer is now a Vue component managed via store.settingsOpen
-  if (window.vueStore) window.vueStore.settingsOpen = false;
-  jsonlViewer.style.display = 'none';
   projectViewer.style.display = 'none';
   window.vueProjectViewer?.close();
+  if (window.vueStore) {
+    window.vueStore.settingsOpen = false;
+    window.vueStore.showStats = false;
+    window.vueStore.showJsonl = false;
+  }
   terminalArea.style.display = '';
 }
 
@@ -174,8 +174,7 @@ async function openMemory(file) {
   placeholder.style.display = 'none';
   terminalArea.style.display = 'none';
   planViewer.style.display = 'none';
-  statsViewer.style.display = 'none';
-  if (window.vueStore) window.vueStore.settingsOpen = false;
+  if (window.vueStore) { window.vueStore.settingsOpen = false; window.vueStore.showStats = false; window.vueStore.showJsonl = false; }
   memoryViewer.style.display = 'flex';
 
   memoryPanel.open(file.filename, file.filePath, content);

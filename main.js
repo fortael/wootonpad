@@ -930,7 +930,8 @@ ipcMain.handle('refresh-stats', async () => {
     TERM_PROGRAM: 'iTerm.app',
     TERM_PROGRAM_VERSION: '3.6.6',
     FORCE_COLOR: '3',
-    ITERM_SESSION_ID: '1',
+    // No ITERM_SESSION_ID: without it Claude CLI won't try to reach iTerm2 via AppleScript,
+    // which avoids the macOS "would like to access data from other apps" permission prompt.
     ...(configDir !== DEFAULT_CLAUDE_DIR ? { CLAUDE_CONFIG_DIR: configDir } : {}),
   };
 
@@ -1051,6 +1052,13 @@ ipcMain.handle('get-usage', async () => {
     const cached = getSetting(cacheKey);
     return cached ? { ...cached, _cached: true } : {};
   }
+});
+
+// --- IPC: get-cached-usage (DB-only, no Keychain/API access) ---
+ipcMain.handle('get-cached-usage', () => {
+  const cacheKey = 'usage:' + ((getSetting('global') || {}).activeAccountId || 'default');
+  const cached = getSetting(cacheKey);
+  return cached ? { ...cached, _cached: true } : {};
 });
 
 // --- IPC: get-memories ---

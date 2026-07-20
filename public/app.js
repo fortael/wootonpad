@@ -16,8 +16,6 @@ const planPanel = new ViewerPanel(planViewer, {
 });
 
 // currentPlanContent, currentPlanFilePath, currentPlanFilename → plans-memory-view.js
-const statsViewer = document.getElementById('stats-viewer');
-const statsViewerBody = document.getElementById('stats-viewer-body');
 const memoryViewer = document.getElementById('memory-viewer');
 const memoryPanel = new ViewerPanel(memoryViewer, {
   copyPath: true, copyContent: true,
@@ -26,10 +24,6 @@ const memoryPanel = new ViewerPanel(memoryViewer, {
 });
 const terminalArea = document.getElementById('terminal-area');
 const projectViewer = document.getElementById('project-viewer');
-const jsonlViewer = document.getElementById('jsonl-viewer');
-const jsonlViewerTitle = document.getElementById('jsonl-viewer-title');
-const jsonlViewerSessionId = document.getElementById('jsonl-viewer-session-id');
-const jsonlViewerBody = document.getElementById('jsonl-viewer-body');
 const gridViewer = document.getElementById('grid-viewer');
 const gridViewerCount = document.getElementById('grid-viewer-count');
 let gridViewActive = localStorage.getItem('gridViewActive') === '1';
@@ -661,7 +655,6 @@ window.addEventListener('resize', () => {
 // Initialize grid observers now that DOM refs are ready
 initGridObservers();
 
-// JSONL viewer (renderJsonlText, formatDuration, makeCollapsible, renderJsonlEntry, showJsonlViewer) → jsonl-viewer.js
 
 // Stats view (loadStats, buildUsageSection, buildDailyBarChart, buildHeatmap, calculateStreak, buildStatsSummary) → stats-view.js
 
@@ -837,7 +830,8 @@ loadProjects().then(async () => {
       }
     } else if (_uiState.panel === 'stats') {
       hideAllViewers();
-      statsViewer.style.display = 'flex';
+      terminalArea.style.display = 'none';
+      if (window.vueStore) window.vueStore.showStats = true;
       window.vueStats?.load();
     }
   } catch {}
@@ -848,6 +842,14 @@ let projectsChangedTimer = null;
 let projectsChangedWhileAway = false;
 window.api.onProjectsChanged(() => {
   if (projectsChangedTimer) clearTimeout(projectsChangedTimer);
+
+  if (pendingAccountSwitch) {
+    pendingAccountSwitch = false;
+    if (window.vueStore) window.vueStore.accountSwitching = false;
+    loadProjects();
+    return;
+  }
+
   const activeTab = window.vueStore?.activeTab || 'sessions';
   if (activeTab !== 'sessions' && activeTab !== 'projects') {
     projectsChangedWhileAway = true;
@@ -929,6 +931,7 @@ if (typeof initFilePanel === 'function') initFilePanel();
 let accounts = [];
 let activeAccountId = 'default';
 let accountsUsage = {};
+let pendingAccountSwitch = false;
 
 const terminalHeaderAccount = document.getElementById('terminal-header-account');
 
@@ -975,14 +978,15 @@ async function switchAccount(id) {
   renderAccountsPanel();
 
   if (window.vueStore) window.vueStore.accountSwitching = true;
+  pendingAccountSwitch = true;
 
   await window.api.setActiveAccountId(id);
 
-  if (window.vueStore) window.vueStore.accountSwitching = false;
-
+  window.vueStats?.invalidate();
   const activeTab = window.vueStore?.activeTab || 'sessions';
   if (activeTab === 'stats') window.vueStats?.load();
   if (activeTab === 'projects') loadProjects().then(() => renderProjectsPanel());
+  // accountSwitching stays true — cleared in onProjectsChanged once new data arrives
 }
 
 // makeGroup is defined in utils.js (loaded first)
@@ -1440,6 +1444,7 @@ async function refreshAccountUsage() {
   try {
     accountsUsage = await window.api.getAccountsUsage();
     window.vueAccounts?.setUsage(accountsUsage);
+    window.vueAccountDropdown?.setUsage(accountsUsage);
   } catch {}
 }
 
@@ -1538,7 +1543,8 @@ window.__sb = {
     } else if (tabName === 'stats') {
       saveUiState({ panel: 'stats' });
       hideAllViewers();
-      statsViewer.style.display = 'flex';
+      terminalArea.style.display = 'none';
+      if (window.vueStore) window.vueStore.showStats = true;
       window.vueStats?.load();
     } else if (tabName === 'memory') {
       saveUiState({ panel: 'memory' });
@@ -1650,7 +1656,8 @@ window.__sb = {
     const session = sessionMap.get(id);
     if (!session) return;
     hideAllViewers();
-    jsonlViewer.style.display = 'flex';
+    terminalArea.style.display = 'none';
+    if (window.vueStore) window.vueStore.showJsonl = true;
     window.vueJsonlViewer?.open(session);
   },
 

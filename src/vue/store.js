@@ -44,4 +44,8 @@ export const store = reactive({
   settingsOpen: false,
   settingsScope: 'global',       // 'global' | 'project'
   settingsProjectPath: null,
+
+  // Main area panel visibility (Vue-owned — do not touch via innerHTML/style directly)
+  showStats: false,
+  showJsonl: false,
 });

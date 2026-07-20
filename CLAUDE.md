@@ -11,7 +11,7 @@ npm install
 # Start the app (bundles CodeMirror, then launches Electron with hot-reload)
 npm start
 
-# Faster iteration after first run (skips CodeMirror bundle step)
+# Faster iteration (skips slow CodeMirror bundle, still rebuilds Vue)
 npm run electron
 
 # Rebundle CodeMirror only (needed after editing public/codemirror-setup.js)

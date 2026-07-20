@@ -4,8 +4,8 @@
 //
 // Depends on globals from app.js: openSessions, activeSessionId, sessionMap, activePtyIds,
 // sortedOrder, sidebarContent, terminalsEl, gridViewActive, gridViewer, gridViewerCount,
-// placeholder, terminalHeader, planViewer, statsViewer, memoryViewer, settingsViewer,
-// jsonlViewer, terminalArea, cachedProjects, isMac
+// placeholder, terminalHeader, planViewer, memoryViewer, terminalArea, cachedProjects, isMac
+// Vue-managed panels (stats, jsonl, settings) are hidden via window.vueStore
 // Depends on: cleanDisplayName, formatDate (utils.js), fitAndScroll, showSession (terminal-manager.js)
 
 let gridCards = new Map(); // sessionId → card wrapper element
@@ -148,10 +148,12 @@ function showGridView() {
 
   // Hide other viewers but keep terminal-area visible
   planViewer.style.display = 'none';
-  statsViewer.style.display = 'none';
   memoryViewer.style.display = 'none';
-  if (window.vueStore) window.vueStore.settingsOpen = false;
-  jsonlViewer.style.display = 'none';
+  if (window.vueStore) {
+    window.vueStore.settingsOpen = false;
+    window.vueStore.showStats = false;
+    window.vueStore.showJsonl = false;
+  }
   terminalArea.style.display = '';
 
   // Switch #terminals to grid layout

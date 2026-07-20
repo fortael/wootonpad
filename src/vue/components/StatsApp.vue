@@ -1,12 +1,7 @@
 <template>
   <div id="stats-viewer-body">
-    <!-- Loading spinner -->
-    <div v-if="loading" class="stats-spinner">
-      <div class="stats-spinner-icon"></div><span>Updating stats…</span>
-    </div>
-
     <!-- Empty state -->
-    <div v-else-if="!stats && !hasUsage" class="plans-empty">
+    <div v-if="!stats && !hasUsage" class="plans-empty">
       No stats data found. Run some Claude sessions first.
     </div>
 
@@ -124,10 +119,10 @@ let statsLoadedAt = 0;
 const STATS_TTL_MS = 60_000;
 
 // ── Reactive state ────────────────────────────────────────────────
-const loading = ref(false);
 const stats = ref(null);
 const usage = ref({});
 const usageRefreshing = ref(false);
+const refreshing = ref(false);
 
 // ── SVG constant ─────────────────────────────────────────────────
 const REFRESH_SVG = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>';
@@ -371,34 +366,37 @@ const statsNoticeHtml = computed(() => {
 });
 
 // ── Actions ───────────────────────────────────────────────────────
+
+// Fast load: reads from file cache + DB only — no Keychain, no PTY, no dialog.
 async function load() {
   const age = Date.now() - statsLoadedAt;
-
   if (cachedStats && age < STATS_TTL_MS) {
     stats.value = cachedStats;
     usage.value = cachedUsage || {};
     return;
   }
+  const [freshStats, freshUsage] = await Promise.all([
+    window.api.getStats().catch(() => null),
+    window.api.getCachedUsage().catch(() => ({})),
+  ]);
+  cachedStats = freshStats;
+  cachedUsage = freshUsage || {};
+  statsLoadedAt = Date.now();
+  stats.value = cachedStats;
+  usage.value = cachedUsage;
+}
 
-  loading.value = true;
-  stats.value = null;
-  usage.value = {};
-
+// Explicit refresh: spawns PTY + reads Keychain — only on user click.
+async function refreshAll() {
+  if (refreshing.value) return;
+  refreshing.value = true;
   try {
     const result = await window.api.refreshStats();
-    cachedStats = result?.stats || null;
-    cachedUsage = result?.usage || {};
+    if (result?.stats) { cachedStats = result.stats; stats.value = cachedStats; }
+    if (result?.usage) { cachedUsage = result.usage; usage.value = cachedUsage; }
     statsLoadedAt = Date.now();
-    stats.value = cachedStats;
-    usage.value = cachedUsage;
-  } catch {
-    cachedStats = cachedStats || await window.api.getStats();
-    cachedUsage = cachedUsage || {};
-    stats.value = cachedStats;
-    usage.value = cachedUsage;
-  } finally {
-    loading.value = false;
-  }
+  } catch {}
+  refreshing.value = false;
 }
 
 async function refreshUsage() {
@@ -407,12 +405,18 @@ async function refreshUsage() {
     const freshUsage = await window.api.getUsage();
     if (freshUsage && Object.keys(freshUsage).length) {
       cachedUsage = freshUsage;
-      statsLoadedAt = 0; // invalidate TTL
+      statsLoadedAt = 0;
       usage.value = freshUsage;
     }
   } catch {}
   usageRefreshing.value = false;
 }
 
-defineExpose({ load });
+function invalidate() {
+  cachedStats = null;
+  cachedUsage = null;
+  statsLoadedAt = 0;
+}
+
+defineExpose({ load, refreshAll, invalidate, isRefreshing: refreshing });
 </script>
