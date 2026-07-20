@@ -691,7 +691,7 @@ async function doPush() {
   showGitMsg('Pushing…');
   const res = await window.api.gitPush(viewedPath.value);
   gitBusy.value = false;
-  if (res.ok) showGitMsg('Pushed successfully');
+  if (res.ok) { showGitMsg('Pushed successfully'); await reload(); }
   else showGitMsg(res.error || 'Push failed', true);
 }
 
