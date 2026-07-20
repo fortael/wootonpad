@@ -13,7 +13,7 @@
           @click="onSwitch(acc)"
         >
           <div class="session-row">
-            <div class="session-info">
+            <div class="account-name-row">
               <template v-if="editingId === acc.id">
                 <input
                   class="account-row-name-input"
@@ -28,42 +28,42 @@
               <template v-else>
                 <div class="session-summary" @dblclick.stop="startEdit(acc)">{{ acc.name }}</div>
               </template>
-              <div class="session-subtitle">{{ acc.configDir || '~/.claude (default)' }}</div>
-              <div v-if="hasUsage(acc.id)" class="account-usage-block">
-                <div v-for="row in usageRows(acc.id)" :key="row.key" class="account-usage-row">
-                  <span class="account-usage-label">{{ row.label }}</span>
-                  <div class="account-usage-bar">
-                    <div
-                      class="account-usage-bar-fill"
-                      :class="{ danger: row.pct >= 90, warn: row.pct >= 70 && row.pct < 90 }"
-                      :style="{ width: Math.min(row.pct, 100) + '%' }"
-                    ></div>
-                  </div>
-                  <span class="account-usage-info">{{ row.pct }}%{{ row.resetIn ? `  · resets in ${row.resetIn}~` : '' }}</span>
-                </div>
-                <div v-if="usage[acc.id]?._cached" class="account-usage-cached-note">cached data</div>
+              <div class="account-card-actions">
+                <button
+                  v-if="editingId !== acc.id"
+                  class="account-edit-btn"
+                  data-tooltip="Rename"
+                  @click.stop="startEdit(acc)"
+                  v-html="editSvg"
+                ></button>
+                <button
+                  class="account-open-btn"
+                  data-tooltip="Open Claude session in home directory"
+                  @click.stop="onOpenClaude(acc)"
+                >Open Claude</button>
+                <button
+                  v-if="acc.id !== 'default'"
+                  class="account-row-del"
+                  data-tooltip="Remove account"
+                  @click.stop="onDelete(acc)"
+                  v-html="trashSvg"
+                ></button>
               </div>
             </div>
-            <div class="account-card-actions">
-              <button
-                v-if="editingId !== acc.id"
-                class="account-edit-btn"
-                data-tooltip="Rename"
-                @click.stop="startEdit(acc)"
-                v-html="editSvg"
-              ></button>
-              <button
-                class="account-open-btn"
-                data-tooltip="Open Claude session in home directory"
-                @click.stop="onOpenClaude(acc)"
-              >Open Claude</button>
-              <button
-                v-if="acc.id !== 'default'"
-                class="account-row-del"
-                data-tooltip="Remove account"
-                @click.stop="onDelete(acc)"
-                v-html="trashSvg"
-              ></button>
+            <div class="session-subtitle">{{ acc.configDir || '~/.claude (default)' }}</div>
+            <div v-if="hasUsage(acc.id)" class="account-usage-block">
+              <div v-for="row in usageRows(acc.id)" :key="row.key" class="account-usage-row">
+                <span class="account-usage-label">{{ row.label }}</span>
+                <div class="account-usage-bar">
+                  <div
+                    class="account-usage-bar-fill"
+                    :class="{ danger: row.pct >= 90, warn: row.pct >= 70 && row.pct < 90 }"
+                    :style="{ width: Math.min(row.pct, 100) + '%' }"
+                  ></div>
+                </div>
+                <span class="account-usage-info">{{ row.pct }}%{{ row.resetIn ? `  · resets in ${row.resetIn}~` : '' }}</span>
+              </div>
+              <div v-if="usage[acc.id]?._cached" class="account-usage-cached-note">cached data</div>
             </div>
           </div>
         </div>
@@ -71,20 +71,23 @@
     </div>
 
     <div class="project-group">
-      <div class="project-header">
+      <div class="project-header" :class="{ collapsed: !addOpen }" @click="addOpen = !addOpen">
+        <span class="arrow">&#9660;</span>
         <span class="project-name">Add account</span>
       </div>
-      <div class="project-sessions">
+      <div class="project-sessions accounts-add-section">
         <p class="accounts-add-desc">Each account uses its own Claude credentials and session history. Add a second account to switch between personal and work Claude Pro plans, or any two separate logins.</p>
         <div class="accounts-add-form">
           <input
             v-model="newName"
-            placeholder="Account name (e.g. Work)"
+            placeholder="Account name (e.g. Work / Personal)"
             @keydown.enter="addAccount"
           />
-          <button class="accounts-add-btn" :disabled="adding" @click="addAccount">
-            {{ adding ? 'Adding…' : 'Add account' }}
-          </button>
+          <div class="text-center">
+            <button class="btn-green" :disabled="adding" @click="addAccount">
+              {{ adding ? 'Adding…' : 'Add account' }}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -106,6 +109,7 @@ const editName = ref('');
 let activeEditInput = null;
 const newName = ref('');
 const adding = ref(false);
+const addOpen = ref(false);
 
 function hasUsage(id) {
   const u = usage.value[id];

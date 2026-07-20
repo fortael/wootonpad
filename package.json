@@ -1,6 +1,6 @@
 {
   "name": "switchboard",
-  "version": "0.0.30",
+  "version": "0.1.0",
   "private": true,
   "description": "A desktop app for browsing, searching, and managing CLI coding sessions",
   "author": "Doctly <support@doctly.ai>",
@@ -9,6 +9,7 @@
     "start": "npm run bundle:codemirror && npm run bundle:vue && electron .",
     "test": "node --test",
     "electron": "npm run bundle:vue && electron .",
+    "dev": "npm run bundle:codemirror && npm run bundle:vue && (vite build --watch & electron .) && wait",
     "bundle:codemirror": "esbuild public/codemirror-setup.js --bundle --outfile=public/codemirror-bundle.js --format=iife --platform=browser --minify",
     "bundle:vue": "vite build",
     "generate-icons": "node scripts/generate-icons.js && node scripts/generate-dmg-background.js",
@@ -70,7 +71,7 @@
     ],
     "publish": {
       "provider": "github",
-      "owner": "doctly",
+      "owner": "fortael",
       "repo": "switchboard"
     },
     "mac": {

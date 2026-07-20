@@ -255,6 +255,12 @@
                 <div class="settings-description">
                   <span v-if="appVersion">v{{ appVersion }}</span>
                   <span v-if="updateStatus" class="settings-update-status"> — {{ updateStatus }}</span>
+                  <a
+                    v-if="newVersion"
+                    class="settings-update-link"
+                    href="#"
+                    @click.prevent="window.api.openExternal('https://github.com/fortael/switchboard/releases/latest')"
+                  >Download v{{ newVersion }} ↗</a>
                 </div>
               </div>
               <div class="settings-field-control">
@@ -267,7 +273,7 @@
         <!-- ── Action buttons ─────────────────────────────────── -->
         <div class="settings-btn-row">
           <SbButton variant="secondary" size="sm" @click="close">Cancel</SbButton>
-          <SbButton :variant="saveState === 'saved' ? 'success' : 'primary'" size="sm" @click="save" :disabled="saveState === 'saved'">
+          <SbButton :variant="'primary'" size="sm" @click="save" :disabled="saveState === 'saved'">
             {{ saveState === 'saved' ? '✓ Saved' : 'Save Settings' }}
           </SbButton>
           <SbButton v-if="isProject" variant="danger" size="sm" @click="removeProject">Hide Project</SbButton>
@@ -302,6 +308,7 @@ const saveState = ref('idle'); // 'idle' | 'saved'
 const ideNotice = ref('');
 const appVersion = ref('');
 const updateStatus = ref('');
+const newVersion = ref('');
 const shellProfiles = ref([]);
 const terminalThemes = computed(() => window.TERMINAL_THEMES || {});
 const terminalFonts = computed(() => window.TERMINAL_FONTS || {});
@@ -473,12 +480,10 @@ onMounted(async () => {
   if (!isProject.value) {
     window.api.onUpdaterEvent((type, data) => {
       switch (type) {
-        case 'checking': updateStatus.value = 'checking…'; break;
-        case 'update-available': updateStatus.value = `v${data.version} available`; break;
-        case 'update-not-available': updateStatus.value = 'up to date'; break;
-        case 'download-progress': updateStatus.value = `downloading ${Math.round(data.percent)}%`; break;
-        case 'update-downloaded': updateStatus.value = `v${data.version} ready, restart to update`; break;
-        case 'error': updateStatus.value = 'check failed'; break;
+        case 'checking': updateStatus.value = 'checking…'; newVersion.value = ''; break;
+        case 'update-available': updateStatus.value = `v${data.version} available`; newVersion.value = data.version; break;
+        case 'update-not-available': updateStatus.value = 'up to date'; newVersion.value = ''; break;
+        case 'error': updateStatus.value = 'check failed'; newVersion.value = ''; break;
       }
     });
   }

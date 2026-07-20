@@ -102,6 +102,10 @@
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>
               Pull
             </button>
+            <button class="pv-git-btn" @click="showCreateBranch = true" :disabled="gitBusy" title="Create new branch">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Branch
+            </button>
             <span v-if="gitMessage" class="pv-git-msg" :class="{ error: gitError }">{{ gitMessage }}</span>
             <span v-if="detail.totalAdded || detail.totalDeleted" class="pv-git-stats">
               <span class="pv-added" v-if="detail.totalAdded">+{{ detail.totalAdded }}</span>
@@ -332,12 +336,39 @@
       </div>
     </div>
 
+    <!-- ── Create branch dialog ───────────────────────────────────── -->
+    <div v-if="showCreateBranch" class="pv-dialog-overlay" @click.self="showCreateBranch = false">
+      <div class="pv-dialog">
+        <div class="pv-dialog-title">Create branch</div>
+        <div class="pv-dialog-body">
+          <input
+            class="pv-dialog-input"
+            v-model="newBranchName"
+            placeholder="Branch name"
+            @keydown.enter="doCreateBranch"
+            @keydown.escape="showCreateBranch = false"
+            autofocus
+          />
+          <div class="pv-dialog-option">
+            <SbSwitch v-model="checkoutBranch" />
+            <span>Checkout branch</span>
+          </div>
+        </div>
+        <div class="pv-dialog-actions">
+          <SbButton variant="ghost" @click="showCreateBranch = false">Cancel</SbButton>
+          <SbButton variant="primary" :disabled="!newBranchName.trim()" @click="doCreateBranch">Create</SbButton>
+        </div>
+      </div>
+    </div>
+
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch, nextTick, onMounted } from 'vue';
 import FileTreeNode from './FileTreeNode.vue';
+import SbButton from './SbButton.vue';
+import SbSwitch from './SbSwitch.vue';
 
 const TABS = computed(() => [
   { id: 'overview', label: 'Overview' },
@@ -365,6 +396,11 @@ const gitError = ref(false);
 const commitMessage = ref('');
 const generating = ref(false);
 const confirmPush = ref(false);
+
+// Create branch dialog
+const showCreateBranch = ref(false);
+const newBranchName = ref('');
+const checkoutBranch = ref(true);
 
 // Changed files
 const loadingFile = ref(null);
@@ -657,6 +693,25 @@ async function doPush() {
   gitBusy.value = false;
   if (res.ok) showGitMsg('Pushed successfully');
   else showGitMsg(res.error || 'Push failed', true);
+}
+
+async function doCreateBranch() {
+  const name = newBranchName.value.trim();
+  if (!name) return;
+  showCreateBranch.value = false;
+  gitBusy.value = true;
+  const res = await window.api.gitCreateBranch(viewedPath.value, name, checkoutBranch.value);
+  gitBusy.value = false;
+  if (res.ok) {
+    showGitMsg(checkoutBranch.value ? `Switched to new branch "${name}"` : `Created branch "${name}"`);
+    newBranchName.value = '';
+    checkoutBranch.value = true;
+    const br = await window.api.gitBranches(viewedPath.value).catch(() => null);
+    if (br?.ok) { branches.value = br.branches; remoteBranches.value = br.remotes || []; }
+    await reload();
+  } else {
+    showGitMsg(res.error || 'Failed to create branch', true);
+  }
 }
 
 async function reload() {

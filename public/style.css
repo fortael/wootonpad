@@ -495,10 +495,21 @@ body { display: flex; flex-direction: column; }
 }
 .accounts-section-title:first-child { margin-top: 0; }
 
-/* .account-item inherits session-item layout */
+/* .account-item overrides the session-item flex layout (higher specificity needed) */
 
-.account-item .session-row {
+.session-item.account-item .session-row {
+  display: block;
+}
+
+.account-name-row {
+  display: flex;
   align-items: center;
+  gap: 6px;
+}
+
+.account-name-row .session-summary {
+  flex: 1;
+  min-width: 0;
 }
 
 /* active account = same green selection as active session */
@@ -622,7 +633,6 @@ body { display: flex; flex-direction: column; }
 }
 
 .account-usage-block {
-  flex-basis: 100%;   /* wrap to second line inside session-row */
   padding: 2px 2px 4px;
   display: flex;
   flex-direction: column;
@@ -738,12 +748,16 @@ body { display: flex; flex-direction: column; }
 
 .accounts-add-btn:hover { box-shadow: 0 1px 0 rgba(255,255,255,0.2) inset, 0 0 0 1px color-mix(in srgb, var(--orange-500) 70%, transparent), 0 4px 18px color-mix(in srgb, var(--orange-500) 55%, transparent); }
 
+.accounts-add-section {
+  padding: 8px 12px 12px;
+}
+
 .accounts-add-desc {
   font-size: 11px;
   color: #565676;
   line-height: 1.5;
   margin: 4px 0 8px;
-  padding: 0 2px;
+  padding: 0 1rem;
 }
 
 .account-row-name-input {
@@ -4056,6 +4070,14 @@ body { display: flex; flex-direction: column; }
   color: var(--text-tertiary);
   font-size: var(--text-xs);
 }
+.settings-update-link {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: var(--text-xs);
+  color: var(--accent);
+  text-decoration: none;
+}
+.settings-update-link:hover { text-decoration: underline; }
 
 /* Font selector preview */
 .settings-font-control {
@@ -4216,7 +4238,7 @@ body { display: flex; flex-direction: column; }
   color: var(--text-secondary);
 }
 
-.new-session-start-btn {
+.btn-green {
   background: var(--gradient-success);
   border: 1px solid color-mix(in srgb, var(--green-500) 60%, black);
   box-shadow: var(--glow-green);
@@ -4233,7 +4255,7 @@ body { display: flex; flex-direction: column; }
   align-items: center;
 }
 
-.new-session-start-btn:hover {
+.btn-green:hover {
   box-shadow: 0 1px 0 rgba(255,255,255,0.2) inset, 0 0 0 1px color-mix(in srgb, var(--green-500) 70%, transparent), 0 4px 18px color-mix(in srgb, var(--green-500) 55%, transparent);
 }
 
@@ -6055,6 +6077,27 @@ body.hide-avatars .grid-card-avatar {
   font-family: inherit;
 }
 .pv-dialog-cancel:hover { background: rgba(255,255,255,0.1); }
+.pv-dialog-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 6px;
+  color: rgba(255,255,255,0.85);
+  font-size: 13px;
+  font-family: inherit;
+  padding: 7px 10px;
+  outline: none;
+  margin-bottom: 12px;
+}
+.pv-dialog-input:focus { border-color: rgba(255,255,255,0.28); }
+.pv-dialog-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: rgba(255,255,255,0.6);
+}
 
 /* ── Loading state ───────────────────────────────────────────────── */
 .pv-loading {
@@ -6081,4 +6124,8 @@ body.hide-avatars .grid-card-avatar {
   opacity: 0;
   transition: opacity 0.1s ease;
   max-width: 260px;
+}
+
+.text-center {
+  text-align: center;
 }

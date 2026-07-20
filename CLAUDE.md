@@ -8,10 +8,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install dependencies (compiles native modules node-pty and better-sqlite3)
 npm install
 
-# Start the app (bundles CodeMirror, then launches Electron with hot-reload)
+# Start the app (bundles CodeMirror + Vue once, launches Electron)
 npm start
 
-# Faster iteration (skips slow CodeMirror bundle, still rebuilds Vue)
+# Dev mode: bundles everything, then watches Vue files + hot-reloads on change
+npm run dev
+
+# Faster iteration (skips slow CodeMirror bundle, still rebuilds Vue once)
 npm run electron
 
 # Rebundle CodeMirror only (needed after editing public/codemirror-setup.js)

@@ -37,8 +37,7 @@ let autoUpdater = null;
 if (app.isPackaged || process.env.FORCE_UPDATER) {
   autoUpdater = require('electron-updater').autoUpdater;
   autoUpdater.logger = log;
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoDownload = false;
   if (!app.isPackaged) autoUpdater.forceDevUpdateConfig = true;
 
   function sendUpdaterEvent(type, data) {
@@ -635,6 +634,18 @@ ipcMain.handle('git-push', (_event, projectPath) => {
       return { ok: true, output: out2 };
     } catch (e2) { return { ok: false, error: e2.stderr || e2.message }; }
   }
+});
+
+ipcMain.handle('git-create-branch', (_event, projectPath, branchName, checkout) => {
+  const { execFileSync } = require('child_process');
+  try {
+    if (checkout) {
+      execFileSync('git', ['checkout', '-b', branchName], { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+    } else {
+      execFileSync('git', ['branch', branchName], { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+    }
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.stderr || e.message }; }
 });
 
 ipcMain.handle('git-generate-commit-msg', async (_event, projectPath, style = 'short') => {

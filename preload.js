@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld('api', {
   gitPull: (projectPath) => ipcRenderer.invoke('git-pull', projectPath),
   gitCommit: (projectPath, message) => ipcRenderer.invoke('git-commit', projectPath, message),
   gitPush: (projectPath) => ipcRenderer.invoke('git-push', projectPath),
+  gitCreateBranch: (projectPath, branchName, checkout) => ipcRenderer.invoke('git-create-branch', projectPath, branchName, checkout),
   gitGenerateCommitMsg: (projectPath, style) => ipcRenderer.invoke('git-generate-commit-msg', projectPath, style),
   getGitUserInfo: (projectPath) => ipcRenderer.invoke('get-git-user-info', projectPath),
   deleteWorktree: (projectPath, worktreePath) => ipcRenderer.invoke('delete-worktree', projectPath, worktreePath),

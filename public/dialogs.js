@@ -258,7 +258,7 @@ async function showNewSessionDialog(project) {
     </div>
     <div class="new-session-actions">
       <button class="new-session-cancel-btn">Cancel</button>
-      <button class="new-session-start-btn">Start</button>
+      <button class="btn-green">Start</button>
     </div>
   `;
 
@@ -329,7 +329,7 @@ async function showNewSessionDialog(project) {
   }
 
   dialog.querySelector('.new-session-cancel-btn').onclick = close;
-  dialog.querySelector('.new-session-start-btn').onclick = start;
+  dialog.querySelector('.btn-green').onclick = start;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   // Keyboard support
@@ -406,7 +406,7 @@ async function showResumeSessionDialog(session) {
     </div>
     <div class="new-session-actions">
       <button class="new-session-cancel-btn">Cancel</button>
-      <button class="new-session-start-btn">Resume</button>
+      <button class="btn-green">Resume</button>
     </div>
   `;
 
@@ -459,7 +459,7 @@ async function showResumeSessionDialog(session) {
   }
 
   dialog.querySelector('.new-session-cancel-btn').onclick = close;
-  dialog.querySelector('.new-session-start-btn').onclick = resume;
+  dialog.querySelector('.btn-green').onclick = resume;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
 
   function onKey(e) {
