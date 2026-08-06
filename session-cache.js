@@ -283,9 +283,9 @@ function buildProjectsFromCache(showArchived) {
     // Empty projects go to the bottom
     if (a.sessions.length === 0 && b.sessions.length > 0) return 1;
     if (b.sessions.length === 0 && a.sessions.length > 0) return -1;
-    const aDate = a.sessions[0]?.modified || '';
-    const bDate = b.sessions[0]?.modified || '';
-    return new Date(bDate) - new Date(aDate);
+    const aName = a.projectPath.split('/').filter(Boolean).pop() || a.projectPath;
+    const bName = b.projectPath.split('/').filter(Boolean).pop() || b.projectPath;
+    return aName.localeCompare(bName);
   });
 
   return projects;

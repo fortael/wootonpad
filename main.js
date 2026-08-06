@@ -4,6 +4,21 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const pty = require('node-pty');
+
+if (!app.isPackaged) {
+  const origUserData = app.getPath('userData');
+  const devUserData = origUserData + '-dev';
+  if (!fs.existsSync(devUserData) && fs.existsSync(origUserData)) {
+    fs.cpSync(origUserData, devUserData, {
+      recursive: true,
+      filter: (src) => !/(SingletonLock|SingletonSocket|SingletonCookie)$/.test(src),
+    });
+  } else if (!fs.existsSync(devUserData)) {
+    fs.mkdirSync(devUserData, { recursive: true });
+  }
+  app.setPath('userData', devUserData);
+}
+
 const log = require('electron-log');
 // getFolderIndexMtimeMs moved to session-cache.js
 const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles } = require('./mcp-bridge');
