@@ -5,7 +5,20 @@ const os = require('os');
 const crypto = require('crypto');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
-const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
+
+// Resolved per call rather than at module load, so schedules follow the active
+// account — a WSL-backed one keeps both its projects and the project paths they
+// record inside the distribution, where a Windows fs call needs the paths
+// translated first. main.js injects the real implementations via configure();
+// the defaults keep this module standalone and unchanged for other platforms.
+let ctx = {
+  getProjectsDir: () => path.join(CLAUDE_DIR, 'projects'),
+  hostPath: (p) => p,
+  projectJoin: (base, ...parts) => path.join(base, ...parts),
+};
+function configure(next) {
+  ctx = { ...ctx, ...next };
+}
 
 /** Parse YAML-like frontmatter from a markdown file (simple key: value parser). */
 function parseFrontmatter(content) {
@@ -78,12 +91,13 @@ function cronMatches(cronExpr, now) {
 function scanSchedules(log) {
   const schedules = [];
   try {
-    if (!fs.existsSync(PROJECTS_DIR)) return schedules;
-    const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+    const projectsDir = ctx.getProjectsDir();
+    if (!fs.existsSync(projectsDir)) return schedules;
+    const folders = fs.readdirSync(projectsDir, { withFileTypes: true })
       .filter(d => d.isDirectory());
 
     for (const folder of folders) {
-      const folderPath = path.join(PROJECTS_DIR, folder.name);
+      const folderPath = path.join(projectsDir, folder.name);
       let projectPath = null;
       try {
         const jsonlFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.jsonl'));
@@ -100,18 +114,19 @@ function scanSchedules(log) {
       } catch {}
       if (!projectPath) continue;
 
-      const commandsDir = path.join(projectPath, '.claude', 'commands');
+      // Keeps the project's own path flavour; only the fs calls are translated.
+      const commandsDir = ctx.projectJoin(projectPath, '.claude', 'commands');
       try {
-        if (!fs.existsSync(commandsDir)) continue;
-        const files = fs.readdirSync(commandsDir).filter(f => f.startsWith('schedule-') && f.endsWith('.md'));
+        if (!fs.existsSync(ctx.hostPath(commandsDir))) continue;
+        const files = fs.readdirSync(ctx.hostPath(commandsDir)).filter(f => f.startsWith('schedule-') && f.endsWith('.md'));
         for (const file of files) {
           try {
-            const content = fs.readFileSync(path.join(commandsDir, file), 'utf8');
+            const content = fs.readFileSync(ctx.hostPath(ctx.projectJoin(commandsDir, file)), 'utf8');
             const { meta, body } = parseFrontmatter(content);
             if (!meta.cron || !body) continue;
             if (meta.enabled === 'false') continue;
             schedules.push({
-              file, filePath: path.join(commandsDir, file),
+              file, filePath: ctx.projectJoin(commandsDir, file),
               projectPath, folder: folder.name,
               name: meta.name || file, cron: meta.cron,
               slug: meta.slug || file.replace(/^schedule-/, '').replace(/\.md$/, ''),
@@ -133,7 +148,7 @@ function scanSchedules(log) {
 function createScheduleSession(schedule) {
   const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
-  const claudeProjectDir = path.join(PROJECTS_DIR, schedule.folder);
+  const claudeProjectDir = path.join(ctx.getProjectsDir(), schedule.folder);
 
   fs.mkdirSync(claudeProjectDir, { recursive: true });
   const jsonlPath = path.join(claudeProjectDir, `${sessionId}.jsonl`);
@@ -218,4 +233,4 @@ function startScheduler(log, runCommand) {
   };
 }
 
-module.exports = { parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand };
+module.exports = { parseFrontmatter, cronMatches, scanSchedules, startScheduler, createScheduleSession, buildScheduleCommand, configure };

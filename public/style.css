@@ -760,6 +760,32 @@ body { display: flex; flex-direction: column; }
   padding: 0 1rem;
 }
 
+.accounts-wsl-section {
+  margin-top: 10px;
+}
+
+.accounts-wsl-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.accounts-wsl-name {
+  font-size: 12px;
+  color: #c0c8e0;
+  flex: 0 0 auto;
+}
+
+.accounts-wsl-path {
+  font-size: 11px;
+  color: #565676;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .account-row-name-input {
   background: rgba(255,255,255,0.08);
   border: 1px solid rgba(128,136,255,0.4);

@@ -1785,6 +1785,18 @@ window.__sb = {
     return newAcc;
   },
 
+  discoverWslClaudeHomes: () => window.api.discoverWslClaudeHomes(),
+
+  createWslAccount: async (distro, name) => {
+    const newAcc = await window.api.createWslAccount(distro, name);
+    if (!newAcc || newAcc.error) return newAcc;
+    accounts = [...accounts, newAcc];
+    await refreshAccountUsage();
+    updateAccountDropdown();
+    renderAccountsPanel();
+    return newAcc;
+  },
+
   openProject: (project) => openProjectViewer(project),
   onPvTabChange: (tab) => saveUiState({ pvTab: tab }),
 

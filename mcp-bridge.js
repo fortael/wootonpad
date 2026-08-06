@@ -12,7 +12,11 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const net = require('net');
+const { wslHostAddressFrom } = require('./shell-profiles');
 
+// Lock files stay in the Windows home even for a WSL session: a CLI running
+// inside a distribution scans %USERPROFILE%\.claude\ide (and /mnt/c/Users/*)
+// for them, and finding the lock there is what tells it the IDE is on the host.
 const IDE_DIR = path.join(os.homedir(), '.claude', 'ide');
 
 // sessionId → ServerEntry
@@ -25,15 +29,27 @@ function ensureIdeDir() {
 }
 
 /** Get a random free port from the OS. */
-function findFreePort() {
+function findFreePort(host = '127.0.0.1') {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
+    srv.listen(0, host, () => {
       const { port } = srv.address();
       srv.close(() => resolve(port));
     });
     srv.on('error', reject);
   });
+}
+
+// Where a Claude CLI running inside WSL can reach this server. Claude resolves
+// the IDE host itself when the lock file says runningInWindows: it takes the
+// default gateway from `ip route show`, which under the default NAT networking
+// is the Windows side of the vEthernet (WSL) adapter, and TCP-probes it. So the
+// socket has to be bound there rather than on loopback. Under mirrored
+// networking that adapter does not exist, loopback is shared, and the CLI's own
+// fallback to 127.0.0.1 is already correct.
+function resolveBindHost(runningInWindows) {
+  if (!runningInWindows) return '127.0.0.1';
+  return wslHostAddressFrom(os.networkInterfaces()) || '127.0.0.1';
 }
 
 /** Build the JSON-RPC 2.0 response envelope. */
@@ -181,10 +197,15 @@ async function handleToolCall(entry, rpcId, params, log) {
 async function handleOpenDiff(entry, rpcId, args, log) {
   const { old_file_path, new_file_contents, tab_name } = args;
 
-  // Read the current file from disk
+  // Read the current file from disk. The path comes from the CLI, so for a
+  // session running inside a distribution it is POSIX and has to be translated
+  // before a Windows read — otherwise this silently falls through to the "new
+  // file" branch and the whole file renders as an addition instead of a diff.
+  // The renderer keeps the untranslated path: it is the canonical one, and
+  // save-file-for-panel translates again on the way back.
   let oldContent = '';
   try {
-    oldContent = fs.readFileSync(old_file_path, 'utf8');
+    oldContent = fs.readFileSync(entry.hostPath(old_file_path), 'utf8');
   } catch {
     log.debug(`[mcp] Could not read ${old_file_path} — treating as new file`);
   }
@@ -236,7 +257,7 @@ async function handleOpenFile(entry, rpcId, args, log) {
 
   let content = '';
   try {
-    content = fs.readFileSync(filePath, 'utf8');
+    content = fs.readFileSync(entry.hostPath(filePath), 'utf8');
   } catch (err) {
     log.debug(`[mcp] Could not read ${filePath}: ${err.message}`);
   }
@@ -309,15 +330,19 @@ async function handleGetDiagnostics(entry, rpcId) {
  * Start an MCP WebSocket server for a session.
  * @returns {{ port: number, authToken: string }}
  */
-async function startMcpServer(sessionId, workspaceFolders, mainWindow, log) {
+async function startMcpServer(sessionId, workspaceFolders, mainWindow, log, options = {}) {
   ensureIdeDir();
 
-  const port = await findFreePort();
+  // Set when the CLI will run inside WSL while this app runs on Windows.
+  const runningInWindows = options.runningInWindows === true;
+  const host = options.host || resolveBindHost(runningInWindows);
+
+  const port = await findFreePort(host);
   const authToken = crypto.randomUUID();
 
   const wss = new WebSocketServer({
     port,
-    host: '127.0.0.1',
+    host,
     handleProtocols: (protocols) => {
       if (protocols.has('mcp')) return 'mcp';
       return false;
@@ -330,7 +355,7 @@ async function startMcpServer(sessionId, workspaceFolders, mainWindow, log) {
     workspaceFolders,
     ideName: 'WootonPad',
     transport: 'ws',
-    runningInWindows: false,
+    runningInWindows,
     authToken,
   });
   fs.writeFileSync(lockFilePath, lockData, 'utf8');
@@ -342,6 +367,9 @@ async function startMcpServer(sessionId, workspaceFolders, mainWindow, log) {
     authToken,
     lockFilePath,
     mainWindow,
+    // Translates a path the CLI reports into one this process can open.
+    // Identity unless the session runs inside a distribution.
+    hostPath: options.hostPath || ((p) => p),
     ws: null,
     pendingDiffs: new Map(),
   };
@@ -382,7 +410,10 @@ async function startMcpServer(sessionId, workspaceFolders, mainWindow, log) {
   });
 
   servers.set(sessionId, entry);
-  log.info(`[mcp] session=${sessionId} server started on port ${port}`);
+  log.info(`[mcp] session=${sessionId} server started on ${host}:${port} runningInWindows=${runningInWindows}`);
+  if (runningInWindows && host === '127.0.0.1') {
+    log.warn('[mcp] no vEthernet (WSL) address found — the CLI can only reach this socket under mirrored networking');
+  }
 
   return { port, authToken };
 }

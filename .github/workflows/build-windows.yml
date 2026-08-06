@@ -48,10 +48,14 @@ jobs:
       - name: Bundle assets
         run: npm run bundle:codemirror && npm run bundle:vue
 
-      # x64 only: the arm64 target needs the MSVC ARM64 toolset to cross-compile
-      # better-sqlite3. Drop --x64 to build both archs declared in package.json.
+      # The arch list comes from build.win.target[].arch in package.json and wins
+      # over any CLI arch flag, so this produces ONE NSIS installer covering both
+      # x64 and arm64 (`archs=x64, arm64` in the electron-builder log). Both archs
+      # of better-sqlite3 and node-pty resolve from prebuilds — no ARM64 MSVC
+      # toolset is involved. To ship per-arch installers, split the target in
+      # package.json; passing --x64 here does nothing.
       - name: Build Windows app
-        run: npx electron-builder --win --x64 --publish never
+        run: npx electron-builder --win --publish never
 
       # Records the exact file names electron-builder produced, so the release
       # workflow can later reference them instead of guessing at globs.
@@ -62,19 +66,20 @@ jobs:
       - name: Upload installer
         uses: actions/upload-artifact@v7
         with:
-          name: wootonpad-win-x64-installer
+          name: wootonpad-win-installer
           path: dist/*.exe
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
 
-      # Auto-update metadata. Kept separate and non-fatal: whether
-      # `--publish never` emits latest.yml / .blockmap is exactly what this run
-      # is here to establish.
+      # Auto-update metadata. Kept separate and non-fatal so a change in
+      # electron-builder's behaviour shows up as a warning with the installer
+      # still uploaded, rather than as a failed job. `--publish never` does emit
+      # both files today (latest.yml 347 B, .blockmap ~226 KB).
       - name: Upload auto-update metadata
         uses: actions/upload-artifact@v7
         with:
-          name: wootonpad-win-x64-update-metadata
+          name: wootonpad-win-update-metadata
           path: |
             dist/latest.yml
             dist/*.blockmap

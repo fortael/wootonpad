@@ -32,6 +32,8 @@ contextBridge.exposeInMainWorld('api', {
   getAccounts: () => ipcRenderer.invoke('get-accounts'),
   saveAccounts: (accounts) => ipcRenderer.invoke('save-accounts', accounts),
   createAccount: (name) => ipcRenderer.invoke('create-account', name),
+  discoverWslClaudeHomes: () => ipcRenderer.invoke('discover-wsl-claude-homes'),
+  createWslAccount: (distro, name) => ipcRenderer.invoke('create-wsl-account', distro, name),
   renameAccount: (id, name) => ipcRenderer.invoke('rename-account', id, name),
   deleteAccount: (id) => ipcRenderer.invoke('delete-account', id),
   getActiveAccountId: () => ipcRenderer.invoke('get-active-account-id'),

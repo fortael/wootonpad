@@ -39,7 +39,12 @@ const cleanPtyEnv = Object.fromEntries(
 );
 
 // Shell profiles → shell-profiles.js
-const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs } = require('./shell-profiles');
+const {
+  discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell,
+  windowsToWslPath, shellArgs,
+  wslToWindowsPath, isPosixAbsolutePath, probeWslClaudeHome, discoverWslClaudeHomes, wslExecArgs,
+  withWslEnv, wslDistroFromUncPath, projectJoin,
+} = require('./shell-profiles');
 const { startScheduler } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 
@@ -85,7 +90,6 @@ const {
 } = require('./db');
 
 const DEFAULT_CLAUDE_DIR = path.join(os.homedir(), '.claude');
-const PLANS_DIR = path.join(DEFAULT_CLAUDE_DIR, 'plans');
 const CLAUDE_DIR = DEFAULT_CLAUDE_DIR;
 const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
 const MAX_BUFFER_SIZE = 256 * 1024;
@@ -119,6 +123,66 @@ function activeProjectsDir() {
 
 function activeConfigDir() {
   return getActiveAccount().configDir;
+}
+
+// Plans live next to the sessions they came from, so they follow the account
+// rather than the Windows home.
+function activePlansDir() {
+  return path.join(activeConfigDir(), 'plans');
+}
+
+// --- WSL-backed accounts ---
+// An account carrying `wslDistro` points at a Claude home living inside that
+// distribution. Its project paths stay in POSIX form (that is what Claude wrote
+// into the .jsonl files, and what the project folder name encodes from), so
+// every Windows fs call goes through hostPath() and every command that has to
+// run *in* the project goes through projectExecFile() — where its git, docker
+// and toolchain actually are. On accounts without the field both are identity.
+
+function accountWslDistro(account) {
+  return (account && account.wslDistro) || null;
+}
+
+function activeWslDistro() {
+  return accountWslDistro(getActiveAccount());
+}
+
+// Translate a canonical project path into one a Windows fs call can open.
+// Identity on any account without a distribution, and on paths that are
+// already Windows-shaped — so it is safe to wrap every fs call with it.
+function accountHostPath(account, p) {
+  if (!accountWslDistro(account) || !isPosixAbsolutePath(p)) return p;
+  return wslToWindowsPath(p, account.wslDistro, account.wslUncPrefix);
+}
+
+// Request-scoped: the account is read per call, which is right for anything
+// driven by the UI. Work that outlives the current selection — a running
+// session pushing diffs at us — must bind accountHostPath to its own account
+// instead, or an account switch would retarget it mid-session.
+function hostPath(p) {
+  return accountHostPath(getActiveAccount(), p);
+}
+
+// A Windows folder picker returns \\wsl.localhost\<distro>\… for a directory
+// inside a distribution. Claude records the POSIX path and the project folder
+// name is encoded from it, so that is the form the app stores.
+function canonicalProjectPath(p) {
+  return wslDistroFromUncPath(p) ? windowsToWslPath(p) : p;
+}
+
+// Run argv in `cwd`. For a WSL account this re-targets the call into the
+// distribution instead of running it on the Windows side over the 9p share.
+// `cwd` and any caller-supplied `env` are dropped when redirecting: both hold
+// Windows-side values that mean nothing inside the distribution, which resolves
+// the working directory via --cd and the command via the distro's own PATH.
+// Returns [file, args, options] for execFile/execFileSync.
+function projectExecFile(argv, cwd, options = {}) {
+  const distro = activeWslDistro();
+  if (!distro || !isPosixAbsolutePath(cwd)) {
+    return [argv[0], argv.slice(1), { ...options, cwd }];
+  }
+  const { cwd: _cwd, env: _env, ...rest } = options;
+  return ['wsl.exe', wslExecArgs(distro, cwd, argv), rest];
 }
 
 // Build stats in the same format as stats-cache.json using Switchboard's own DB.
@@ -422,10 +486,22 @@ ipcMain.handle('browse-folder', async () => {
 });
 
 // --- IPC: add-project ---
-ipcMain.handle('add-project', (_event, projectPath) => {
+ipcMain.handle('add-project', (_event, rawProjectPath) => {
+  const projectPath = canonicalProjectPath(rawProjectPath);
+  // A folder picked inside a distribution only belongs to that distribution's
+  // account: its Claude home is the one that would record the sessions. Say so,
+  // rather than failing later on a path this account cannot resolve.
+  const pickedDistro = wslDistroFromUncPath(rawProjectPath);
+  const account = getActiveAccount();
+  if (pickedDistro && accountWslDistro(account) !== pickedDistro) {
+    return { error: `That folder is inside WSL (${pickedDistro}). Switch to the "${pickedDistro}" account to add it.` };
+  }
+  if (!pickedDistro && isPosixAbsolutePath(projectPath) && !accountWslDistro(account) && isWindows) {
+    return { error: `Cannot add "${projectPath}" from a Windows account — switch to the WSL account that owns it.` };
+  }
   try {
     // Validate the path exists and is a directory
-    const stat = fs.statSync(projectPath);
+    const stat = fs.statSync(hostPath(projectPath));
     if (!stat.isDirectory()) return { error: 'Path is not a directory' };
 
     // Unhide if previously hidden
@@ -499,18 +575,21 @@ function infoJitter() {
 }
 
 function fetchProjectInfo(projectPath) {
-  const { exec } = require('child_process');
-  const run = (cmd, opts = {}) => new Promise((resolve) => {
-    exec(cmd, { encoding: 'utf8', timeout: 10000, ...opts }, (err, stdout) => {
+  const { execFile } = require('child_process');
+  // argv form: for a WSL account these run inside the distribution, where the
+  // project's git and docker live, instead of over the 9p share.
+  const run = (argv, opts = {}) => new Promise((resolve) => {
+    const [file, args, options] = projectExecFile(argv, projectPath, { encoding: 'utf8', timeout: 10000, ...opts });
+    execFile(file, args, options, (err, stdout) => {
       resolve(err ? null : (stdout || '').trim());
     });
   });
   const data = { branch: null, added: null, deleted: null, containers: null };
   return Promise.all([
-    run('git rev-parse --abbrev-ref HEAD', { cwd: projectPath, timeout: 5000 }),
-    run('git diff --shortstat HEAD', { cwd: projectPath, timeout: 5000 }),
-    run('docker compose ps --format json', {
-      cwd: projectPath, timeout: 8000,
+    run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 5000 }),
+    run(['git', 'diff', '--shortstat', 'HEAD'], { timeout: 5000 }),
+    run(['docker', 'compose', 'ps', '--format', 'json'], {
+      timeout: 8000,
       env: { ...process.env, PATH: DOCKER_PATH },
     }),
   ]).then(([branch, stat, dockerOut]) => {
@@ -535,9 +614,10 @@ function fetchProjectInfo(projectPath) {
 
 // du -sk: only run on add-project and when the long-TTL size cache expires
 function fetchProjectSize(projectPath) {
-  const { exec } = require('child_process');
+  const { execFile } = require('child_process');
   return new Promise((resolve) => {
-    exec(`du -sk "${projectPath}"`, { encoding: 'utf8', timeout: 15000 }, (err, stdout) => {
+    const [file, args, options] = projectExecFile(['du', '-sk', '.'], projectPath, { encoding: 'utf8', timeout: 15000 });
+    execFile(file, args, options, (err, stdout) => {
       if (err || !stdout) return resolve(null);
       const kb = parseInt((stdout || '').split(/\s+/)[0]);
       resolve(isNaN(kb) ? null : Math.round(kb / 1024));
@@ -554,7 +634,7 @@ function cacheProjectSize(projectPath) {
 }
 
 ipcMain.handle('get-project-info', (_event, projectPath) => {
-  if (!projectPath || !fs.existsSync(projectPath)) return null;
+  if (!projectPath || !fs.existsSync(hostPath(projectPath))) return null;
   const cacheKey = 'project-info:' + projectPath;
   const cached = getSetting(cacheKey);
   const cachedSize = getSetting('project-size:' + projectPath);
@@ -589,22 +669,24 @@ ipcMain.handle('get-project-info', (_event, projectPath) => {
 
 // --- IPC: get-project-detail (full git log + docker details, no cache) ---
 ipcMain.handle('get-project-detail', (_event, projectPath) => {
-  if (!projectPath || !fs.existsSync(projectPath)) return null;
-  const { execSync } = require('child_process');
+  if (!projectPath || !fs.existsSync(hostPath(projectPath))) return null;
+  const { execFileSync } = require('child_process');
+  // argv form so the project path never goes through shell quoting, and so a
+  // WSL account runs these where the repository actually lives.
+  const sh = (argv, opts = {}) => {
+    const [file, args, options] = projectExecFile(argv, projectPath, {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], ...opts,
+    });
+    return execFileSync(file, args, options).trim();
+  };
   const detail = { branch: null, upstream: null, remoteUrl: null, tags: [], worktreePaths: [], commits: [], unpushedCommits: [], changedFiles: [], totalAdded: 0, totalDeleted: 0, containers: [], readmePath: null };
   for (const name of ['README.md', 'readme.md', 'Readme.md', 'README.rst', 'README']) {
-    const fp = path.join(projectPath, name);
-    if (fs.existsSync(fp)) { detail.readmePath = fp; break; }
+    const fp = projectJoin(projectPath, name);
+    if (fs.existsSync(hostPath(fp))) { detail.readmePath = fp; break; }
   }
   try {
-    detail.branch = execSync('git rev-parse --abbrev-ref HEAD', {
-      cwd: projectPath, encoding: 'utf8', timeout: 5000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    const log = execSync('git log --format=%h\x1f%s\x1f%an\x1f%ar -15', {
-      cwd: projectPath, encoding: 'utf8', timeout: 5000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    detail.branch = sh(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 5000 });
+    const log = sh(['git', 'log', '--format=%h\x1f%s\x1f%an\x1f%ar', '-15'], { timeout: 5000 });
     if (log) {
       detail.commits = log.split('\n').filter(Boolean).map(line => {
         const [hash, message, author, date] = line.split('\x1f');
@@ -612,60 +694,39 @@ ipcMain.handle('get-project-detail', (_event, projectPath) => {
       });
     }
     try {
-      const unpushed = execSync('git log --format=%h\x1f%s\x1f%an\x1f%ar @{u}..HEAD', {
-        cwd: projectPath, encoding: 'utf8', timeout: 5000,
-        stdio: ['ignore', 'pipe', 'ignore'],
-      }).trim();
+      const unpushed = sh(['git', 'log', '--format=%h\x1f%s\x1f%an\x1f%ar', '@{u}..HEAD'], { timeout: 5000 });
       if (unpushed) {
         detail.unpushedCommits = unpushed.split('\n').filter(Boolean).map(line => {
           const [hash, message, author, date] = line.split('\x1f');
           return { hash, message, author, date };
         });
       }
-      const upstream = execSync('git rev-parse --abbrev-ref --symbolic-full-name @{u}', {
-        cwd: projectPath, encoding: 'utf8', timeout: 3000,
-        stdio: ['ignore', 'pipe', 'ignore'],
-      }).trim();
+      const upstream = sh(['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], { timeout: 3000 });
       detail.upstream = upstream;
       const remoteName = upstream.split('/')[0];
       try {
-        detail.remoteUrl = execSync(`git remote get-url ${remoteName}`, {
-          cwd: projectPath, encoding: 'utf8', timeout: 3000,
-          stdio: ['ignore', 'pipe', 'ignore'],
-        }).trim();
+        detail.remoteUrl = sh(['git', 'remote', 'get-url', remoteName], { timeout: 3000 });
       } catch {}
     } catch {} // no upstream set — just leave empty
     // Always try origin as fallback even without upstream
     if (!detail.remoteUrl) {
       try {
-        detail.remoteUrl = execSync('git remote get-url origin', {
-          cwd: projectPath, encoding: 'utf8', timeout: 3000,
-          stdio: ['ignore', 'pipe', 'ignore'],
-        }).trim();
+        detail.remoteUrl = sh(['git', 'remote', 'get-url', 'origin'], { timeout: 3000 });
       } catch {}
     }
     try {
-      const tagsRaw = execSync('git tag --sort=-version:refname', {
-        cwd: projectPath, encoding: 'utf8', timeout: 3000,
-        stdio: ['ignore', 'pipe', 'ignore'],
-      }).trim();
+      const tagsRaw = sh(['git', 'tag', '--sort=-version:refname'], { timeout: 3000 });
       detail.tags = tagsRaw ? tagsRaw.split('\n').filter(Boolean).slice(0, 20) : [];
     } catch { detail.tags = []; }
     try {
-      const wtRaw = execSync('git worktree list --porcelain', {
-        cwd: projectPath, encoding: 'utf8', timeout: 3000,
-        stdio: ['ignore', 'pipe', 'ignore'],
-      }).trim();
+      const wtRaw = sh(['git', 'worktree', 'list', '--porcelain'], { timeout: 3000 });
       // Each worktree block is separated by blank line; first entry is the main worktree
       detail.worktreePaths = wtRaw.split('\n\n').slice(1).map(block => {
         const match = block.match(/^worktree (.+)/m);
         return match ? match[1].trim() : null;
       }).filter(Boolean);
     } catch { detail.worktreePaths = []; }
-    const numstat = execSync('git diff --numstat HEAD', {
-      cwd: projectPath, encoding: 'utf8', timeout: 5000,
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
+    const numstat = sh(['git', 'diff', '--numstat', 'HEAD'], { timeout: 5000 });
     if (numstat) {
       detail.changedFiles = numstat.split('\n').filter(Boolean).map(line => {
         const [added, deleted, file] = line.split('\t');
@@ -678,11 +739,10 @@ ipcMain.handle('get-project-detail', (_event, projectPath) => {
     }
   } catch {}
   try {
-    const raw = execSync('docker compose ps --format json', {
-      cwd: projectPath, encoding: 'utf8', timeout: 8000,
-      stdio: ['ignore', 'pipe', 'ignore'],
+    const raw = sh(['docker', 'compose', 'ps', '--format', 'json'], {
+      timeout: 8000,
       env: { ...process.env, PATH: DOCKER_PATH },
-    }).trim();
+    });
     if (raw) {
       detail.containers = raw.split('\n').filter(Boolean).map(line => {
         try {
@@ -715,15 +775,25 @@ ipcMain.on('mcp-diff-response', (_event, sessionId, diffId, action, editedConten
 });
 
 // --- IPC: git operations ---
-ipcMain.handle('git-branches', (_event, projectPath) => {
+// Every git call goes through projectGit so it runs where the repository is —
+// inside the distribution for a WSL-backed project, on Windows otherwise — and
+// so branch names and messages travel as argv rather than in a shell string.
+function projectGit(projectPath, argv, opts = {}) {
   const { execFileSync } = require('child_process');
+  const [file, args, options] = projectExecFile(['git', ...argv], projectPath, {
+    encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'], ...opts,
+  });
+  return execFileSync(file, args, options);
+}
+
+ipcMain.handle('git-branches', (_event, projectPath) => {
   try {
-    const current = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 }).trim();
-    const all = execFileSync('git', ['branch'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 }).trim();
+    const current = projectGit(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 5000 }).trim();
+    const all = projectGit(projectPath, ['branch'], { timeout: 5000 }).trim();
     const branches = all.split('\n').map(b => b.replace(/^[*+]\s*/, '').trim()).filter(Boolean);
     let remotes = [];
     try {
-      const raw = execFileSync('git', ['branch', '-r'], { cwd: projectPath, encoding: 'utf8', timeout: 5000 }).trim();
+      const raw = projectGit(projectPath, ['branch', '-r'], { timeout: 5000 }).trim();
       remotes = raw.split('\n').map(b => b.trim().replace(/^origin\//, '')).filter(b => b && b !== 'HEAD' && !b.includes('->') && !branches.includes(b));
     } catch {}
     return { ok: true, current, branches, remotes };
@@ -731,61 +801,50 @@ ipcMain.handle('git-branches', (_event, projectPath) => {
 });
 
 ipcMain.handle('git-checkout', (_event, projectPath, branch) => {
-  const { execSync } = require('child_process');
   try {
-    execSync(`git checkout ${branch}`, { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+    projectGit(projectPath, ['checkout', branch]);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.stderr || e.message }; }
 });
 
 ipcMain.handle('git-fetch', (_event, projectPath) => {
-  const { execSync } = require('child_process');
   try {
-    const out = execSync('git fetch --prune', { cwd: projectPath, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] });
-    return { ok: true, output: out };
+    return { ok: true, output: projectGit(projectPath, ['fetch', '--prune'], { timeout: 30000 }) };
   } catch (e) { return { ok: false, error: e.stderr || e.message }; }
 });
 
 ipcMain.handle('git-pull', (_event, projectPath) => {
-  const { execSync } = require('child_process');
   try {
-    const out = execSync('git pull', { cwd: projectPath, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] });
-    return { ok: true, output: out };
+    return { ok: true, output: projectGit(projectPath, ['pull'], { timeout: 30000 }) };
   } catch (e) { return { ok: false, error: e.stderr || e.message }; }
 });
 
 ipcMain.handle('git-commit', (_event, projectPath, message) => {
-  const { execFileSync } = require('child_process');
   try {
-    execFileSync('git', ['add', '-A'], { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
-    execFileSync('git', ['commit', '-m', message], { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
+    projectGit(projectPath, ['add', '-A']);
+    projectGit(projectPath, ['commit', '-m', message]);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.stderr || e.message }; }
 });
 
 ipcMain.handle('git-push', (_event, projectPath) => {
-  const { execSync } = require('child_process');
   try {
-    const out = execSync('git push', { cwd: projectPath, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] });
-    return { ok: true, output: out };
+    return { ok: true, output: projectGit(projectPath, ['push'], { timeout: 30000 }) };
   } catch (e) {
     // try push with set-upstream
     try {
-      const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: projectPath, encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-      const out2 = execSync(`git push --set-upstream origin ${branch}`, { cwd: projectPath, encoding: 'utf8', timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] });
+      const branch = projectGit(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD'], {
+        timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'],
+      }).trim();
+      const out2 = projectGit(projectPath, ['push', '--set-upstream', 'origin', branch], { timeout: 30000 });
       return { ok: true, output: out2 };
     } catch (e2) { return { ok: false, error: e2.stderr || e2.message }; }
   }
 });
 
 ipcMain.handle('git-create-branch', (_event, projectPath, branchName, checkout) => {
-  const { execFileSync } = require('child_process');
   try {
-    if (checkout) {
-      execFileSync('git', ['checkout', '-b', branchName], { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
-    } else {
-      execFileSync('git', ['branch', branchName], { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'] });
-    }
+    projectGit(projectPath, checkout ? ['checkout', '-b', branchName] : ['branch', branchName]);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.stderr || e.message }; }
 });
@@ -834,9 +893,9 @@ ipcMain.handle('fetch-gitlab-avatar', async (_event, projectPath, remoteUrl) => 
 });
 
 ipcMain.handle('git-generate-commit-msg', async (_event, projectPath, style = 'short') => {
-  const { execSync, spawn } = require('child_process');
+  const { spawn } = require('child_process');
   try {
-    const diff = execSync('git diff HEAD', { cwd: projectPath, encoding: 'utf8', timeout: 10000, stdio: ['ignore', 'pipe', 'ignore'] });
+    const diff = projectGit(projectPath, ['diff', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'] });
     if (!diff.trim()) return { ok: false, error: 'No changes to describe' };
     const globalSettings = getSetting('global') || {};
     const baseInstruction = globalSettings.commitMessagePrompt || COMMIT_MSG_PROMPT_DEFAULT;
@@ -845,7 +904,12 @@ ipcMain.handle('git-generate-commit-msg', async (_event, projectPath, style = 's
       : ' Write a single short sentence (max 72 chars). Use conventional commit format (feat/fix/refactor/docs/chore).';
     const prompt = `${baseInstruction}${styleSuffix}\n\nOutput ONLY the commit message, no explanation:\n\n${diff.slice(0, 8000)}`;
     const msg = await new Promise((resolve, reject) => {
-      const child = spawn('claude', ['-p', prompt, '--no-session-persistence'], { cwd: projectPath });
+      // The claude binary lives wherever the project does — inside the
+      // distribution for a WSL-backed one, so this call is routed there too.
+      const [file, args, options] = projectExecFile(
+        ['claude', '-p', prompt, '--no-session-persistence'], projectPath, {}
+      );
+      const child = spawn(file, args, options);
       let stdout = '', stderr = '';
       child.stdout.on('data', d => { stdout += d; });
       child.stderr.on('data', d => { stderr += d; });
@@ -864,29 +928,28 @@ ipcMain.handle('git-generate-commit-msg', async (_event, projectPath, style = 's
 });
 
 ipcMain.handle('delete-worktree', (_event, projectPath, worktreePath) => {
-  const { execFileSync } = require('child_process');
   const { setProjectGitCache } = require('./db');
   let branch = null;
+  // `-C <worktree>` is kept, but the whole call is routed through the project so
+  // a WSL-backed worktree path stays POSIX and is resolved by the distribution.
   try {
-    branch = execFileSync('git', ['-C', worktreePath, 'rev-parse', '--abbrev-ref', 'HEAD'], {
-      encoding: 'utf8', timeout: 5000,
+    branch = projectGit(projectPath, ['-C', worktreePath, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+      timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
   } catch {}
   // Remove the worktree — idempotent: ignore "not a working tree" error
   try {
-    execFileSync('git', ['-C', projectPath, 'worktree', 'remove', worktreePath, '--force'], {
-      encoding: 'utf8', timeout: 10000,
-    });
+    projectGit(projectPath, ['worktree', 'remove', worktreePath, '--force']);
   } catch (e) {
     if (!e.message.includes('is not a working tree') && !e.message.includes('not a git')) {
       return { ok: false, error: e.message };
     }
   }
   // Prune stale worktree refs
-  try { execFileSync('git', ['-C', projectPath, 'worktree', 'prune'], { encoding: 'utf8', timeout: 5000 }); } catch {}
+  try { projectGit(projectPath, ['worktree', 'prune'], { timeout: 5000 }); } catch {}
   // Delete the branch
   if (branch && branch !== 'HEAD' && branch !== 'main' && branch !== 'master') {
-    try { execFileSync('git', ['-C', projectPath, 'branch', '-D', branch], { encoding: 'utf8', timeout: 5000 }); } catch {}
+    try { projectGit(projectPath, ['branch', '-D', branch], { timeout: 5000 }); } catch {}
   }
   // Clear project git cache for the worktree path so stale data doesn't show
   try { setProjectGitCache(worktreePath, { branch: null, upstream: null, remoteUrl: null, tags: [], commits: [], unpushedCommits: [], changedFiles: [], totalAdded: 0, totalDeleted: 0, containers: [] }); } catch {}
@@ -894,10 +957,9 @@ ipcMain.handle('delete-worktree', (_event, projectPath, worktreePath) => {
 });
 
 ipcMain.handle('get-git-user-info', (_event, projectPath) => {
-  const { execFileSync } = require('child_process');
   try {
-    const name = execFileSync('git', ['config', 'user.name'], { cwd: projectPath, encoding: 'utf8' }).trim();
-    const email = execFileSync('git', ['config', 'user.email'], { cwd: projectPath, encoding: 'utf8' }).trim();
+    const name = projectGit(projectPath, ['config', 'user.name']).trim();
+    const email = projectGit(projectPath, ['config', 'user.email']).trim();
     return { ok: true, name, email };
   } catch { return { ok: false, name: '', email: '' }; }
 });
@@ -920,7 +982,10 @@ ipcMain.handle('get-file-tree', (_event, projectPath) => {
         return { name: e.name, path: relPath, isDir, children: isDir ? walk(path.join(dir, e.name), relPath, depth + 1) : null };
       });
   }
-  try { return { ok: true, tree: walk(projectPath, '', 0) }; }
+  // Only the walk root is translated: entry paths below it are built relative
+  // with forward slashes, which is what the renderer joins back onto the
+  // canonical project path.
+  try { return { ok: true, tree: walk(hostPath(projectPath), '', 0) }; }
   catch (e) { return { ok: false, error: e.message }; }
 });
 
@@ -937,17 +1002,16 @@ ipcMain.handle('get-project-sessions', (_event, projectPath) => {
 });
 
 ipcMain.handle('get-file-diff', (_event, projectPath, filePath) => {
-  const { execSync } = require('child_process');
-  const path = require('path');
+  const { execFileSync } = require('child_process');
   let oldContent = '';
   try {
-    oldContent = execSync(`git show HEAD:${filePath}`, {
-      cwd: projectPath, encoding: 'utf8', timeout: 5000,
-      stdio: ['ignore', 'pipe', 'ignore'],
+    const [file, args, options] = projectExecFile(['git', 'show', `HEAD:${filePath}`], projectPath, {
+      encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'],
     });
+    oldContent = execFileSync(file, args, options);
   } catch {}
   try {
-    const newContent = fs.readFileSync(path.join(projectPath, filePath), 'utf8');
+    const newContent = fs.readFileSync(hostPath(projectJoin(projectPath, filePath)), 'utf8');
     return { ok: true, oldContent, newContent, filePath };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -956,7 +1020,7 @@ ipcMain.handle('get-file-diff', (_event, projectPath, filePath) => {
 
 ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
   try {
-    const content = fs.readFileSync(filePath, 'utf8');
+    const content = fs.readFileSync(hostPath(filePath), 'utf8');
     return { ok: true, content };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -965,7 +1029,7 @@ ipcMain.handle('read-file-for-panel', async (_event, filePath) => {
 
 ipcMain.handle('save-file-for-panel', async (_event, filePath, content) => {
   try {
-    const resolved = path.resolve(filePath);
+    const resolved = path.resolve(hostPath(filePath));
     if (!fs.existsSync(resolved)) return { ok: false, error: 'File does not exist' };
     fs.writeFileSync(resolved, content, 'utf8');
     return { ok: true };
@@ -978,7 +1042,7 @@ ipcMain.handle('save-file-for-panel', async (_event, filePath, content) => {
 const fileWatchers = new Map(); // filePath → FSWatcher
 
 ipcMain.handle('watch-file', (_event, filePath) => {
-  const resolved = path.resolve(filePath);
+  const resolved = path.resolve(hostPath(filePath));
   if (fileWatchers.has(resolved)) return { ok: true };
   try {
     let debounce = null;
@@ -999,7 +1063,7 @@ ipcMain.handle('watch-file', (_event, filePath) => {
 });
 
 ipcMain.handle('unwatch-file', (_event, filePath) => {
-  const resolved = path.resolve(filePath);
+  const resolved = path.resolve(hostPath(filePath));
   const watcher = fileWatchers.get(resolved);
   if (watcher) {
     watcher.close();
@@ -1027,11 +1091,12 @@ ipcMain.handle('get-projects', (_event, showArchived) => {
 // --- IPC: get-plans ---
 ipcMain.handle('get-plans', () => {
   try {
-    if (!fs.existsSync(PLANS_DIR)) return [];
-    const files = fs.readdirSync(PLANS_DIR).filter(f => f.endsWith('.md'));
+    const plansDir = activePlansDir();
+    if (!fs.existsSync(plansDir)) return [];
+    const files = fs.readdirSync(plansDir).filter(f => f.endsWith('.md'));
     const plans = [];
     for (const file of files) {
-      const filePath = path.join(PLANS_DIR, file);
+      const filePath = path.join(plansDir, file);
       try {
         const stat = fs.statSync(filePath);
         const content = fs.readFileSync(filePath, 'utf8');
@@ -1050,7 +1115,7 @@ ipcMain.handle('get-plans', () => {
       upsertSearchEntries(plans.map(p => ({
         id: p.filename, type: 'plan', folder: null,
         title: p.title,
-        body: fs.readFileSync(path.join(PLANS_DIR, p.filename), 'utf8'),
+        body: fs.readFileSync(path.join(plansDir, p.filename), 'utf8'),
       })));
     } catch {}
 
@@ -1064,7 +1129,7 @@ ipcMain.handle('get-plans', () => {
 // --- IPC: read-plan ---
 ipcMain.handle('read-plan', (_event, filename) => {
   try {
-    const filePath = path.join(PLANS_DIR, path.basename(filename));
+    const filePath = path.join(activePlansDir(), path.basename(filename));
     const content = fs.readFileSync(filePath, 'utf8');
     return { content, filePath };
   } catch (err) {
@@ -1077,7 +1142,7 @@ ipcMain.handle('read-plan', (_event, filename) => {
 ipcMain.handle('save-plan', (_event, filePath, content) => {
   try {
     const resolved = path.resolve(filePath);
-    if (!resolved.startsWith(PLANS_DIR)) {
+    if (!resolved.startsWith(activePlansDir())) {
       return { ok: false, error: 'path outside plans directory' };
     }
     fs.writeFileSync(resolved, content, 'utf8');
@@ -1113,12 +1178,22 @@ ipcMain.handle('get-stats', () => {
 
 // --- IPC: refresh-stats (run /stats + /usage via PTY) ---
 ipcMain.handle('refresh-stats', async () => {
-  // For stats, use the configured shell profile
+  // For stats, use the configured shell profile — unless the account lives in a
+  // distribution, in which case that is where its `claude` binary and its
+  // credentials are, and a Windows shell could reach neither.
   const globalSettings = getSetting('global') || {};
+  const statsDistro = activeWslDistro();
   const statsProfileId = globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile;
-  const statsShellProfile = resolveShell(statsProfileId);
+  const statsShellProfile = resolveShell(statsDistro ? 'wsl:' + statsDistro : statsProfileId);
   const statsShell = statsShellProfile.path;
   const statsShellExtraArgs = statsShellProfile.args || [];
+  const statsInWsl = isWslShell(statsShell);
+  if (statsDistro && !statsInWsl) {
+    // Same shape as the handler's other failure path — the renderer reads
+    // .stats/.usage and would silently ignore anything else.
+    log.error(`[stats] WSL distribution "${statsDistro}" is not available`);
+    return { stats: null, usage: {} };
+  }
   const configDir = activeConfigDir();
   const ptyEnv = {
     ...cleanPtyEnv,
@@ -1129,8 +1204,15 @@ ipcMain.handle('refresh-stats', async () => {
     FORCE_COLOR: '3',
     // No ITERM_SESSION_ID: without it Claude CLI won't try to reach iTerm2 via AppleScript,
     // which avoids the macOS "would like to access data from other apps" permission prompt.
-    ...(configDir !== DEFAULT_CLAUDE_DIR ? { CLAUDE_CONFIG_DIR: configDir } : {}),
+    // CLAUDE_CONFIG_DIR is skipped for a WSL account: its configDir is the
+    // Windows view of a home that is already the default inside the distro.
+    ...(configDir !== DEFAULT_CLAUDE_DIR && !statsDistro ? { CLAUDE_CONFIG_DIR: configDir } : {}),
   };
+  if (statsInWsl) {
+    Object.assign(ptyEnv, withWslEnv(ptyEnv, [
+      'TERM', 'COLORTERM', 'TERM_PROGRAM', 'TERM_PROGRAM_VERSION', 'FORCE_COLOR',
+    ]));
+  }
 
   // Helper: spawn claude with args, collect output, auto-accept trust, kill when idle
   // waitFor: optional regex tested against stripped output — finish only when matched
@@ -1267,17 +1349,20 @@ function folderToShortPath(folder) {
 }
 
 /** Scan a directory for .md files (non-recursive). Returns array of { filename, filePath, modified }. */
+// `dir` is canonical: a Windows path, or the POSIX path of a WSL-backed
+// project. Reported filePaths keep that same flavour; only the fs calls are
+// translated.
 function scanMdFiles(dir) {
   const results = [];
   try {
-    if (!fs.existsSync(dir)) return results;
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    if (!fs.existsSync(hostPath(dir))) return results;
+    const entries = fs.readdirSync(hostPath(dir), { withFileTypes: true });
     for (const e of entries) {
       if (e.isFile() && e.name.endsWith('.md')) {
-        const fp = path.join(dir, e.name);
-        const content = fs.readFileSync(fp, 'utf8').trim();
+        const fp = projectJoin(dir, e.name);
+        const content = fs.readFileSync(hostPath(fp), 'utf8').trim();
         if (content) {
-          const stat = fs.statSync(fp);
+          const stat = fs.statSync(hostPath(fp));
           results.push({ filename: e.name, filePath: fp, modified: stat.mtime.toISOString() });
         }
       }
@@ -1291,7 +1376,9 @@ ipcMain.handle('get-memories', () => {
   const hiddenProjects = new Set(global.hiddenProjects || []);
 
   // --- Global files ---
-  const globalFiles = scanMdFiles(CLAUDE_DIR).map(f => ({ ...f, displayPath: '~/.claude' }));
+  // The active account's Claude home, not the Windows one: a WSL account's
+  // global CLAUDE.md lives inside the distribution.
+  const globalFiles = scanMdFiles(activeConfigDir()).map(f => ({ ...f, displayPath: '~/.claude' }));
 
   // --- Per-project files ---
   const projects = [];
@@ -1331,12 +1418,12 @@ ipcMain.handle('get-memories', () => {
         // 2. {projectPath}/ — project root CLAUDE.md, agents.md
         if (projectPath) {
           for (const name of ['CLAUDE.md', 'GEMINI.md', 'agents.md']) {
-            const fp = path.join(projectPath, name);
+            const fp = projectJoin(projectPath, name);
             try {
-              if (fs.existsSync(fp)) {
-                const content = fs.readFileSync(fp, 'utf8').trim();
+              if (fs.existsSync(hostPath(fp))) {
+                const content = fs.readFileSync(hostPath(fp), 'utf8').trim();
                 if (content && !seenPaths.has(fp)) {
-                  const stat = fs.statSync(fp);
+                  const stat = fs.statSync(hostPath(fp));
                   files.push({ filename: name, filePath: fp, modified: stat.mtime.toISOString(), displayPath: shortName + '/', source: 'project' });
                   seenPaths.add(fp);
                 }
@@ -1345,7 +1432,7 @@ ipcMain.handle('get-memories', () => {
           }
 
           // 3. {projectPath}/.claude/ — commands/*.md and other .md files
-          const dotClaudeDir = path.join(projectPath, '.claude');
+          const dotClaudeDir = projectJoin(projectPath, '.claude');
           const dotClaudeFiles = scanMdFiles(dotClaudeDir);
           for (const f of dotClaudeFiles) {
             if (!seenPaths.has(f.filePath)) {
@@ -1354,7 +1441,7 @@ ipcMain.handle('get-memories', () => {
             }
           }
           // commands/*.md
-          const commandsDir = path.join(dotClaudeDir, 'commands');
+          const commandsDir = projectJoin(dotClaudeDir, 'commands');
           const commandFiles = scanMdFiles(commandsDir);
           for (const f of commandFiles) {
             if (!seenPaths.has(f.filePath)) {
@@ -1389,11 +1476,17 @@ ipcMain.handle('get-memories', () => {
       ...globalFiles.map(f => ({ ...f, label: 'Global' })),
       ...projects.flatMap(p => p.files.map(f => ({ ...f, label: p.shortName }))),
     ];
-    upsertSearchEntries(allFiles.map(f => ({
-      id: f.filePath, type: 'memory', folder: null,
-      title: f.label + ' ' + f.filename,
-      body: fs.readFileSync(f.filePath, 'utf8'),
-    })));
+    // filePath is canonical; one unreadable file would otherwise throw out of
+    // the whole batch and leave memory search unindexed entirely.
+    upsertSearchEntries(allFiles.map(f => {
+      let body = '';
+      try { body = fs.readFileSync(hostPath(f.filePath), 'utf8'); } catch {}
+      return {
+        id: f.filePath, type: 'memory', folder: null,
+        title: f.label + ' ' + f.filename,
+        body,
+      };
+    }));
   } catch {}
 
   return result;
@@ -1402,10 +1495,10 @@ ipcMain.handle('get-memories', () => {
 // --- IPC: read-memory ---
 ipcMain.handle('read-memory', (_event, filePath) => {
   try {
-    const resolved = path.resolve(filePath);
-    // Allow paths under ~/.claude/ or any .md file that exists
+    const resolved = path.resolve(hostPath(filePath));
+    // Allow paths under the active account's Claude home, or any .md that exists
     if (!resolved.endsWith('.md')) return '';
-    if (!resolved.startsWith(CLAUDE_DIR) && !fs.existsSync(resolved)) return '';
+    if (!resolved.startsWith(activeConfigDir()) && !fs.existsSync(resolved)) return '';
     return fs.readFileSync(resolved, 'utf8');
   } catch (err) {
     console.error('Error reading memory file:', err);
@@ -1416,7 +1509,7 @@ ipcMain.handle('read-memory', (_event, filePath) => {
 // --- IPC: save-memory ---
 ipcMain.handle('save-memory', (_event, filePath, content) => {
   try {
-    const resolved = path.resolve(filePath);
+    const resolved = path.resolve(hostPath(filePath));
     if (!resolved.endsWith('.md')) return { ok: false, error: 'not a .md file' };
     if (!fs.existsSync(resolved)) return { ok: false, error: 'file does not exist' };
     fs.writeFileSync(resolved, content, 'utf8');
@@ -1470,6 +1563,32 @@ ipcMain.handle('create-account', (_event, name) => {
   return account;
 });
 
+// Distributions that hold a reachable Claude home, for the "add account" UI.
+ipcMain.handle('discover-wsl-claude-homes', async () => {
+  try { return await discoverWslClaudeHomes(); } catch { return []; }
+});
+
+// Attach an account to the Claude home inside a WSL distribution. Additive:
+// accounts without `wslDistro` keep behaving exactly as before.
+ipcMain.handle('create-wsl-account', async (_event, distro, name) => {
+  const existingForDistro = getAccounts().find(a => a.wslDistro === distro);
+  if (existingForDistro) return existingForDistro;
+  const probe = await probeWslClaudeHome(distro);
+  if (!probe) return { error: `No reachable Claude home in WSL distribution "${distro}"` };
+  const { randomUUID } = require('crypto');
+  const id = 'wsl-' + randomUUID().replace(/-/g, '').slice(0, 12);
+  const account = {
+    id,
+    name: name || `WSL — ${distro}`,
+    configDir: probe.configDir,
+    wslDistro: probe.distro,
+    wslUncPrefix: probe.uncPrefix,
+    wslHome: probe.home,
+  };
+  setSetting('accounts', [...getAccounts(), account]);
+  return account;
+});
+
 ipcMain.handle('rename-account', (_event, id, name) => {
   const updated = getAccounts().map(a => a.id === id ? { ...a, name } : a);
   setSetting('accounts', updated);
@@ -1494,8 +1613,13 @@ ipcMain.handle('set-active-account-id', (_event, accountId) => {
   global.activeAccountId = accountId;
   setSetting('global', global);
 
-  // Re-init session cache for new account and trigger re-scan
+  // Re-init session cache for new account and trigger re-scan. Fork/plan-accept
+  // detection holds its own copy of the projects directory, so it has to be
+  // re-pointed too — otherwise it keeps watching the previous account's folder.
   initSessionCache();
+  require('./session-transitions').init({
+    PROJECTS_DIR: activeProjectsDir(), activeSessions, getMainWindow: () => mainWindow, log, rekeyMcpServer,
+  });
   restartProjectsWatcher();
   populateCacheViaWorker();
   return { ok: true };
@@ -1663,7 +1787,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   }
 
   // Spawn new PTY
-  if (!fs.existsSync(projectPath)) {
+  if (!fs.existsSync(hostPath(projectPath))) {
     return { ok: false, error: `project directory no longer exists: ${projectPath}` };
   }
 
@@ -1678,21 +1802,28 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     if (project.shellProfile !== undefined && project.shellProfile !== null) profileId = project.shellProfile;
     return profileId;
   })();
-  // WSL profiles only work for plain terminals — Claude CLI sessions need the
-  // Windows shell because session data lives on the Windows filesystem.
-  const requestedProfile = resolveShell(effectiveProfileId);
-  const useWslProfile = isWslShell(requestedProfile.path) && isPlainTerminal;
-  const shellProfile = (isWslShell(requestedProfile.path) && !isPlainTerminal)
+  const activeAccount = getActiveAccount();
+  const accountDistro = accountWslDistro(activeAccount);
+
+  // A WSL-backed account holds both Claude and the projects inside the
+  // distribution, so its sessions must run there whatever shell the settings
+  // name — a Windows shell cannot even chdir into a POSIX project path.
+  const requestedProfile = resolveShell(accountDistro ? 'wsl:' + accountDistro : effectiveProfileId);
+  if (accountDistro && !isWslShell(requestedProfile.path)) {
+    return { ok: false, error: `WSL distribution "${accountDistro}" is not available` };
+  }
+  const shellProfile = (!accountDistro && isWslShell(requestedProfile.path) && !isPlainTerminal)
     ? resolveShell('auto')
     : requestedProfile;
   const shell = shellProfile.path;
   const shellExtraArgs = [...(shellProfile.args || [])];
   const isWsl = isWslShell(shell);
-  // For WSL, convert Windows path to /mnt/ path and pass via --cd;
-  // the spawn cwd must remain a valid Windows path for wsl.exe itself.
+  // --cd takes the path as the distribution sees it: already POSIX for a
+  // WSL-backed project, /mnt/<drive>/… for one on a Windows volume. The spawn
+  // cwd itself must stay a valid Windows path, for wsl.exe rather than for the
+  // shell inside it.
   if (isWsl) {
-    const wslCwd = windowsToWslPath(projectPath);
-    shellExtraArgs.unshift('--cd', wslCwd);
+    shellExtraArgs.unshift('--cd', isPosixAbsolutePath(projectPath) ? projectPath : windowsToWslPath(projectPath));
   }
   log.info(`[shell] profile=${shellProfile.id} shell=${shell} args=${JSON.stringify(shellExtraArgs)}`);
 
@@ -1700,7 +1831,6 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   let sessionSlug = null;
   let projectFolder = null;
 
-  const activeAccount = getActiveAccount();
   if (!isPlainTerminal) {
     // Snapshot existing .jsonl files before spawning (for new session + fork/plan detection)
     projectFolder = encodeProjectPath(projectPath);
@@ -1776,7 +1906,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         if (sessionOptions.worktree) {
           // Ensure .claude/worktrees/ is in .gitignore so worktree dirs aren't tracked
           try {
-            const gitignorePath = path.join(projectPath, '.gitignore');
+            const gitignorePath = hostPath(projectJoin(projectPath, '.gitignore'));
             const entry = '.claude/worktrees/';
             let content = '';
             try { content = fs.readFileSync(gitignorePath, 'utf8'); } catch {}
@@ -1804,10 +1934,13 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       }
 
       if (sessionOptions?.appendSystemPrompt) {
-        // Write to a temp file and use shell substitution to avoid quoting issues
+        // Write to a temp file and use shell substitution to avoid quoting issues.
+        // The `cat` runs inside the distribution for a WSL session, so it needs
+        // the /mnt/<drive>/… view of the Windows temp file.
         const tmpPrompt = path.join(os.tmpdir(), `switchboard-prompt-${sessionId}.md`);
         fs.writeFileSync(tmpPrompt, sessionOptions.appendSystemPrompt);
-        claudeCmd += ` --append-system-prompt "$(cat '${tmpPrompt}')"`;
+        const promptPathForShell = isWsl ? windowsToWslPath(tmpPrompt) : tmpPrompt;
+        claudeCmd += ` --append-system-prompt "$(cat '${promptPathForShell}')"`;
       }
 
       if (sessionOptions?.preLaunchCmd) {
@@ -1818,7 +1951,19 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       // (skip if user disabled IDE emulation in global settings)
       if (sessionOptions?.mcpEmulation !== false) {
         try {
-          mcpServer = await startMcpServer(sessionId, [projectPath], mainWindow, log);
+          // From inside a distribution the CLI resolves the IDE host itself: it
+          // reads `runningInWindows` from the lock file, takes the default
+          // gateway from `ip route show` and TCP-probes it. So the workspace
+          // folder is reported the way a Windows IDE would (UNC), and the
+          // server binds somewhere that gateway actually reaches.
+          mcpServer = await startMcpServer(sessionId, [hostPath(projectPath)], mainWindow, log, {
+            runningInWindows: isWsl,
+            // File paths arrive from the CLI in the distribution's own form.
+            // Bound to the account this session was launched under: the session
+            // keeps running across an account switch, and a diff arriving after
+            // one must still resolve against its own distribution.
+            hostPath: (p) => accountHostPath(activeAccount, p),
+          });
           claudeCmd += ' --ide';
         } catch (err) {
           log.error(`[mcp] Failed to start MCP server for ${sessionId}: ${err.message}`);
@@ -1830,11 +1975,27 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         TERM: 'xterm-256color', COLORTERM: 'truecolor',
         TERM_PROGRAM: 'iTerm.app', TERM_PROGRAM_VERSION: '3.6.6', FORCE_COLOR: '3', ITERM_SESSION_ID: '1',
       };
-      if (activeAccount.id !== 'default') {
+      // A WSL account's configDir is the Windows view of ~/.claude inside the
+      // distribution — meaningless as CLAUDE_CONFIG_DIR there, where that home
+      // is already the default. Setting it would point Claude at a path it
+      // cannot resolve.
+      if (activeAccount.id !== 'default' && !accountWslDistro(activeAccount)) {
         ptyEnv.CLAUDE_CONFIG_DIR = activeAccount.configDir;
       }
       if (mcpServer) {
         ptyEnv.CLAUDE_CODE_SSE_PORT = String(mcpServer.port);
+      }
+      // wsl.exe hands nothing but WSLENV-listed variables to the distribution,
+      // so everything the CLI reads is named there explicitly — the IDE port,
+      // and the terminal identification Claude checks before emitting OSC 9
+      // notifications, which would otherwise be silently dropped at the
+      // boundary. USERPROFILE is deliberately absent: the CLI only scans the
+      // Windows %USERPROFILE%\.claude\ide for lock files while it is unset.
+      if (isWsl) {
+        Object.assign(ptyEnv, withWslEnv(ptyEnv, [
+          'CLAUDE_CODE_SSE_PORT',
+          'TERM', 'COLORTERM', 'TERM_PROGRAM', 'TERM_PROGRAM_VERSION', 'FORCE_COLOR', 'ITERM_SESSION_ID',
+        ]));
       }
 
       ptyProcess = pty.spawn(shell, shellArgs(shell, claudeCmd, shellExtraArgs), {
@@ -2037,6 +2198,59 @@ const { detectSessionTransitions } = sessionTransitions;
 
 // --- fs.watch on projects directory ---
 let projectsWatcher = null;
+let projectsPoller = null;
+
+// How often the polling fallback sweeps the projects directory. Only used when
+// a recursive fs.watch cannot be trusted — see startProjectsWatcher.
+const PROJECTS_POLL_MS = 5000;
+
+// A WSL account's projects directory is reached over the 9p share, which does
+// not deliver Windows change notifications: fs.watch there succeeds and then
+// stays silent, so the absence of events is not something we can detect. Sweep
+// folder mtimes instead, reusing the same signal the incremental cache uses.
+function startProjectsPolling(watchDir, queueFolder) {
+  const { getFolderIndexMtimeMs } = require('./folder-index-state');
+  let previous = null;
+  let warnedSlow = false;
+
+  const sweep = () => {
+    const startedAt = Date.now();
+    const current = new Map();
+    let entries;
+    try {
+      entries = fs.readdirSync(watchDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === '.git') continue;
+      current.set(entry.name, getFolderIndexMtimeMs(path.join(watchDir, entry.name)));
+    }
+
+    if (previous) {
+      for (const [folder, mtime] of current) {
+        if (previous.get(folder) !== mtime) queueFolder(folder);
+      }
+      for (const folder of previous.keys()) {
+        if (!current.has(folder)) queueFolder(folder);
+      }
+    }
+    previous = current;
+
+    // The per-folder cost over 9p is the open question here; report it once
+    // instead of assuming the interval is comfortable.
+    const elapsed = Date.now() - startedAt;
+    if (!warnedSlow && elapsed > PROJECTS_POLL_MS / 2) {
+      warnedSlow = true;
+      log.warn(`[watcher] polling sweep of ${current.size} folders took ${elapsed}ms (interval ${PROJECTS_POLL_MS}ms)`);
+    }
+  };
+
+  // The seeding sweep is deferred rather than run inline: it stats every folder
+  // over the 9p share, and startProjectsWatcher is called during app startup.
+  setTimeout(sweep, 0);
+  return setInterval(sweep, PROJECTS_POLL_MS);
+}
 
 function startProjectsWatcher() {
   const watchDir = activeProjectsDir();
@@ -2067,6 +2281,19 @@ function startProjectsWatcher() {
     }
   }
 
+  function queueFolder(folder) {
+    if (!folder || folder === '.git') return;
+    pendingFolders.add(folder);
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(flushChanges, 500);
+  }
+
+  if (activeWslDistro()) {
+    projectsPoller = startProjectsPolling(watchDir, queueFolder);
+    log.info(`[watcher] WSL-backed account: polling ${watchDir} every ${PROJECTS_POLL_MS}ms`);
+    return;
+  }
+
   try {
     projectsWatcher = fs.watch(watchDir, { recursive: true }, (_eventType, filename) => {
       if (!filename) return;
@@ -2074,27 +2301,21 @@ function startProjectsWatcher() {
       // filename is relative, e.g. "folder-name/sessions-index.json" or "folder-name/abc.jsonl"
       const parts = filename.split(path.sep);
       const folder = parts[0];
-      if (!folder || folder === '.git') return;
 
       // Only care about .jsonl changes or top-level folder add/remove
       const basename = parts[parts.length - 1];
-      if (parts.length === 1) {
-        pendingFolders.add(folder);
-      } else if (basename.endsWith('.jsonl')) {
-        pendingFolders.add(folder);
-      } else {
-        return;
-      }
+      if (parts.length !== 1 && !basename.endsWith('.jsonl')) return;
 
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(flushChanges, 500);
+      queueFolder(folder);
     });
 
     projectsWatcher.on('error', (err) => {
       console.error('Projects watcher error:', err);
+      if (!projectsPoller) projectsPoller = startProjectsPolling(watchDir, queueFolder);
     });
   } catch (err) {
     console.error('Failed to start projects watcher:', err);
+    projectsPoller = startProjectsPolling(watchDir, queueFolder);
   }
 }
 
@@ -2102,6 +2323,10 @@ function restartProjectsWatcher() {
   if (projectsWatcher) {
     projectsWatcher.close();
     projectsWatcher = null;
+  }
+  if (projectsPoller) {
+    clearInterval(projectsPoller);
+    projectsPoller = null;
   }
   startProjectsWatcher();
 }
@@ -2128,6 +2353,20 @@ app.whenReady().then(() => {
   buildMenu();
   createWindow();
   startProjectsWatcher();
+
+  // Both schedule modules resolve their directories per call, so schedules
+  // follow the active account instead of the Windows home, and project paths
+  // recorded inside a distribution are translated before any fs call. This has
+  // to happen before the first use below, which writes the creator command.
+  const scheduleDirs = {
+    getProjectsDir: () => activeProjectsDir(),
+    getCommandsDir: () => path.join(activeConfigDir(), 'commands'),
+    hostPath,
+    projectJoin,
+  };
+  scheduleIpc.configure(scheduleDirs);
+  require('./schedule-runner').configure(scheduleDirs);
+
   scheduleIpc.ensureScheduleCreatorCommand();
 
   // Shared runCommand for both cron scheduler and manual "run now"
@@ -2135,13 +2374,19 @@ app.whenReady().then(() => {
   function runScheduleCommand(cmd, cwd, name, onDone) {
     const globalSettings = getSetting('global') || {};
     const profileId = globalSettings.shellProfile || SETTING_DEFAULTS.shellProfile;
-    const profile = resolveShell(profileId);
+    // A scheduled command belongs to its project, so one in a distribution runs
+    // there — the shell setting cannot chdir into a POSIX path from Windows.
+    const distro = activeWslDistro();
+    const inWsl = Boolean(distro) && isPosixAbsolutePath(cwd);
+    const profile = resolveShell(inWsl ? 'wsl:' + distro : profileId);
     const shell = profile.path;
-    const args = shellArgs(shell, cmd, profile.args || []);
+    const extraArgs = [...(profile.args || [])];
+    if (inWsl) extraArgs.unshift('--cd', cwd);
+    const args = shellArgs(shell, cmd, extraArgs);
 
     log.info(`[schedule] Running: ${shell} ${args.join(' ')}`);
     const child = cpSpawn(shell, args, {
-      cwd,
+      cwd: inWsl ? os.homedir() : cwd,
       stdio: ['ignore', 'ignore', 'pipe'],
       env: { ...cleanPtyEnv, FORCE_COLOR: '0' },
     });
