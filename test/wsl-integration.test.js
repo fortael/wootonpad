@@ -21,6 +21,11 @@ Object.defineProperty(process, 'platform', { value: 'win32' });
 const HOME = fs.mkdtempSync(realPath.join(os.tmpdir(), 'wootonpad-wsl-'));
 os.homedir = () => HOME;
 
+// The simulated host must not inherit the Claude environment of whoever runs the
+// suite: main.js snapshots process.env at load to build the PTY environment, and
+// what that environment carries is one of the things asserted below.
+delete process.env.CLAUDE_CONFIG_DIR;
+
 const DISTRO = 'Ubuntu';
 const PROJECT_POSIX = '/home/delirus/work/proj';
 const PROJECT_UNC = '\\\\wsl.localhost\\Ubuntu\\home\\delirus\\work\\proj';
@@ -77,6 +82,30 @@ const stubs = {
     searchFtsRecreated: false,
   }),
   ws: { WebSocketServer: function () { return permissive(); } },
+  // Dev hot-reload. Both watch the source tree, and the watchers they leave
+  // behind are handles nothing here can reach to close — they are what kept this
+  // process alive after the last subtest until CI cancelled the job.
+  chokidar: { watch: () => permissive() },
+  'electron-reloader': () => {},
+  // Everything the handlers shell out to. Unstubbed, the suite runs real
+  // commands on whatever host it lands on — `du -sk`, `docker compose ps`, and
+  // any wsl.exe that happens to be on PATH — so it passed or failed by accident
+  // of where it ran. The distribution list is answered, since that is what makes
+  // an account's shell resolvable; every other command fails carrying its argv,
+  // which is the shape the handlers report and these tests assert on.
+  child_process: {
+    execFileSync: (file, args = []) => {
+      if (file === 'wsl.exe' && args[0] === '--list') return `${DISTRO}\r\n`;
+      throw new Error(`Command failed: ${file} ${args.join(' ')}`);
+    },
+    execFile: (file, args, options, callback) => {
+      const done = typeof options === 'function' ? options : callback;
+      if (done) setImmediate(() => done(new Error(`Command failed: ${file} ${args.join(' ')}`), '', ''));
+      return permissive({ pid: 1 });
+    },
+    spawn: () => permissive({ pid: 1 }),
+    spawnSync: (file, args = []) => ({ status: 1, stdout: '', stderr: `Command failed: ${file} ${args.join(' ')}` }),
+  },
 };
 
 const originalLoad = Module._load;

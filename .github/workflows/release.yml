@@ -11,6 +11,8 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # A stuck test process must not hold a release open indefinitely.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
 

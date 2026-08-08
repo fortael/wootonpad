@@ -15,6 +15,9 @@ jobs:
   test:
     name: Unit tests
     runs-on: windows-latest
+    # Same cap as the Linux suite, with room for the slower npm ci on Windows.
+    # Windows minutes bill at twice the Linux rate, so a hang here is expensive.
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v5
@@ -33,6 +36,9 @@ jobs:
   build:
     name: Package installer
     runs-on: windows-latest
+    # Packaging plus the 30 s smoke test runs in well under ten minutes; this is
+    # the backstop for a step that never returns.
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v5
