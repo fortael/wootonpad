@@ -35,8 +35,11 @@ contextBridge.exposeInMainWorld('api', {
   // the window unusable if a stored value is ever garbage.
   setUiZoom: (factor) => {
     const f = Number(factor);
-    webFrame.setZoomFactor(Number.isFinite(f) ? Math.min(1.5, Math.max(0.8, f)) : 1);
+    webFrame.setZoomFactor(Number.isFinite(f) && f > 0 ? Math.min(1.5, Math.max(0.8, f)) : 1);
   },
+  // Zoom costs CSS pixels, so the window's minimum size has to follow it. Takes the
+  // same zoom factor as setUiZoom, not a percentage — one unit across the bridge.
+  setUiScaleMinimum: (factor) => ipcRenderer.invoke('set-ui-scale-minimum', factor),
 
   // Multi-account
   getAccounts: () => ipcRenderer.invoke('get-accounts'),

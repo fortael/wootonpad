@@ -812,7 +812,11 @@ window._normalizeUiScale = (value) => {
 };
 
 window._applyUiScale = (percent) => {
-  window.api.setUiZoom(window._normalizeUiScale(percent) / 100);
+  const factor = window._normalizeUiScale(percent) / 100;
+  window.api.setUiZoom(factor);
+  // The window's minimum size is in device-independent pixels, so it has to grow
+  // with the scale to keep the same layout room — the main process owns that.
+  window.api.setUiScaleMinimum?.(factor)?.catch(() => {});
   // Zooming changes the viewport size in CSS pixels, which fires 'resize' and
   // refits the terminals through the handler above. Terminals opened later are
   // fitted on show, so nothing else has to be told about the new scale.
