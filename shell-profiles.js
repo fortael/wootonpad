@@ -10,8 +10,6 @@ function discoverShellProfiles() {
   const profiles = [];
 
   if (isWindows) {
-    const { execSync } = require('child_process');
-
     // CMD
     const comspec = process.env.COMSPEC || 'C:\\WINDOWS\\system32\\cmd.exe';
     if (fs.existsSync(comspec)) {
@@ -55,13 +53,9 @@ function discoverShellProfiles() {
     }
 
     // WSL distributions
-    try {
-      const raw = execSync('wsl.exe --list --quiet', { timeout: 5000, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
-      const distros = raw.replace(/\0/g, '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-      for (const distro of distros) {
-        profiles.push({ id: 'wsl:' + distro, name: 'WSL — ' + distro, path: 'wsl.exe', args: ['-d', distro] });
-      }
-    } catch {}
+    for (const distro of listWslDistros()) {
+      profiles.push({ id: 'wsl:' + distro, name: 'WSL — ' + distro, path: 'wsl.exe', args: ['-d', distro] });
+    }
   } else {
     // macOS / Linux: read /etc/shells for the canonical list
     const seen = new Set();
@@ -145,14 +139,157 @@ function resolveShell(profileId) {
   return { id: 'auto', name: 'Auto', path: '/bin/sh' };
 }
 
-// Convert a Windows path to a WSL /mnt/ path
+// Convert a Windows path to the path a distribution sees.
+//   C:\Users\foo                        → /mnt/c/Users/foo
+//   \\wsl.localhost\Ubuntu\home\u\proj  → /home/u/proj
+// The UNC case is what a Windows folder picker returns for a directory living
+// inside a distribution; the POSIX form it maps to is the one Claude records
+// and the one the project folder name is encoded from.
 function windowsToWslPath(winPath) {
   if (!winPath) return winPath;
-  // C:\Users\foo → /mnt/c/Users/foo
+  const unc = winPath.match(/^\\\\wsl(?:\.localhost|\$)\\[^\\]+(\\.*)?$/);
+  if (unc) return (unc[1] || '\\').replace(/\\/g, '/');
   const normalized = winPath.replace(/\\/g, '/');
   const match = normalized.match(/^([A-Za-z]):(\/.*)/);
   if (match) return '/mnt/' + match[1].toLowerCase() + match[2];
   return normalized;
+}
+
+// The distribution a WSL UNC path belongs to, or null if it is not one.
+function wslDistroFromUncPath(winPath) {
+  const match = typeof winPath === 'string' && winPath.match(/^\\\\wsl(?:\.localhost|\$)\\([^\\]+)/);
+  return match ? match[1] : null;
+}
+
+// --- WSL-backed accounts -------------------------------------------------
+// Claude running inside a distribution writes POSIX paths into its .jsonl
+// files, and those paths are what the project folder name is encoded from.
+// So the POSIX form stays canonical everywhere in the app, and is translated
+// only at the moment a Windows API has to touch the file.
+
+// Host prefixes that expose a distribution's filesystem. `wsl.localhost` is the
+// current one; `wsl$` is kept for older Windows 10 builds. Which one resolves
+// is probed rather than assumed.
+const WSL_UNC_PREFIXES = ['\\\\wsl.localhost\\', '\\\\wsl$\\'];
+
+// Convert a POSIX path inside a distribution to the Windows path reaching it.
+//   /home/u/proj   → \\wsl.localhost\<distro>\home\u\proj
+//   /mnt/c/Users/u → C:\Users\u          (already on a Windows volume)
+// Non-absolute input and paths that are already Windows-shaped pass through.
+function wslToWindowsPath(posixPath, distro, uncPrefix = WSL_UNC_PREFIXES[0]) {
+  if (!posixPath || !posixPath.startsWith('/')) return posixPath;
+  const mounted = posixPath.match(/^\/mnt\/([a-zA-Z])(\/.*)?$/);
+  if (mounted) {
+    return mounted[1].toUpperCase() + ':' + (mounted[2] || '/').replace(/\//g, '\\');
+  }
+  if (!distro) return posixPath;
+  return uncPrefix + distro + posixPath.replace(/\//g, '\\');
+}
+
+// True for a POSIX absolute path — the form every path recorded inside a
+// distribution takes, whether it lives on the distribution's own filesystem or
+// on a mounted Windows volume. Both need translating before a Windows fs call
+// and both are resolved by the distribution when a command runs there, so the
+// two cases are not distinguished here; wslToWindowsPath maps each to its own
+// Windows form.
+function isPosixAbsolutePath(p) {
+  return typeof p === 'string' && p.startsWith('/');
+}
+
+// Join inside a project while keeping the flavour of its root. path.join is
+// platform-specific: on Windows it would rewrite a POSIX project path with
+// backslashes, and the folder name the app looks for is encoded from that path,
+// so the rewrite would silently point at a project folder that does not exist.
+function projectJoin(projectPath, ...parts) {
+  return isPosixAbsolutePath(projectPath)
+    ? path.posix.join(projectPath, ...parts)
+    : path.join(projectPath, ...parts);
+}
+
+// Installed distributions. `wsl.exe --list` emits UTF-16LE, hence the NUL strip.
+function listWslDistros() {
+  if (!isWindows) return [];
+  try {
+    const { execFileSync } = require('child_process');
+    const raw = execFileSync('wsl.exe', ['--list', '--quiet'], {
+      timeout: 5000, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return raw.replace(/\0/g, '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+// Turn a resolved $HOME into the account fields, choosing the UNC prefix that
+// actually resolves. Returns null when the distribution has no Claude home.
+function wslClaudeHomeFrom(distro, home) {
+  if (!home || !home.startsWith('/')) return null;
+  const claudePosix = home + '/.claude';
+  for (const prefix of WSL_UNC_PREFIXES) {
+    const configDir = wslToWindowsPath(claudePosix, distro, prefix);
+    if (fs.existsSync(path.join(configDir, 'projects'))) {
+      return { distro, home, claudePosix, configDir, uncPrefix: prefix };
+    }
+  }
+  return null;
+}
+
+// Resolve $HOME inside a distribution and the Windows path of its ~/.claude.
+// Async: starting a distribution can take seconds, and this runs in the main
+// process where a synchronous wait would freeze the window.
+async function probeWslClaudeHome(distro) {
+  if (!isWindows || !distro) return null;
+  const { execFile } = require('child_process');
+  const home = await new Promise((resolve) => {
+    execFile('wsl.exe', ['-d', distro, '--exec', 'sh', '-c', 'printf %s "$HOME"'], {
+      timeout: 10000, encoding: 'utf8',
+    }, (err, stdout) => resolve(err ? null : (stdout || '').replace(/\0/g, '').trim()));
+  });
+  return wslClaudeHomeFrom(distro, home);
+}
+
+// Distributions that actually hold a Claude home worth attaching an account to.
+// Probed concurrently so several distributions cost one wait, not N.
+async function discoverWslClaudeHomes() {
+  const probes = await Promise.all(listWslDistros().map(probeWslClaudeHome));
+  return probes.filter(Boolean);
+}
+
+// Build the argv that runs `argv` inside `distro`, with `cwd` as the working
+// directory. Kept as an argv array rather than a shell string so no quoting of
+// the project path is involved.
+function wslExecArgs(distro, cwd, argv) {
+  const args = ['-d', distro];
+  if (cwd) args.push('--cd', cwd);
+  return args.concat(['--exec', ...argv]);
+}
+
+// wsl.exe passes a variable into the distribution only if it is listed in
+// WSLENV. Returns the patch to apply to `env`; names already listed are not
+// duplicated, and existing entries (with their /p, /l … flags) are preserved.
+function withWslEnv(env, names) {
+  const existing = (env.WSLENV || '').split(':').filter(Boolean);
+  const present = new Set(existing.map(entry => entry.split('/')[0]));
+  const added = names.filter(name => env[name] !== undefined && !present.has(name));
+  if (!added.length) return {};
+  return { WSLENV: [...existing, ...added].join(':') };
+}
+
+// The host address a distribution can reach the app on. Under the default NAT
+// networking the CLI finds this same address as its default gateway, so binding
+// to it is what makes the IDE socket reachable — while still not exposing it to
+// the wider network the way 0.0.0.0 would. Under mirrored networking there is
+// no WSL adapter and loopback is shared, so 127.0.0.1 is both correct and the
+// address the CLI falls back to.
+function wslHostAddressFrom(interfaces) {
+  for (const [name, addresses] of Object.entries(interfaces || {})) {
+    if (!/vEthernet \(WSL/i.test(name)) continue;
+    for (const address of addresses || []) {
+      const family = address.family;
+      if ((family === 'IPv4' || family === 4) && !address.internal) return address.address;
+    }
+  }
+  return null;
 }
 
 function isWslShell(shellPath) {
@@ -188,4 +325,10 @@ function shellArgs(shellPath, cmd, extraArgs) {
   return [];
 }
 
-module.exports = { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs };
+module.exports = {
+  discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell,
+  windowsToWslPath, shellArgs,
+  WSL_UNC_PREFIXES, wslToWindowsPath, isPosixAbsolutePath, listWslDistros,
+  probeWslClaudeHome, discoverWslClaudeHomes, wslClaudeHomeFrom, wslExecArgs, projectJoin,
+  withWslEnv, wslHostAddressFrom, wslDistroFromUncPath,
+};

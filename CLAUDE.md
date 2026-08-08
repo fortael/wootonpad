@@ -80,6 +80,44 @@ When a Claude session starts, `main.js` calls `startMcpServer()` which binds a W
 
 Settings are stored in SQLite (`settings` table) keyed by `"global"` or `"project:<path>"`. Defaults are defined in `SETTING_DEFAULTS` in `main.js`. The renderer always calls `getEffectiveSettings(projectPath)` to get merged global+project values.
 
+### WSL-backed accounts
+
+An account may carry `wslDistro`, in which case its Claude home lives inside
+that WSL distribution and `configDir` is the Windows UNC view of it. Accounts
+without the field behave exactly as before — every helper below is identity for
+them. See `docs/adr/0002-wsl-backed-accounts.md` for the reasoning.
+
+Three rules, in order of how easy they are to break:
+
+1. **The POSIX path is canonical.** `projectPath` is stored, keyed and
+   `encodeProjectPath`-hashed in the form Claude wrote into the `.jsonl` — never
+   the Windows form. `add-project` normalises a UNC path from the folder picker
+   back to POSIX via `canonicalProjectPath()`.
+2. **Translate at the fs boundary, never before.** Wrap the argument of every
+   `fs.*` call that can receive a project path in `hostPath()`, and compose
+   paths with `projectJoin()` — plain `path.join` on Windows rewrites a POSIX
+   path with backslashes and destroys rule 1. This applies to paths arriving
+   from the CLI over MCP too.
+3. **Anything that runs *in* a project runs in the distribution.** Use
+   `projectExecFile()` (or `projectGit()` on top of it), which rewrites
+   `(argv, cwd)` into `wsl.exe -d <distro> --cd <cwd> --exec <argv>`. Never a
+   shell string: the project path must not meet shell quoting.
+
+Whatever the account owns follows the account, not the Windows home — plans,
+global memory files, `/stats`, schedules. Modules that cannot reach
+`activeConfigDir()` take an injected `configure({...})` (see the two schedule
+modules) rather than pinning a directory at module load.
+
+Change detection uses an mtime-sweep poll for WSL accounts: a recursive
+`fs.watch` over the 9p share succeeds and then delivers nothing, so its silence
+is indistinguishable from no changes.
+
+If the MCP bridge never connects for a WSL session, check in this order: a
+Windows Firewall rule for inbound connections on the `vEthernet (WSL)` adapter,
+and a proxy configured inside the distribution — the CLI resolves a proxy for
+the IDE socket and honours `NO_PROXY`, so `HTTP_PROXY`/`ALL_PROXY` set in the
+distro will capture the connection to the host address.
+
 ### Session identity and fork detection
 
 When a new Claude session is spawned with `--fork-session` or a plan is accepted, a new `.jsonl` file appears with a different session UUID. `session-transitions.js` monitors active PTY sessions for new files in their project folder and matches them to the correct parent via `forkedFrom` or `parentSessionId` fields in the JSONL. Once matched, it re-keys the active session map and notifies the renderer.

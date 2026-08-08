@@ -1,0 +1,126 @@
+name: Build (Windows)
+
+# Packaging-only pipeline: proves the Windows installer builds, that the native
+# modules survive packaging, and that the packaged app actually starts.
+# It publishes nothing — the installer is left as a downloadable run artifact.
+# Wire Windows into release.yml only after this workflow is green and the
+# artifact has been verified by hand.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: windows-latest
+    # Same cap as the Linux suite, with room for the slower npm ci on Windows.
+    # Windows minutes bill at twice the Linux rate, so a hang here is expensive.
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+  build:
+    name: Package installer
+    runs-on: windows-latest
+    # Packaging plus the 30 s smoke test runs in well under ten minutes; this is
+    # the backstop for a step that never returns.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bundle assets
+        run: npm run bundle:codemirror && npm run bundle:vue
+
+      # The arch list comes from build.win.target[].arch in package.json and wins
+      # over any CLI arch flag, so this produces ONE NSIS installer covering both
+      # x64 and arm64 (`archs=x64, arm64` in the electron-builder log). Both archs
+      # of better-sqlite3 and node-pty resolve from prebuilds — no ARM64 MSVC
+      # toolset is involved. To ship per-arch installers, split the target in
+      # package.json; passing --x64 here does nothing.
+      - name: Build Windows app
+        run: npx electron-builder --win --publish never
+
+      # Records the exact file names electron-builder produced, so the release
+      # workflow can later reference them instead of guessing at globs.
+      - name: List build output
+        shell: pwsh
+        run: Get-ChildItem dist | Select-Object Mode, Length, Name | Format-Table -AutoSize
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v7
+        with:
+          name: wootonpad-win-installer
+          path: dist/*.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      # Auto-update metadata. Kept separate and non-fatal so a change in
+      # electron-builder's behaviour shows up as a warning with the installer
+      # still uploaded, rather than as a failed job. `--publish never` does emit
+      # both files today (latest.yml 347 B, .blockmap ~226 KB).
+      - name: Upload auto-update metadata
+        uses: actions/upload-artifact@v7
+        with:
+          name: wootonpad-win-update-metadata
+          path: |
+            dist/latest.yml
+            dist/*.blockmap
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Check native modules were unpacked from the asar
+        shell: pwsh
+        run: |
+          $unpacked = 'dist\win-unpacked\resources\app.asar.unpacked\node_modules'
+          if (-not (Test-Path $unpacked)) { throw "Missing $unpacked" }
+          Get-ChildItem -Path $unpacked -Recurse -Include *.node, *.dll, *.exe |
+            Select-Object Length, FullName | Format-Table -AutoSize
+          foreach ($module in 'better-sqlite3', 'node-pty') {
+            $binaries = Get-ChildItem -Path (Join-Path $unpacked $module) -Recurse -Filter *.node -ErrorAction SilentlyContinue
+            if (-not $binaries) { throw "No .node binary unpacked for $module" }
+          }
+
+      # Catches the usual Windows packaging failure: the app is built, but dies
+      # on startup because a native module cannot be loaded from the asar.
+      - name: Smoke-test the packaged app
+        shell: pwsh
+        run: |
+          $exe = 'dist\win-unpacked\WootonPad.exe'
+          if (-not (Test-Path $exe)) { throw "Missing $exe" }
+          $proc = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 30
+          $proc.Refresh()
+          if ($proc.HasExited) { throw "App exited after startup with code $($proc.ExitCode)" }
+          Write-Host "App still running after 30s (pid $($proc.Id))"
+          Stop-Process -Id $proc.Id -Force
+
+      - name: Dump app log
+        if: always()
+        shell: pwsh
+        run: |
+          $log = Join-Path $env:APPDATA 'WootonPad\logs\main.log'
+          if (Test-Path $log) { Get-Content $log } else { Write-Host "No log file at $log" }

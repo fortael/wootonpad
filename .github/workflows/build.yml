@@ -9,6 +9,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The suite finishes in seconds; anything past this is a stuck process, not
+    # slow tests. Without a cap a leaked handle in a test file burned six hours
+    # of runner time before the job was cancelled by hand.
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v4

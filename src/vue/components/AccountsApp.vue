@@ -89,6 +89,24 @@
             </button>
           </div>
         </div>
+
+        <div v-if="wslHomes.length" class="accounts-add-form accounts-wsl-section">
+          <p class="accounts-add-desc">
+            Claude also runs inside WSL. Attach an account to a distribution to browse
+            the sessions it stores there, alongside the ones on Windows.
+          </p>
+          <div v-for="home in wslHomes" :key="home.distro" class="accounts-wsl-row">
+            <span class="accounts-wsl-name">{{ home.distro }}</span>
+            <span class="accounts-wsl-path">{{ home.claudePosix }}</span>
+            <button
+              class="btn-green"
+              :disabled="addingWsl === home.distro || hasWslAccount(home.distro)"
+              @click="addWslAccount(home)"
+            >
+              {{ hasWslAccount(home.distro) ? 'Added' : (addingWsl === home.distro ? 'Adding…' : 'Attach') }}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -110,6 +128,13 @@ let activeEditInput = null;
 const newName = ref('');
 const adding = ref(false);
 const addOpen = ref(false);
+// Distributions holding a reachable Claude home. Empty off Windows, and empty
+// when no distribution has one — the section stays hidden in both cases.
+const wslHomes = ref([]);
+const addingWsl = ref(null);
+// Probing starts a distribution, so it happens once per window rather than on
+// every accounts refresh — including when the answer is "none".
+let wslHomesLoaded = false;
 
 function hasUsage(id) {
   const u = usage.value[id];
@@ -172,10 +197,35 @@ async function addAccount() {
   if (newAcc) newName.value = '';
 }
 
+function hasWslAccount(distro) {
+  return accounts.value.some(a => a.wslDistro === distro);
+}
+
+async function addWslAccount(home) {
+  addingWsl.value = home.distro;
+  try {
+    const created = await props.callbacks.createWslAccount?.(home.distro);
+    if (created?.error) alert(created.error);
+  } finally {
+    addingWsl.value = null;
+  }
+}
+
+async function loadWslHomes() {
+  if (wslHomesLoaded) return;
+  wslHomesLoaded = true;
+  try {
+    wslHomes.value = (await props.callbacks.discoverWslClaudeHomes?.()) || [];
+  } catch {
+    wslHomes.value = [];
+  }
+}
+
 defineExpose({
   setAccounts(list, activeId) {
     accounts.value = list;
     if (activeId !== undefined) activeAccountId.value = activeId;
+    loadWslHomes();
   },
   setActiveAccount(id) { activeAccountId.value = id; },
   setUsage(usageObj) { usage.value = { ...usageObj }; },
