@@ -288,9 +288,134 @@ app.on('open-url', (event, url) => {
   if (filePath) dispatchProjectOpen(filePath, continueSession);
 });
 
+// The window floor the app shipped with, i.e. the smallest frame the layout was
+// drawn for at 100%. Page zoom makes a window of a given size worth fewer CSS
+// pixels, so the floor has to grow with the interface scale — at 150% an 800 px
+// window is 533 CSS px, which cannot hold the 340 px sidebar and a terminal
+// beside it.
+const MIN_WINDOW_WIDTH = 800;
+const MIN_WINDOW_HEIGHT = 500;
+
+// Same clamp as the renderer and the preload bridge, which keeps its own copy of the
+// limits — a sandboxed preload can only require Electron and Node built-ins, not a
+// shared module. A stored value that has been hand-edited must not be able to demand
+// a window nobody can fit on screen, and a value that is not a usable number means
+// no scaling at all.
+function clampUiScaleFactor(factor) {
+  const n = Number(factor);
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return Math.min(1.5, Math.max(0.8, n));
+}
+
+// Settings store the scale as a percentage; a missing or empty key means no scaling.
+function uiScaleFactorFromPercent(percent) {
+  if (percent == null || percent === '') return 1;
+  return clampUiScaleFactor(Number(percent) / 100);
+}
+
+// The scale currently reflected in the window minimum, so a display change can
+// recompute the floor without waiting for the renderer to ask again.
+let uiScaleMinimumFactor = 1;
+
+// Set when a scale bump grew the window mid-session: remembers the size the user
+// had, so dropping the scale again — or cancelling a preview — can put it back.
+// Cleared as soon as the user resizes the window themselves; the grown size is
+// theirs then. Growth at window creation is deliberately not recorded: there is no
+// user action to undo, and the size the window opened at is the size it has had all
+// session, so shrinking it later would come out of nowhere.
+let scaleGrowth = null;
+let displayWatchInstalled = false;
+
+// Window sizes are device-independent pixels, which is what the scale multiplies.
+// Capped at the work area of the display the window is on: a minimum larger than
+// the screen leaves a window that cannot be resized at all. `reference` names that
+// display before the window exists, e.g. a restored position on a second monitor.
+function minimumWindowSize(factor, reference) {
+  const rect = reference
+    || (mainWindow && !mainWindow.isDestroyed() ? mainWindow.getBounds() : null);
+  const display = rect ? screen.getDisplayMatching(rect) : screen.getPrimaryDisplay();
+  const { width, height } = display.workAreaSize;
+  return {
+    width: Math.min(Math.round(MIN_WINDOW_WIDTH * factor), width),
+    height: Math.min(Math.round(MIN_WINDOW_HEIGHT * factor), height),
+  };
+}
+
+// Keeps a rectangle inside the work area of the display it sits on. Growing a
+// window to a new minimum moves its far edge, which without this pushes the window
+// off screen instead of just making it bigger.
+function fitBoundsToWorkArea(rect) {
+  const area = screen.getDisplayMatching(rect).workArea;
+  const width = Math.min(rect.width, area.width);
+  const height = Math.min(rect.height, area.height);
+  return {
+    width,
+    height,
+    x: Math.round(Math.min(Math.max(rect.x, area.x), area.x + area.width - width)),
+    y: Math.round(Math.min(Math.max(rect.y, area.y), area.y + area.height - height)),
+  };
+}
+
+// Applies the floor for a given scale to the live window: grows it when it sits
+// under the floor, and shrinks it back once the floor drops again while the window
+// is still exactly the size we grew it to.
+function applyWindowMinimum(factor) {
+  if (!mainWindow || mainWindow.isDestroyed()) return null;
+
+  const minimum = minimumWindowSize(factor);
+  mainWindow.setMinimumSize(minimum.width, minimum.height);
+
+  // The bounds of a minimised, maximised or full-screen window are not a size the
+  // user picked, so leave them alone — the minimum applies again on restore.
+  if (mainWindow.isMinimized() || mainWindow.isMaximized() || mainWindow.isFullScreen()) {
+    return minimum;
+  }
+
+  const b = mainWindow.getBounds();
+  if (scaleGrowth && (b.width !== scaleGrowth.width || b.height !== scaleGrowth.height)) {
+    scaleGrowth = null;
+  }
+
+  if (b.width < minimum.width || b.height < minimum.height) {
+    const before = scaleGrowth ? scaleGrowth.before : { width: b.width, height: b.height };
+    mainWindow.setBounds(fitBoundsToWorkArea({
+      ...b,
+      width: Math.max(b.width, minimum.width),
+      height: Math.max(b.height, minimum.height),
+    }));
+    const grown = mainWindow.getBounds();
+    scaleGrowth = { before, width: grown.width, height: grown.height };
+  } else if (scaleGrowth) {
+    const width = Math.max(scaleGrowth.before.width, minimum.width);
+    const height = Math.max(scaleGrowth.before.height, minimum.height);
+    // Only when the floor has actually dropped far enough to give the size back.
+    // Without this test, being called again at the same scale — a save right after
+    // a preview, or a display-metrics event — resizes to the size the window
+    // already has and forgets what it was grown from.
+    if (width !== b.width || height !== b.height) {
+      mainWindow.setBounds(fitBoundsToWorkArea({ ...b, width, height }));
+      scaleGrowth = null;
+    }
+  }
+  return minimum;
+}
+
+// A display change can leave the floor larger than the screen the window is now on
+// — undocking from a big monitor — which makes the window unresizable and strands
+// part of it off screen. Recompute it from the scale currently in effect.
+function watchDisplayChanges() {
+  if (displayWatchInstalled) return;
+  displayWatchInstalled = true;
+  const recompute = () => applyWindowMinimum(uiScaleMinimumFactor);
+  screen.on('display-added', recompute);
+  screen.on('display-removed', recompute);
+  screen.on('display-metrics-changed', recompute);
+}
+
 function createWindow() {
   // Restore saved window bounds
-  const savedBounds = getSetting('global')?.windowBounds;
+  const globalSettings = getSetting('global');
+  const savedBounds = globalSettings?.windowBounds;
   let bounds = { width: 1400, height: 900 };
 
   let restorePosition = null;
@@ -312,10 +437,22 @@ function createWindow() {
     }
   }
 
+  // Bounds saved at a smaller scale can be under the floor the current scale
+  // needs; widen them here rather than opening a window the user cannot restore
+  // to its own size once they touch the frame.
+  uiScaleMinimumFactor = uiScaleFactorFromPercent(globalSettings?.uiScale);
+  const minimum = minimumWindowSize(
+    uiScaleMinimumFactor,
+    restorePosition ? { ...restorePosition, width: bounds.width, height: bounds.height } : null,
+  );
+  const grownByFloor = bounds.width < minimum.width || bounds.height < minimum.height;
+  bounds.width = Math.max(bounds.width, minimum.width);
+  bounds.height = Math.max(bounds.height, minimum.height);
+
   mainWindow = new BrowserWindow({
     ...bounds,
-    minWidth: 800,
-    minHeight: 500,
+    minWidth: minimum.width,
+    minHeight: minimum.height,
     title: 'Wooton Pad',
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: {
@@ -327,7 +464,10 @@ function createWindow() {
 
   // Set position after creation to prevent macOS from clamping size
   if (restorePosition) {
-    mainWindow.setBounds({ ...restorePosition, width: bounds.width, height: bounds.height });
+    const restored = { ...restorePosition, width: bounds.width, height: bounds.height };
+    // Re-clamp only when the floor grew the window: an untouched restore keeps the
+    // slack the on-screen check above deliberately allows.
+    mainWindow.setBounds(grownByFloor ? fitBoundsToWorkArea(restored) : restored);
   }
 
   mainWindow.loadFile(path.join(__dirname, 'public', 'index.html'));
@@ -418,7 +558,19 @@ function createWindow() {
     }
     mainWindow = null;
   });
+
+  watchDisplayChanges();
 }
+
+// Keeps the window's floor in step with the interface scale, including while the
+// settings slider is only previewing — so what the preview shows is what saving
+// gives, and cancelling gives the window back. Growing is deliberate: a window
+// already under the new floor cannot be dragged back to the size it currently has,
+// which reads as a bug.
+ipcMain.handle('set-ui-scale-minimum', (_event, factor) => {
+  uiScaleMinimumFactor = clampUiScaleFactor(factor);
+  return applyWindowMinimum(uiScaleMinimumFactor);
+});
 
 function buildMenu() {
   const template = [

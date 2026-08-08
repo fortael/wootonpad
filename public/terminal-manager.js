@@ -21,6 +21,30 @@ window._applyTerminalFont = (fontFamily) => {
   }
 };
 
+// Terminal cell size, independent of the interface scale — the interface zoom
+// multiplies this, so a terminal can be kept at its old size while the rest of
+// the app grows, or the other way round.
+const TERMINAL_FONT_SIZE_MIN = 8;
+const TERMINAL_FONT_SIZE_MAX = 32;
+const TERMINAL_FONT_SIZE_DEFAULT = 12;
+let currentFontSize = TERMINAL_FONT_SIZE_DEFAULT;
+
+window._normalizeTerminalFontSize = (value) => {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return TERMINAL_FONT_SIZE_DEFAULT;
+  return Math.min(TERMINAL_FONT_SIZE_MAX, Math.max(TERMINAL_FONT_SIZE_MIN, n));
+};
+
+window._applyTerminalFontSize = (size) => {
+  currentFontSize = window._normalizeTerminalFontSize(size);
+  for (const [, entry] of openSessions) {
+    if (!entry.closed) {
+      entry.terminal.options.fontSize = currentFontSize;
+      safeFit(entry);
+    }
+  }
+};
+
 // --- Terminal key bindings ---
 // Shift+Enter → kitty protocol (CSI 13;2u) so Claude Code treats it as newline, not submit.
 // Two layers needed:
@@ -185,7 +209,7 @@ function createTerminalEntry(session) {
   terminalsEl.appendChild(container);
 
   const terminal = new Terminal({
-    fontSize: 12,
+    fontSize: currentFontSize,
     fontFamily: currentFontFamily,
     theme: TERMINAL_THEME,
     cursorBlink: false,

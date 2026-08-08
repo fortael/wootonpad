@@ -80,6 +80,13 @@ When a Claude session starts, `main.js` calls `startMcpServer()` which binds a W
 
 Settings are stored in SQLite (`settings` table) keyed by `"global"` or `"project:<path>"`. Defaults are defined in `SETTING_DEFAULTS` in `main.js`. The renderer always calls `getEffectiveSettings(projectPath)` to get merged global+project values.
 
+Appearance settings the main process never reads — `uiFont`, `monoFont`, `uiScale`,
+`terminalFontSize` — deliberately stay out of `SETTING_DEFAULTS`: a key listed
+there becomes overridable per project, which is wrong for anything that applies
+to the whole window. They live in the `"global"` row, are read once by the init
+block in `public/app.js`, and are pushed live by the `window._apply*` callbacks
+that `SettingsPanelApp.vue` calls after saving.
+
 ### WSL-backed accounts
 
 An account may carry `wslDistro`, in which case its Claude home lives inside
