@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer, webUtils } = require('electron');
+const { contextBridge, ipcRenderer, webUtils, webFrame } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   // Invoke (request-response)
@@ -27,6 +27,16 @@ contextBridge.exposeInMainWorld('api', {
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key, value) => ipcRenderer.invoke('set-setting', key, value),
   deleteSetting: (key) => ipcRenderer.invoke('delete-setting', key),
+
+  // Interface scale. Page zoom rather than a CSS transform: it changes the CSS
+  // pixel size of the whole frame, so text, spacing, icons and the terminal
+  // canvas all scale together and stay crisp at the new device pixel ratio.
+  // Clamped here as well as in the renderer — this is the call that can leave
+  // the window unusable if a stored value is ever garbage.
+  setUiZoom: (factor) => {
+    const f = Number(factor);
+    webFrame.setZoomFactor(Number.isFinite(f) ? Math.min(1.5, Math.max(0.8, f)) : 1);
+  },
 
   // Multi-account
   getAccounts: () => ipcRenderer.invoke('get-accounts'),

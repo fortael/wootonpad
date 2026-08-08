@@ -4133,6 +4133,44 @@ body { display: flex; flex-direction: column; }
 }
 .settings-update-link:hover { text-decoration: underline; }
 
+/* Interface scale slider */
+.settings-scale-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.settings-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 140px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-default);
+  outline: none;
+  cursor: pointer;
+}
+.settings-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+.settings-range:hover::-webkit-slider-thumb,
+.settings-range:focus::-webkit-slider-thumb {
+  background: var(--green-500);
+}
+/* The value must not reflow the row as it goes 80% → 150% */
+.settings-scale-value {
+  min-width: 38px;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-secondary);
+}
+
 /* Font selector preview */
 .settings-font-control {
   flex-direction: column;

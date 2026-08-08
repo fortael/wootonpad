@@ -783,6 +783,12 @@ setTimeout(() => {
     if (global.uiFont && global.uiFont !== 'default' && window.TERMINAL_FONTS?.[global.uiFont]) {
       document.documentElement.style.setProperty('--font-ui', window.TERMINAL_FONTS[global.uiFont].family);
     }
+    if (global.uiScale) {
+      window._applyUiScale?.(global.uiScale);
+    }
+    if (global.terminalFontSize) {
+      window._applyTerminalFontSize?.(global.terminalFontSize);
+    }
     if (global.showAvatars === false) {
       document.body.classList.add('hide-avatars');
     }
@@ -791,6 +797,25 @@ setTimeout(() => {
 
 window._setShowAvatars = (val) => {
   document.body.classList.toggle('hide-avatars', !val);
+};
+
+// Interface scale, in percent. 100 is the size everything was designed at, so
+// the stylesheet keeps its pixel values and the zoom does the scaling.
+const UI_SCALE_MIN = 80;
+const UI_SCALE_MAX = 150;
+const UI_SCALE_DEFAULT = 100;
+
+window._normalizeUiScale = (value) => {
+  const n = Math.round(Number(value));
+  if (!Number.isFinite(n)) return UI_SCALE_DEFAULT;
+  return Math.min(UI_SCALE_MAX, Math.max(UI_SCALE_MIN, n));
+};
+
+window._applyUiScale = (percent) => {
+  window.api.setUiZoom(window._normalizeUiScale(percent) / 100);
+  // Zooming changes the viewport size in CSS pixels, which fires 'resize' and
+  // refits the terminals through the handler above. Terminals opened later are
+  // fitted on show, so nothing else has to be told about the new scale.
 };
 
 window._applyUiFont = (fontKey) => {

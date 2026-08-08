@@ -155,6 +155,17 @@
               </div>
             </div>
 
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <span class="settings-label">Terminal Font Size</span>
+                <div class="settings-description">Cell size for terminal sessions, before the interface scale is applied</div>
+              </div>
+              <div class="settings-field-control">
+                <input type="number" class="settings-input settings-input-compact"
+                  v-model.number="form.terminalFontSize" min="8" max="32" />
+              </div>
+            </div>
+
             <div class="settings-field settings-field-wide">
               <div class="settings-field-info">
                 <span class="settings-label">App Font</span>
@@ -167,6 +178,19 @@
                 <span class="settings-font-preview" :style="{ fontFamily: terminalFonts[form.uiFont]?.family }">
                   Wooton Pad — 42 sessions
                 </span>
+              </div>
+            </div>
+
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <span class="settings-label">Interface Scale</span>
+                <div class="settings-description">Scales the whole interface — text, spacing, icons and terminals. Applied when the slider is released; Cancel puts it back.</div>
+              </div>
+              <div class="settings-field-control settings-scale-control">
+                <input type="range" class="settings-range"
+                  min="80" max="150" step="10"
+                  v-model.number="form.uiScale" @change="previewUiScale" />
+                <span class="settings-scale-value">{{ form.uiScale }}%</span>
               </div>
             </div>
 
@@ -306,7 +330,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, computed, onMounted, onUnmounted } from 'vue';
 import { store } from '../store.js';
 import SbSwitch from './SbSwitch.vue';
 import SbButton from './SbButton.vue';
@@ -351,6 +375,8 @@ const form = reactive({
   showAvatars: true,
   monoFont: 'default',
   uiFont: 'default',
+  uiScale: 100,
+  terminalFontSize: 12,
   commitMessagePrompt: '',
   gitlabToken: '',
 });
@@ -365,6 +391,9 @@ const useGlobal = reactive({
 });
 
 let originalMcpEmulation = true;
+// The scale the app is actually running at. The slider previews live, so this is
+// what an unsaved panel has to be put back to.
+let savedUiScale = 100;
 
 // ── Helpers ───────────────────────────────────────────────────────
 function effectiveValue(current, global, field, fallback) {
@@ -401,6 +430,9 @@ async function loadSettings() {
     form.showAvatars = current.showAvatars !== false;
     form.monoFont = current.monoFont ?? 'default';
     form.uiFont = current.uiFont ?? 'default';
+    form.uiScale = window._normalizeUiScale?.(current.uiScale ?? 100) ?? 100;
+    form.terminalFontSize = window._normalizeTerminalFontSize?.(current.terminalFontSize ?? 12) ?? 12;
+    savedUiScale = form.uiScale;
     form.commitMessagePrompt = current.commitMessagePrompt || COMMIT_MSG_PROMPT_DEFAULT;
     form.gitlabToken = current.gitlabToken || '';
     originalMcpEmulation = form.mcpEmulation;
@@ -420,6 +452,14 @@ function getDefault(field) {
 // ── "Use global" toggle ───────────────────────────────────────────
 function toggleGlobal(field, checked) {
   useGlobal[field] = checked;
+}
+
+// ── Interface scale ───────────────────────────────────────────────
+// Previewed on release rather than on every input event: the slider is itself
+// part of the interface being scaled, so previewing mid-drag would move the thumb
+// out from under the cursor.
+function previewUiScale() {
+  window._applyUiScale?.(form.uiScale);
 }
 
 // ── Save ──────────────────────────────────────────────────────────
@@ -451,6 +491,8 @@ async function save() {
       showAvatars: form.showAvatars,
       monoFont: form.monoFont || 'default',
       uiFont: form.uiFont || 'default',
+      uiScale: window._normalizeUiScale?.(form.uiScale) ?? 100,
+      terminalFontSize: window._normalizeTerminalFontSize?.(form.terminalFontSize) ?? 12,
       commitMessagePrompt: form.commitMessagePrompt === COMMIT_MSG_PROMPT_DEFAULT ? '' : (form.commitMessagePrompt || ''),
       gitlabToken: form.gitlabToken || '',
     };
@@ -467,6 +509,9 @@ async function save() {
       window._applyTerminalFont?.(window.TERMINAL_FONTS[settings.monoFont].family);
     }
     window._applyUiFont?.(settings.uiFont);
+    window._applyUiScale?.(settings.uiScale);
+    savedUiScale = settings.uiScale;
+    window._applyTerminalFontSize?.(settings.terminalFontSize);
     if (typeof refreshSidebar === 'function') refreshSidebar();
 
     if (settings.mcpEmulation !== originalMcpEmulation) {
@@ -499,6 +544,14 @@ function checkUpdates() { window.api.updaterCheck(); }
 function openReleasesPage() { window.api.openExternal('https://github.com/fortael/wootonpad/releases/latest'); }
 
 // ── Lifecycle ─────────────────────────────────────────────────────
+// The panel is mounted with v-if, so this covers every way it can be dismissed —
+// Cancel, Escape, or another view taking over — and undoes an unsaved preview.
+onUnmounted(() => {
+  if (!isProject.value && saveState.value !== 'saved' && form.uiScale !== savedUiScale) {
+    window._applyUiScale?.(savedUiScale);
+  }
+});
+
 onMounted(async () => {
   await loadSettings();
   if (!isProject.value) {
