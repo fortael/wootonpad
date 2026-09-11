@@ -240,7 +240,8 @@ import SessionSidePanelApp from './SessionSidePanelApp.vue';
 import SessionPanelRail from './SessionPanelRail.vue';
 import SessionSdkApp from './SessionSdkApp.vue';
 import { loadSidePanelTab } from '../side-panel-tabs.js';
-import { OPEN_ORDER, mostUrgent, worstColumn, stateFromStore } from '../session-column.js';
+import { OPEN_ORDER, mostUrgent, worstColumn, wantsAttention, stateFromStore } from '../session-column.js';
+import { parseRateLimitEvent } from '../rate-limits.js';
 import PlansApp from './PlansApp.vue';
 import AccountsApp from './AccountsApp.vue';
 import AccountDropdownApp from './AccountDropdownApp.vue';
@@ -443,15 +444,51 @@ const attentionProjects = computed(() => {
     OPEN_ORDER[a.status] - OPEN_ORDER[b.status] || b.recency - a.recency);
 });
 
+// ── Plan meters ──────────────────────────────────────────────────
+//
+// The 5-hour and 7-day limits belong to the account, not to any one chat, so
+// they are kept here and drawn on the account chip. A terminal session shows
+// them in the CLI's own status line; an SDK session has no status line, which
+// is what `rate_limit_event` is read for — see rate-limits.js.
+//
+// Persisted per account because the event only arrives during a turn: without
+// it, the chip would be blank until something ran.
+
+let limitsKey = '';
+
+async function loadRateLimits() {
+  try {
+    const accountId = await window.api.getActiveAccountId();
+    limitsKey = `rateLimits:${accountId || 'default'}`;
+    store.rateLimits = (await window.api.getSetting(limitsKey)) || null;
+  } catch {
+    store.rateLimits = null;
+  }
+}
+
+window.api.onSdkMessage?.((_sessionId, message) => {
+  if (message?.type !== 'rate_limit_event') return;
+  const limits = parseRateLimitEvent(message.rate_limit_info);
+  if (!limits) return;
+  store.rateLimits = limits;
+  if (limitsKey) window.api.setSetting(limitsKey, limits).catch(() => {});
+});
+
+onMounted(loadRateLimits);
+
 // ── Dock badge ───────────────────────────────────────────────────
 // The two board columns that mean "this wants you": WAITING INPUT and DONE.
-// Sent as ids rather than a count for the waiting half, because main.js has to
+// A session that is working wants nothing and is deliberately not counted —
+// which is why this goes through the board's own precedence rather than
+// reading the collections, since a session can sit in more than one of them.
+//
+// The waiting half is sent as ids rather than a count, because main.js has to
 // tell a session that has *just* become blocked from one that has been blocked
 // for a while — only the first should bounce the icon.
-const attentionSummary = computed(() => ({
-  waiting: [...store.attentionSessions],
-  done: new Set([...store.responseReadySessions, ...store.readPendingSessions]).size,
-}));
+const attentionSummary = computed(() => {
+  const { waiting, done } = wantsAttention(stateFromStore(store));
+  return { waiting, done: done.length };
+});
 
 watch(attentionSummary, (summary) => window.api?.reportAttention?.(summary),
   { immediate: true });
@@ -592,7 +629,12 @@ const accountsCallbacks = {
 };
 
 const accountDropdownCallbacks = {
-  switchAccount: (id) => window.__sb?.switchAccount?.(id),
+  switchAccount: async (id) => {
+    await window.__sb?.switchAccount?.(id);
+    // Limits are per account; the ones on screen belong to the old one.
+    store.rateLimits = null;
+    loadRateLimits();
+  },
 };
 
 const projectsCallbacks = {

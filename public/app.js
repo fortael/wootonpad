@@ -542,6 +542,22 @@ function updateRunningIndicators() {
     const dot = item.querySelector('.session-status-dot');
     if (dot) dot.classList.toggle('running', running);
   });
+  // The loop above only reaches sessions that have a row on screen. An id whose
+  // row is filtered out, scrolled out of the virtual list, or on a tab you are
+  // not looking at was never cleared — and the dock badge counts these sets, so
+  // it went on reporting a session the board had stopped drawing. Sweep by
+  // liveness instead of by what happens to be rendered.
+  for (const id of [...attentionSessions, ...responseReadySessions, ...readPendingSessions]) {
+    if (activePtyIds.has(id)) continue;
+    setBlocked(id, false);
+    attentionSessions.delete(id);
+    responseReadySessions.delete(id);
+    setReadPending(id, false);
+    sessionBusyState.delete(id);
+    window.vueStore?.sessionBusyState?.delete(id);
+    window.vueSidebar?.clearNotifications(id);
+  }
+
   // Update slug group running dots
   document.querySelectorAll('.slug-group').forEach(group => {
     const hasRunning = group.querySelector('.session-item.has-running-pty') !== null;
@@ -618,12 +634,11 @@ function dedup(projects) {
 async function loadProjects({ resort = false } = {}) {
   const wasEmpty = cachedProjects.length === 0;
   if (wasEmpty && window.vueStore) window.vueStore.loadingStatus = 'Loading\u2026';
-  const [defaultProjects, allProjects] = await Promise.all([
-    window.api.getProjects(false),
-    window.api.getProjects(true),
-  ]);
-  cachedProjects = defaultProjects;
-  cachedAllProjects = allProjects;
+  // One round trip for both lists: they come from the same scan of the cache
+  // and differ only by the archive filter.
+  const { visible, all } = await window.api.getProjectSets();
+  cachedProjects = visible;
+  cachedAllProjects = all;
   if (window.vueStore) window.vueStore.loadingStatus = '';
   dedup(cachedProjects);
   dedup(cachedAllProjects);

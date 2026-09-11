@@ -1,45 +1,57 @@
-Perform a release for this project. Steps:
+Write release notes for this project. **Only** the notes — nothing else.
 
-1. Find the most recent version tag with `git describe --tags --abbrev=0` and collect all commits between it and HEAD using `git log {prev_tag}..HEAD --format="%B---"`
+Do not bump the version, commit, tag, push, watch a build, or publish a
+release. The tag is cut by hand in the GitHub UI; your job ends at the text.
 
-2. Summarize the changes into human-readable release notes (see format below). Present this summary to the user **before proceeding**.
+## Steps
 
-3. Bump the version with `npm version patch --no-git-tag-version`
+1. Find the most recent version tag:
+   `git describe --tags --abbrev=0`
 
-4. Commit the version bump with message: `v{version}: {short one-line summary of changes}`
+2. Collect everything since it:
+   `git log {prev_tag}..HEAD --format="===== %h %s%n%b"`
 
-5. Create a git tag `v{version}`
+   Squashed merges hide their contents behind one subject line, so when a
+   commit body is thin, read what actually changed instead of guessing from
+   the subject: `git diff --stat {prev_tag}..HEAD` and
+   `git diff --name-status {prev_tag}..HEAD | grep '^A'` for new files.
 
-6. Push commits and tag: `git push && git push --tags`
+3. Print the notes in the chat, in the format below. Then stop.
 
-7. Wait for the GitHub Actions build to complete using `gh run watch` on the latest run
-
-8. Once the build finishes and creates a draft release, publish it with:
-   ```
-   gh release edit v{version} --draft=false --notes "..."
-   ```
-
-9. Tell the user:
-   > Release published! To update the GitHub repo description and topics, go to:
-   > **https://github.com/fortael/wootonpad** → click the ⚙️ gear icon next to "About"
-   >
-   > Suggested description:
-   > `Session manager and IDE emulator for Claude Code. Multi-account, full-text search, diff review, plans & memory browser.`
-   >
-   > Suggested topics: `claude-code`, `electron`, `ai`, `developer-tools`, `session-manager`
-
----
-
-## Release notes format
+## Format
 
 ```
-## What's Changed
+## Highlights
 
-### {Category}
-- {change description}
+- {the two to four changes that make this release worth installing}
 
-### {Category}
-- {change description}
+## Added
+
+- {new capability}
+
+## Changed
+
+- {existing behaviour that now works differently}
+
+## Fixed
+
+- {bug that is gone}
 ```
 
-Group changes by category (e.g. "Features", "Bug Fixes", "Improvements", "Internal") based on the commit messages. Cover **all** commits between the previous tag and the new tag — don't skip any. Keep descriptions concise and user-facing (what changed, not how).
+Rules:
+
+- **Always in English**, whatever language the conversation is in. These notes
+  go on a public GitHub release, not into the chat.
+- **Highlights first.** Two to four lines, the reasons someone would update.
+  Each one a whole thought, not a teaser for a section below.
+- Three sections after that: **Added**, **Changed**, **Fixed**. Drop a section
+  that would be empty rather than writing "none".
+- Cover every commit between the tag and HEAD. A change that landed and is not
+  in the notes is a change nobody will know about.
+- Write for someone using the app, not reading the diff: what is different for
+  them, not which file moved. No commit hashes, no file paths, no internal
+  module names.
+- One line per change. If a line needs a "because", it belongs in Highlights.
+- Plumbing with no user-visible effect — refactors, test additions, renames —
+  is left out. Unless it changes something they would notice, in which case it
+  is a Changed.

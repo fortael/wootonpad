@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  columnOf, mostUrgent, worstColumn, OPEN_ORDER,
+  columnOf, mostUrgent, worstColumn, wantsAttention, OPEN_ORDER,
 } = require('../src/vue/session-column.js');
 
 const state = (over = {}) => ({
@@ -90,6 +90,66 @@ test('a project takes the worst state anything in it is in', () => {
   assert.equal(worstColumn(sessions, state({ busy: ['a'], attention: ['c'] })), 'waiting');
   assert.equal(worstColumn(sessions, state({ busy: ['a'], responseReady: ['b'] })), 'done');
   assert.equal(worstColumn(sessions, state()), 'idle');
+});
+
+// ── What the dock counts ──────────────────────────────────────────
+
+// Opening a finished session is reading it. The card stays in DONE until you
+// put it away, but a badge still counting it points at where you already are.
+test('a finished turn stops counting the moment it is read', () => {
+  const unread = wantsAttention(state({ responseReady: ['a'] }));
+  assert.deepEqual(unread.done, ['a']);
+
+  const read = wantsAttention(state({ readPending: ['a'] }));
+  assert.deepEqual(read.done, []);
+  // ...and it is still in DONE on the board.
+  assert.equal(columnOf('a', state({ readPending: ['a'] })), 'done');
+});
+
+test('only blocked and finished sessions want anything', () => {
+  const s = state({ attention: ['a'], busy: ['b'], responseReady: ['c'] });
+  const { waiting, done } = wantsAttention(s);
+  assert.deepEqual(waiting, ['a']);
+  assert.deepEqual(done, ['c']);
+});
+
+// A session that is working wants nothing. Putting it on the dock would be a
+// number you cannot act on.
+test('a session in progress is counted in neither half', () => {
+  const { waiting, done } = wantsAttention(state({ busy: ['a', 'b'] }));
+  assert.deepEqual(waiting, []);
+  assert.deepEqual(done, []);
+});
+
+// The reason this goes through columnOf rather than reading the sets: open a
+// finished session, then send it back to work, and it sits in readPending and
+// busy at once. The board calls that IN PROGRESS and so must the dock.
+test('a finished session sent back to work stops being finished', () => {
+  const { waiting, done } = wantsAttention(state({ readPending: ['a'], busy: ['a'] }));
+  assert.deepEqual(done, []);
+  assert.deepEqual(waiting, []);
+});
+
+test('a blocked session is counted once even when it is also marked busy', () => {
+  const { waiting, done } = wantsAttention(state({ attention: ['a'], busy: ['a'], readPending: ['a'] }));
+  assert.deepEqual(waiting, ['a']);
+  assert.deepEqual(done, []);
+});
+
+test('a session in both sets counts once, because it is still unread', () => {
+  const { done } = wantsAttention(state({ responseReady: ['a'], readPending: ['a', 'b'] }));
+  assert.deepEqual(done, ['a']);   // 'b' has been read
+});
+
+test('nothing happening counts nothing', () => {
+  const { waiting, done } = wantsAttention(state());
+  assert.deepEqual(waiting, []);
+  assert.deepEqual(done, []);
+});
+
+test('a missing state never throws', () => {
+  assert.deepEqual(wantsAttention({}), { waiting: [], done: [] });
+  assert.deepEqual(wantsAttention(undefined), { waiting: [], done: [] });
 });
 
 test('the open order puts an answer before a read and a read before work', () => {

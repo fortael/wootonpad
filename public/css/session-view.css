@@ -340,6 +340,10 @@
   min-height: 0;
   overflow-y: auto;
   padding: var(--space-8, 40px) var(--space-5) 96px;
+  /* A streaming answer repaints this on a cadence. Containment keeps that
+     inside the transcript instead of invalidating the layout of the sidebar,
+     the board and everything else in the document. */
+  contain: layout;
 }
 
 /* ─── Chat transcript ───────────────────────────────────────────── */
@@ -449,6 +453,90 @@
   .sbx-streaming .jsonl-text::after {
     animation: none;
   }
+}
+
+/* ─── History paging ────────────────────────────────────────────── */
+
+/* Where the context was compacted.
+   Everything above this line was dropped from the model's own context, so the
+   transcript is drawn as two segments rather than one long scroll — and the
+   earlier one, usually the larger half of the file, is loaded only when asked
+   for. See loadEarlier in SessionSdkApp.vue. */
+.sbx-compact {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-4) 0 var(--space-6);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+}
+
+.sbx-compact__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sbx-compact__label {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+}
+
+.sbx-compact__meta {
+  font-size: var(--text-2xs);
+  color: var(--text-disabled);
+}
+
+.sbx-compact__more {
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+
+.sbx-compact__more:hover:not(:disabled) {
+  background: var(--surface-card-hover);
+  color: var(--text-primary);
+}
+
+.sbx-compact__more:disabled {
+  cursor: default;
+  color: var(--text-disabled);
+}
+
+/* Scrolling into this loads the page above it. It occupies a row's worth of
+   height so the observer has something to see before the top of the list. */
+.sbx-history-top {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+}
+
+.sbx-history-top__dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.sbx-history-top__dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--text-disabled);
+  animation: sbx-working-dot 1.2s ease-in-out infinite;
+}
+
+.sbx-history-top__dots i:nth-child(2) { animation-delay: 0.15s; }
+.sbx-history-top__dots i:nth-child(3) { animation-delay: 0.3s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sbx-history-top__dots i { animation: none; }
 }
 
 /* Unrecognised messages are a message from the future, not a glitch to hide:
@@ -828,9 +916,26 @@
 }
 
 /* An option's preview belongs to the option under the cursor, so it reads as
-   part of the list rather than as a second thing to look at. */
+   part of the list rather than as a second thing to look at.
+ 
+   Fixed height, not a maximum: this box sits below the options, so a height
+   that varied with the content moved the list under the pointer — and moving
+   the list changes which option is under the cursor, which changes the
+   content. Six lines is enough to recognise a snippet, and the rest scrolls. */
 .sbx-req__preview {
+  --sbx-preview-lines: 6;
+  height: calc(1.5em * var(--sbx-preview-lines) + var(--space-2) * 2);
+  max-height: none;
+  line-height: 1.5;
   border-left: 2px solid var(--accent-primary, var(--orange-500));
+}
+
+/* An option with nothing to preview still holds the space, or the list would
+   move the moment the cursor reached it. */
+.sbx-req__preview.is-empty {
+  color: var(--text-disabled);
+  font-style: italic;
+  border-left-color: var(--border-subtle);
 }
 
 .sbx-req__text {
@@ -947,6 +1052,7 @@
   color: var(--text-disabled);
 }
 
+
 /* ─── Slash commands ────────────────────────────────────────────── */
 
 /* The session's own command list, above the field. Sized to the content and
@@ -1023,4 +1129,16 @@
   font-size: var(--text-2xs);
   color: var(--text-disabled);
   cursor: default;
+}
+
+/* The controls are locked while a turn runs — see SessionSdkApp. Dimmed rather
+   than hidden: the values are still worth reading, they just cannot change. */
+.sbx-sdk__controls.is-locked .sbx-sdk__select {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sbx-sdk__controls.is-locked .sbx-sdk__select:hover {
+  background: transparent;
+  color: var(--text-tertiary);
 }

@@ -51,7 +51,7 @@ WootonPad is an **Electron app** that acts as a session manager and IDE emulator
 1. Claude Code stores sessions as `.jsonl` files under `~/.claude/projects/<encoded-path>/`.
 2. `main.js` watches this directory for changes and keeps a **SQLite cache** (`~/.wootonpad/switchboard.db` via `db.js` — the directory was renamed, the file was not) of session metadata and a full-text search index.
 3. The cache is populated either via a **Worker thread** (`workers/scan-projects.js`) on first load or incrementally via `session-cache.js` when the watcher detects `.jsonl` changes.
-4. The renderer calls `window.api.getProjects()` → IPC → `buildProjectsFromCache()` to get the project/session tree.
+4. The renderer calls `window.api.getProjectSets()` → IPC → `buildProjectSets()` to get the project/session tree. It returns `{ visible, all }` — archive-filtered and unfiltered — from one pass, because the sidebar and a project's own page need both and neither can be derived from the other in the renderer.
 
 ### Key modules
 

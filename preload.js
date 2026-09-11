@@ -1,5 +1,22 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+/**
+ * Register an IPC listener and hand back the way to remove it.
+ *
+ * The `_event` argument is dropped rather than forwarded: it carries a
+ * `sender` the renderer has no business holding, and every caller here only
+ * ever wanted the payload.
+ *
+ * @param {string} channel
+ * @param {(...args: unknown[]) => void} callback
+ * @returns {() => void} unsubscribe — safe to call more than once
+ */
+function subscribe(channel, callback) {
+  const handler = (_event, ...args) => callback(...args);
+  ipcRenderer.on(channel, handler);
+  return () => ipcRenderer.removeListener(channel, handler);
+}
+
 contextBridge.exposeInMainWorld('api', {
   // Invoke (request-response)
   getPlans: () => ipcRenderer.invoke('get-plans'),
@@ -8,7 +25,10 @@ contextBridge.exposeInMainWorld('api', {
   savePlan: (filePath, content) => ipcRenderer.invoke('save-plan', filePath, content),
   refreshStats: () => ipcRenderer.invoke('refresh-stats'),
   getMemories: () => ipcRenderer.invoke('get-memories'),
-  getProjects: (showArchived) => ipcRenderer.invoke('get-projects', showArchived),
+  // `{ visible, all }` — the archive-filtered tree and the unfiltered one, from
+  // one pass over the cache. Both are needed on every refresh and neither can be
+  // derived from the other here; see buildProjectSets in session-cache.js.
+  getProjectSets: () => ipcRenderer.invoke('get-project-sets'),
   getActiveSessions: () => ipcRenderer.invoke('get-active-sessions'),
   getSessionStatuses: () => ipcRenderer.invoke('get-session-statuses'),
   getActiveTerminals: () => ipcRenderer.invoke('get-active-terminals'),
@@ -24,6 +44,9 @@ contextBridge.exposeInMainWorld('api', {
   openTerminal: (id, projectPath, isNew, sessionOptions) => ipcRenderer.invoke('open-terminal', id, projectPath, isNew, sessionOptions),
   search: (type, query, titleOnly) => ipcRenderer.invoke('search', type, query, titleOnly),
   readSessionJsonl: (sessionId) => ipcRenderer.invoke('read-session-jsonl', sessionId),
+  // One window of a transcript, newest first. `before` pages upward; a window
+  // never spans a `/compact` boundary — see transcript-window.js.
+  readSessionTranscript: (sessionId, opts) => ipcRenderer.invoke('read-session-transcript', sessionId, opts),
 
   // Settings
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
@@ -90,51 +113,36 @@ contextBridge.exposeInMainWorld('api', {
   closeTerminal: (id) => ipcRenderer.send('close-terminal', id),
 
   // Listeners (main → renderer)
-  onTerminalData: (callback) => {
-    ipcRenderer.on('terminal-data', (_event, sessionId, data) => callback(sessionId, data));
-  },
-  onSessionDetected: (callback) => {
-    ipcRenderer.on('session-detected', (_event, tempId, realId) => callback(tempId, realId));
-  },
-  onProcessExited: (callback) => {
-    ipcRenderer.on('process-exited', (_event, sessionId, exitCode) => callback(sessionId, exitCode));
-  },
-  onTerminalNotification: (callback) => {
-    ipcRenderer.on('terminal-notification', (_event, sessionId, message) => callback(sessionId, message));
-  },
-  onSessionStatus: (callback) => {
-    ipcRenderer.on('session-status', (_event, sessionId, status) => callback(sessionId, status));
-  },
-  onWindowFullscreen: (callback) => {
-    ipcRenderer.on('window-fullscreen', (_event, isFullscreen) => callback(isFullscreen));
-  },
+  //
+  // Every one of these returns its own unsubscribe. A component that mounts
+  // once per session — SessionSdkApp is keyed by session id — would otherwise
+  // leave a live listener behind on every switch, and those stale closures do
+  // not go quiet: they read the session id off the shared store, so the guard
+  // at the top of each handler still passes and the whole render runs again
+  // for every message, once per mount the app has ever made.
+  onTerminalData: (callback) => subscribe('terminal-data', callback),
+  onSessionDetected: (callback) => subscribe('session-detected', callback),
+  onProcessExited: (callback) => subscribe('process-exited', callback),
+  onTerminalNotification: (callback) => subscribe('terminal-notification', callback),
+  onSessionStatus: (callback) => subscribe('session-status', callback),
+  onWindowFullscreen: (callback) => subscribe('window-fullscreen', callback),
   // SDK-backed sessions: the conversation as structured messages, where a PTY
   // session sends terminal bytes over `terminal-data`.
-  onSdkMessage: (callback) => {
-    ipcRenderer.on('sdk-message', (_event, sessionId, message) => callback(sessionId, message));
-  },
-  onSdkPermissionRequest: (callback) => {
-    ipcRenderer.on('sdk-permission-request', (_event, sessionId, request) => callback(sessionId, request));
-  },
-  onSdkPermissionCancelled: (callback) => {
-    ipcRenderer.on('sdk-permission-cancelled', (_event, sessionId, requestId) => callback(sessionId, requestId));
-  },
+  onSdkMessage: (callback) => subscribe('sdk-message', callback),
+  onSdkPermissionRequest: (callback) => subscribe('sdk-permission-request', callback),
+  onSdkPermissionCancelled: (callback) => subscribe('sdk-permission-cancelled', callback),
   sdkPermissionResponse: (requestId, decision) => {
     ipcRenderer.send('sdk-permission-response', requestId, decision);
   },
   // An MCP server asking the user directly — a form or a sign-in link. Same
   // pause as a permission prompt, a different reply shape.
-  onSdkElicitationRequest: (callback) => {
-    ipcRenderer.on('sdk-elicitation-request', (_event, sessionId, request) => callback(sessionId, request));
-  },
+  onSdkElicitationRequest: (callback) => subscribe('sdk-elicitation-request', callback),
   sdkElicitationResponse: (requestId, decision) => {
     ipcRenderer.send('sdk-elicitation-response', requestId, decision);
   },
   // A blocking dialog the CLI asked this app to draw — today the offer to
   // retry a refused turn on the fallback model.
-  onSdkDialogRequest: (callback) => {
-    ipcRenderer.on('sdk-dialog-request', (_event, sessionId, request) => callback(sessionId, request));
-  },
+  onSdkDialogRequest: (callback) => subscribe('sdk-dialog-request', callback),
   sdkDialogResponse: (requestId, decision) => {
     ipcRenderer.send('sdk-dialog-response', requestId, decision);
   },
@@ -179,9 +187,7 @@ contextBridge.exposeInMainWorld('api', {
   updaterCheck: () => ipcRenderer.invoke('updater-check'),
   updaterDownload: () => ipcRenderer.invoke('updater-download'),
   updaterInstall: () => ipcRenderer.invoke('updater-install'),
-  onUpdaterEvent: (callback) => {
-    ipcRenderer.on('updater-event', (_event, type, data) => callback(type, data));
-  },
+  onUpdaterEvent: (callback) => subscribe('updater-event', callback),
 
   // MCP bridge (main → renderer)
   onMcpOpenDiff: (callback) => {
@@ -205,9 +211,7 @@ contextBridge.exposeInMainWorld('api', {
   saveFileForPanel: (filePath, content) => ipcRenderer.invoke('save-file-for-panel', filePath, content),
   watchFile: (filePath) => ipcRenderer.invoke('watch-file', filePath),
   unwatchFile: (filePath) => ipcRenderer.invoke('unwatch-file', filePath),
-  onFileChanged: (callback) => {
-    ipcRenderer.on('file-changed', (_event, filePath) => callback(filePath));
-  },
+  onFileChanged: (callback) => subscribe('file-changed', callback),
   onLaunchProjectSession: (callback) => {
     ipcRenderer.on('launch-project-session', (_event, projectPath, continueSession) => callback(projectPath, continueSession));
   },

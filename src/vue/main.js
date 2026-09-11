@@ -12,7 +12,22 @@ window.vueSidebar = {
   store,
   setProjects(projects) { store.projects = projects.map(p => ({ ...p })); },
   setAllProjects(projects) { store.allProjects = projects.map(p => ({ ...p })); },
-  setActivePtyIds(ids) { store.activePtyIds = new Set(ids); },
+  // Assigned only when the set actually changed. app.js polls the live PTYs
+  // every three seconds and the answer is usually the same one as last time;
+  // a fresh Set every poll is a fresh identity, and that alone re-ran the
+  // board's column pass and the sidebar's filters on a timer, for nothing.
+  setActivePtyIds(ids) {
+    const next = ids instanceof Set ? ids : new Set(ids);
+    const current = store.activePtyIds;
+    if (current.size === next.size) {
+      let same = true;
+      for (const id of next) {
+        if (!current.has(id)) { same = false; break; }
+      }
+      if (same) return;
+    }
+    store.activePtyIds = next;
+  },
   setActiveSession(id) { store.activeSessionId = id; },
   setBusy(sessionId, busy) {
     if (busy) store.sessionBusyState.set(sessionId, true);

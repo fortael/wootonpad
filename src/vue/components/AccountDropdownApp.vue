@@ -36,6 +36,8 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import UsageRing from './UsageRing.vue';
+import { store } from '../store.js';
+import { resetsIn, WINDOW_LABEL, WINDOWS } from '../rate-limits.js';
 
 const props = defineProps({
   callbacks: { type: Object, required: true },
@@ -55,7 +57,19 @@ const activeChips = computed(() => chips(activeAccountId.value));
 
 // [{ key, text, pct, title }] — pct drives the ring, text stays so the exact
 // number is readable without hovering.
+//
+// The plan's own windows come first when they are known: they are what the CLI
+// itself reports (see rate-limits.js) and they cover both the 5-hour and the
+// 7-day limit, where the cached `usage` only ever knew the 5-hour one and only
+// as of the last time `claude /stats` was run.
+//
+// Only for the active account — a limit is reported by a session, and only the
+// active account has any.
 function chips(id) {
+  if (id === activeAccountId.value) {
+    const live = planChips.value;
+    if (live.length) return live;
+  }
   const u = usage.value[id];
   if (!u || u._error || u._rateLimited) return [];
   const out = [];
@@ -69,6 +83,30 @@ function chips(id) {
   }
   return out;
 }
+
+/** One chip per window, tightest first — the one you will hit is the one to read. */
+const planChips = computed(() => {
+  const limits = store.rateLimits;
+  const windows = limits?.windows;
+  if (!windows) return [];
+  const taken = new Date(limits.updatedAt).toLocaleTimeString();
+  return WINDOWS
+    .filter(name => windows[name])
+    .map((name) => {
+      const w = windows[name];
+      const left = resetsIn(w.resetsAt);
+      const full = name === 'five_hour' ? '5-hour' : '7-day';
+      return {
+        key: name,
+        text: `${w.utilization}% ${WINDOW_LABEL[name]}`,
+        pct: w.utilization,
+        title: `${w.utilization}% of the ${full} limit used`
+          + (left ? `, resets in ${left}` : '')
+          + `\nAs of ${taken}`,
+      };
+    })
+    .sort((a, b) => b.pct - a.pct);
+});
 
 function toggle() {
   open.value = !open.value;

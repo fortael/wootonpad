@@ -25,6 +25,7 @@ const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolveP
 const { startHookServer, stopHookServer } = require('./hook-server');
 const { buildHookSettings } = require('./hook-settings');
 const { SessionStatusTracker } = require('./session-status');
+const { readTranscriptWindow, forgetTranscript } = require('./transcript-window');
 const { createDockAttention } = require('./dock-attention');
 const sdkSession = require('./sdk-session');
 const { fetchAndTransformUsage, getOAuthToken, probeUsage } = require('./claude-auth');
@@ -478,6 +479,9 @@ function startSdkSessionFor(sessionId, projectPath, isNew, sessionOptions) {
       ? 'bypassPermissions'
       : (sessionOptions?.permissionMode || undefined),
     model: sessionOptions?.model || undefined,
+    // Not a query() option: effort rides the session-scoped flag layer, so
+    // sdk-session.js applies it once the session is answering.
+    effort: sessionOptions?.effort || undefined,
     // The same account resolution every other spawn path uses, so an SDK
     // session writes its transcript into the folder this account's cache
     // watches rather than the default home.
@@ -809,7 +813,7 @@ function initSessionCache() {
 
 initSessionCache();
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, populateCacheFromFilesystem,
-        buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker } = sessionCache;
+        buildProjectSets, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker } = sessionCache;
 
 
 // --- IPC: browse-folder ---
@@ -1571,19 +1575,23 @@ ipcMain.handle('unwatch-file', (_event, filePath) => {
   return { ok: true };
 });
 
-ipcMain.handle('get-projects', (_event, showArchived) => {
+// Both views of the tree in one answer. The renderer needs the archive-filtered
+// list and the unfiltered one together on every refresh, and it used to ask for
+// them separately — two whole-table scans, two readdirs and two payloads for a
+// difference of one filter. See buildProjectSets.
+ipcMain.handle('get-project-sets', () => {
   try {
     const needsPopulate = !isCachePopulated(getActiveAccount().id) || !isSearchIndexPopulated();
 
     if (needsPopulate) {
       populateCacheViaWorker();
-      return [];
+      return { visible: [], all: [] };
     }
 
-    return buildProjectsFromCache(showArchived);
+    return buildProjectSets();
   } catch (err) {
     console.error('Error listing projects:', err);
-    return [];
+    return { visible: [], all: [] };
   }
 });
 
@@ -2357,6 +2365,12 @@ const COMMIT_MSG_PROMPT_DEFAULT = `Write a concise git commit message (max 72 ch
 
 const SETTING_DEFAULTS = {
   permissionMode: null,
+  // What a new session starts on. Both are per-project with a global fallback,
+  // like everything else here — a repo you plan in and a repo you grind in want
+  // different answers. null means "whatever the CLI picks", which is what the
+  // app did before these existed.
+  model: null,
+  effort: null,
   dangerouslySkipPermissions: false,
   worktree: false,
   worktreeName: '',
@@ -2476,6 +2490,25 @@ ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
       try { entries.push(JSON.parse(line)); } catch {}
     }
     return { entries };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// --- IPC: read-session-transcript ---
+// The windowed read behind the chat view. `read-session-jsonl` above hands over
+// the whole transcript, which is what the raw viewer wants and what the chat
+// must not do — see transcript-window.js for the cost and for how a compact
+// boundary floors a window.
+ipcMain.handle('read-session-transcript', (_event, sessionId, opts) => {
+  const folder = getCachedFolder(sessionId);
+  if (!folder) return { error: 'Session not found in cache' };
+  const jsonlPath = path.join(activeProjectsDir(), folder, sessionId + '.jsonl');
+  try {
+    return readTranscriptWindow(jsonlPath, {
+      before: opts?.before ?? null,
+      limit: opts?.limit ?? 50,
+    });
   } catch (err) {
     return { error: err.message };
   }
@@ -2623,6 +2656,7 @@ ipcMain.handle('delete-session', async (_event, sessionId) => {
     // Already gone on disk is not a failure — the cache rows still have to go.
     if (err.code !== 'ENOENT') return { ok: false, error: err.message };
   }
+  forgetTranscript(jsonlPath);
   deleteCachedSession(sessionId);
   deleteSearchSession(sessionId);
   deleteSessionMeta(sessionId);

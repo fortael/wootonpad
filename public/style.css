@@ -737,13 +737,19 @@ body { display: flex; flex-direction: column; }
   flex-shrink: 0;
 }
 
+/* One per plan window — 5-hour and 7-day — each with its own ring. A flex row
+   so the ring and its number read as one thing rather than as two. */
 .account-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   font-size: var(--text-2xs);
   color: var(--text-tertiary);
   background: var(--surface-card-hover);
   padding: 1px var(--space-1);
   border-radius: var(--radius-xs);
   white-space: nowrap;
+  cursor: default;
 }
 
 #account-btn svg, .account-btn-vue svg {
@@ -1661,18 +1667,26 @@ body { display: flex; flex-direction: column; }
   to { transform: rotate(360deg); }
 }
 
+/* A working session's title breathes.
+   This used to be a highlight sweeping across the text, which meant a gradient
+   clipped to the glyphs and its position animated — neither of those is a
+   property the compositor can move on its own, so every frame re-rasterised the
+   text of every busy row. Measured on nine rows it was 154ms of renderer time
+   per eight seconds against 15ms with the animation off, and it ran whether or
+   not anyone was looking at the window. Opacity is composited, so this costs
+   nothing and says the same thing. */
 .session-item.cli-busy:not(.needs-attention) .session-summary {
-  background: linear-gradient(110deg, var(--shimmer-ink) 44%, var(--shimmer-accent) 48%, var(--shimmer-peak) 50%, var(--shimmer-accent) 52%, var(--shimmer-ink) 56%);
-  background-size: 300% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: shimmer-text 3s linear infinite;
+  color: var(--shimmer-peak);
+  animation: pulse-summary 1.8s ease-in-out infinite;
 }
 
-@keyframes shimmer-text {
-  0% { background-position: 200% 0; }
-  100% { background-position: -100% 0; }
+@keyframes pulse-summary {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-item.cli-busy:not(.needs-attention) .session-summary { animation: none; }
 }
 
 /* ---- Session info ---- */
@@ -2847,6 +2861,10 @@ body { display: flex; flex-direction: column; }
   flex: 1;
   overflow-y: auto;
   padding: var(--space-2) var(--space-4);
+  /* A transcript's own layout is its own business: this keeps a message
+     arriving here from invalidating the sidebar, the board and everything else
+     sharing the document. */
+  contain: layout;
 }
 
 .jsonl-entry {
@@ -2854,6 +2872,16 @@ body { display: flex; flex-direction: column; }
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-xs);
   position: relative;
+  /* Off-screen messages are not laid out.
+     A transcript is a long list of boxes stacked in one column, which is the
+     exact shape this was added for: the browser skips the subtree's layout and
+     paint until it scrolls near the viewport. Measured on a real session —
+     35 000 nodes — a full layout of the document went from ~41ms to ~4.7ms,
+     and every layout in the app pays that, not just this view's.
+     `auto` in the intrinsic size means "remember what it measured last time",
+     so the scrollbar settles to the true height instead of a guess. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 90px;
 }
 
 .jsonl-user {

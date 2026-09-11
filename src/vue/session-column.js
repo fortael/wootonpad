@@ -85,6 +85,44 @@ export function mostUrgent(sessions, state) {
   return best;
 }
 
+/**
+ * The sessions that want something from you: blocked on an answer, or finished
+ * with a turn you have not read.
+ *
+ * Not the same as "what is in the WAITING and DONE columns". A card stays in
+ * DONE while you have it open — that is the column saying "finished, not yet
+ * put away" — but the moment you open it you have read it, and a dock badge
+ * still counting it is telling you to go somewhere you already are. So the
+ * done half counts unread turns only: `responseReady`, never `readPending`.
+ *
+ * Placement still goes through columnOf, because the collections overlap: a
+ * session you opened after it finished and then sent back to work is in
+ * `readPending` *and* `busy`, and it is working, not finished.
+ *
+ * Only the four collections are walked, so a session in none of them — idle,
+ * which is most of them — costs nothing.
+ *
+ * @param {SessionState} state
+ * @returns {{ waiting: string[], done: string[] }}
+ */
+export function wantsAttention(state) {
+  const seen = new Set([
+    ...(state?.attention || []),
+    ...(state?.busy ? state.busy.keys() : []),
+    ...(state?.responseReady || []),
+    ...(state?.readPending || []),
+  ]);
+
+  const waiting = [];
+  const done = [];
+  for (const id of seen) {
+    const column = columnOf(id, state);
+    if (column === 'waiting') waiting.push(id);
+    else if (column === 'done' && state?.responseReady?.has(id)) done.push(id);
+  }
+  return { waiting, done };
+}
+
 /** The worst lane anything in this list is in — a project's status in one word. */
 export function worstColumn(sessions, state) {
   let worst = 'idle';

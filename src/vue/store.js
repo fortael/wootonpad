@@ -62,6 +62,11 @@ export const store = reactive({
   searchQuery: '',
   searchTitlesOnly: false,
 
+  // The plan's 5-hour and 7-day meters, as last reported by a `rate_limit_event`
+  // — see rate-limits.js. Per account rather than per session, which is why it
+  // lives here and not in the chat component that receives the event.
+  rateLimits: null,
+
   // Settings panel
   settingsOpen: false,
   settingsScope: 'global',       // 'global' | 'project'

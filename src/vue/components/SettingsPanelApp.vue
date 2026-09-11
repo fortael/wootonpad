@@ -26,10 +26,57 @@
             <div class="settings-field-control">
               <select class="settings-select" v-model="form.permissionMode" :disabled="isProject && useGlobal.permissionMode">
                 <option value="">Default (none)</option>
+                <option value="auto">Auto</option>
                 <option value="acceptEdits">Accept Edits</option>
                 <option value="plan">Plan Mode</option>
                 <option value="dontAsk">Don't Ask</option>
                 <option value="bypassPermissions">Bypass</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Aliases rather than wire ids: `sonnet` keeps meaning the current
+               Sonnet, where `claude-sonnet-5` would quietly pin an old one. -->
+          <div class="settings-field">
+            <div class="settings-field-info">
+              <div class="settings-field-header">
+                <span class="settings-label">Model</span>
+                <label v-if="isProject" class="settings-use-global">
+                  <input type="checkbox" :checked="useGlobal.model" @change="toggleGlobal('model', $event.target.checked)" />
+                  Use global default
+                </label>
+              </div>
+              <div class="settings-description">Model new chat sessions start on</div>
+            </div>
+            <div class="settings-field-control">
+              <select class="settings-select" v-model="form.model" :disabled="isProject && useGlobal.model">
+                <option value="">Default (recommended)</option>
+                <option value="opus">Opus</option>
+                <option value="sonnet">Sonnet</option>
+                <option value="haiku">Haiku</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="settings-field">
+            <div class="settings-field-info">
+              <div class="settings-field-header">
+                <span class="settings-label">Effort</span>
+                <label v-if="isProject" class="settings-use-global">
+                  <input type="checkbox" :checked="useGlobal.effort" @change="toggleGlobal('effort', $event.target.checked)" />
+                  Use global default
+                </label>
+              </div>
+              <div class="settings-description">How hard the model thinks before answering</div>
+            </div>
+            <div class="settings-field-control">
+              <select class="settings-select" v-model="form.effort" :disabled="isProject && useGlobal.effort">
+                <option value="">Default</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="xhigh">Extra high</option>
+                <option value="max">Max</option>
               </select>
             </div>
           </div>
@@ -430,6 +477,8 @@ const COMMIT_MSG_PROMPT_DEFAULT = `Write a concise git commit message (max 72 ch
 const commitMsgPromptDefault = COMMIT_MSG_PROMPT_DEFAULT;
 
 const form = reactive({
+  model: '',
+  effort: '',
   permissionMode: '',
   worktree: false,
   worktreeName: '',
@@ -461,6 +510,8 @@ const METRIC_DEFAULTS = window.UI_METRIC_DEFAULTS || {
 
 const useGlobal = reactive({
   permissionMode: true,
+  model: true,
+  effort: true,
   worktree: true,
   worktreeName: true,
   chrome: true,
@@ -471,11 +522,15 @@ const useGlobal = reactive({
 let originalMcpEmulation = true;
 
 // ── Helpers ───────────────────────────────────────────────────────
+// `null` is how "not set" is stored, and it is not a value any <select> has an
+// option for — inheriting a null global left the control blank rather than
+// showing what was being inherited. Both ends normalise to the fallback.
 function effectiveValue(current, global, field, fallback) {
+  const use = (value) => (value === undefined || value === null ? fallback : value);
   if (isProject.value && (current[field] === undefined || current[field] === null)) {
-    return global[field] !== undefined ? global[field] : fallback;
+    return use(global[field]);
   }
-  return current[field] !== undefined ? current[field] : fallback;
+  return use(current[field]);
 }
 
 function isUsingGlobal(current, field) {
@@ -488,7 +543,7 @@ async function loadSettings() {
   const current = (await window.api.getSetting(settingsKey.value)) || {};
   const global = isProject.value ? ((await window.api.getSetting('global')) || {}) : {};
 
-  const overrideFields = ['permissionMode', 'worktree', 'worktreeName', 'chrome', 'preLaunchCmd', 'addDirs'];
+  const overrideFields = ['permissionMode', 'model', 'effort', 'worktree', 'worktreeName', 'chrome', 'preLaunchCmd', 'addDirs'];
   for (const field of overrideFields) {
     if (isProject.value) {
       useGlobal[field] = isUsingGlobal(current, field);
@@ -523,7 +578,7 @@ async function loadSettings() {
 }
 
 function getDefault(field) {
-  const defaults = { permissionMode: '', worktree: false, worktreeName: '', chrome: false, preLaunchCmd: '', addDirs: '' };
+  const defaults = { permissionMode: '', model: '', effort: '', worktree: false, worktreeName: '', chrome: false, preLaunchCmd: '', addDirs: '' };
   return defaults[field];
 }
 
@@ -537,7 +592,7 @@ async function save() {
   let settings = {};
 
   if (isProject.value) {
-    const overrideFields = ['permissionMode', 'worktree', 'worktreeName', 'chrome', 'preLaunchCmd', 'addDirs'];
+    const overrideFields = ['permissionMode', 'model', 'effort', 'worktree', 'worktreeName', 'chrome', 'preLaunchCmd', 'addDirs'];
     for (const field of overrideFields) {
       if (!useGlobal[field]) {
         settings[field] = form[field];
@@ -548,6 +603,8 @@ async function save() {
     settings = {
       ...existing,
       permissionMode: form.permissionMode || null,
+      model: form.model || null,
+      effort: form.effort || null,
       worktree: form.worktree,
       worktreeName: form.worktreeName,
       chrome: form.chrome,

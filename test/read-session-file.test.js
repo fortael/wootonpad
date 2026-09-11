@@ -126,3 +126,59 @@ test('uses scheduled task name in summary', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── Titles ────────────────────────────────────────────────────────
+
+const { summaryFromUserText } = require('../read-session-file');
+
+// `/clear` starts a new transcript whose only first entry is the command
+// envelope. Left raw it rendered as the tags themselves, cut mid-way by the
+// length cap — the sidebar showed "/clear clear </com".
+test('a slash command titles the session with the command', () => {
+  assert.equal(summaryFromUserText(
+    '<command-message>clear</command-message>\n<command-name>/clear</command-name>'), '/clear');
+});
+
+test('a command name with no slash gets one', () => {
+  assert.equal(summaryFromUserText('<command-name>compact</command-name>'), '/compact');
+});
+
+test('a command keeps its arguments', () => {
+  assert.equal(summaryFromUserText(
+    '<command-name>release</command-name>\n<command-args>patch</command-args>'), '/release patch');
+});
+
+test('empty arguments do not leave a trailing space', () => {
+  assert.equal(summaryFromUserText(
+    '<command-name>/clear</command-name>\n<command-args></command-args>'), '/clear');
+});
+
+test('a shell line is not a title at all', () => {
+  assert.equal(summaryFromUserText('<bash-input>ls -la</bash-input>'), null);
+  assert.equal(summaryFromUserText('<local-command-caveat>x</local-command-caveat>'), null);
+});
+
+test('a scheduled task is named by its task', () => {
+  assert.equal(summaryFromUserText('<scheduled-task name="nightly build">go</scheduled-task>'),
+    'Scheduled: nightly build');
+});
+
+test('an ordinary prompt is itself', () => {
+  assert.equal(summaryFromUserText('Fix the login bug'), 'Fix the login bug');
+});
+
+// Markup in a title renders as markup, not as words — and a cap that lands
+// mid-tag leaves a fragment on screen.
+test('stray markup is stripped rather than rendered', () => {
+  assert.equal(summaryFromUserText('look at <b>this</b> file'), 'look at this file');
+});
+
+test('a title is capped', () => {
+  assert.equal(summaryFromUserText('x'.repeat(400)).length, 120);
+});
+
+test('nothing usable yields nothing', () => {
+  for (const v of [null, undefined, '', '   ', '<tag></tag>']) {
+    assert.equal(summaryFromUserText(v), null);
+  }
+});

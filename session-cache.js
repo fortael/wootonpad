@@ -3,7 +3,7 @@ const fs = require('fs');
 const { Worker } = require('worker_threads');
 const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { deriveProjectPath } = require('./derive-project-path');
-const { readSessionFile } = require('./read-session-file');
+const { readSessionFile, readSessionFileIncremental } = require('./read-session-file');
 const { encodeProjectPath } = require('./encode-project-path');
 
 /**
@@ -16,6 +16,9 @@ let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName, getAllProjectGitCounts;
 
 function init(ctx) {
+  // Switching accounts points this module at another projects directory, and
+  // the fold state of the one it is leaving is dead weight from that moment on.
+  foldState.clear();
   PROJECTS_DIR = ctx.PROJECTS_DIR;
   accountId = ctx.accountId || 'default';
   activeSessions = ctx.activeSessions;
@@ -40,6 +43,21 @@ function init(ctx) {
 }
 
 // readSessionFile is imported from read-session-file.js (shared with worker)
+
+/**
+ * Per-transcript fold state, so a change re-reads only what was appended.
+ *
+ * Keyed by path and held only in memory: losing it costs one full read, which
+ * is what every read used to be. The watcher fires on every write a live
+ * session makes, and a full re-read of a long transcript is 150–190ms of
+ * blocked main thread each time — see readSessionFileIncremental.
+ */
+const foldState = new Map();
+
+/** Forget a transcript's fold state — it is gone, or its folder is. */
+function forgetFoldState(filePath) {
+  foldState.delete(filePath);
+}
 
 /** Read one folder from filesystem by scanning .jsonl files directly */
 function readFolderFromFilesystem(folder) {
@@ -108,8 +126,12 @@ function refreshFolder(folder) {
       continue; // unchanged, skip
     }
 
-    // File is new or modified — re-read it
-    const s = readSessionFile(filePath, folder, projectPath);
+    // File is new or modified — fold in whatever was appended since last time.
+    const { session: s, state } = readSessionFileIncremental(
+      filePath, folder, projectPath, foldState.get(filePath),
+    );
+    if (state) foldState.set(filePath, state);
+    else foldState.delete(filePath);
     if (s) {
       sessionsToUpsert.push(s);
       // Title precedence: user rename (session_meta.name) > JSONL custom-title > JSONL ai-title.
@@ -130,6 +152,7 @@ function refreshFolder(folder) {
   for (const sessionId of cachedMap.keys()) {
     if (!currentIds.has(sessionId)) {
       sessionsToDelete.push(sessionId);
+      forgetFoldState(path.join(folderPath, sessionId + '.jsonl'));
       changed = true;
     }
   }
@@ -171,13 +194,36 @@ function populateCacheFromFilesystem() {
   }
 }
 
+/**
+ * Everything a build reads that does not depend on the archive filter.
+ *
+ * Two whole-table scans, the settings row, the git counts and a readdir of the
+ * projects directory — the same answers for the archived view and the
+ * unarchived one. The renderer needs both lists on every refresh, and asking
+ * twice meant doing all of this twice for a difference of one `continue`.
+ */
+function readProjectsSnapshot() {
+  let dirs = [];
+  try {
+    dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+      .filter(d => d.isDirectory() && d.name !== '.git')
+      .map(d => d.name);
+  } catch { /* no projects directory yet */ }
+
+  return {
+    metaMap: getAllMeta(),
+    cachedRows: getAllCached(accountId),
+    global: getSetting('global') || {},
+    gitCounts: getAllProjectGitCounts?.() || new Map(),
+    folderMeta: getAllFolderMeta(),
+    dirs,
+  };
+}
+
 /** Build projects response from cached data */
-function buildProjectsFromCache(showArchived) {
-  const metaMap = getAllMeta();
-  const cachedRows = getAllCached(accountId);
-  const global = getSetting('global') || {};
+function buildProjectsFromCache(showArchived, snapshot = readProjectsSnapshot()) {
+  const { metaMap, cachedRows, global, gitCounts } = snapshot;
   const hiddenProjects = new Set(global.hiddenProjects || []);
-  const gitCounts = getAllProjectGitCounts?.() || new Map();
 
   // Group by projectPath, not on-disk folder name. Multiple ~/.claude/projects/<folder>/
   // directories can resolve to the same projectPath (Claude Code's folder-name encoding
@@ -228,14 +274,17 @@ function buildProjectsFromCache(showArchived) {
   // for folders the indexer hasn't seen yet, and backfill cache_meta so subsequent
   // renders are pure DB reads.
   try {
-    const folderMeta = getAllFolderMeta();
-    const dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
-      .filter(d => d.isDirectory() && d.name !== '.git');
-    for (const d of dirs) {
-      let projectPath = folderMeta.get(d.name)?.projectPath;
+    const { folderMeta, dirs } = snapshot;
+    for (const name of dirs) {
+      let projectPath = folderMeta.get(name)?.projectPath;
       if (!projectPath) {
-        projectPath = deriveProjectPath(path.join(PROJECTS_DIR, d.name), d.name);
-        if (projectPath) setFolderMeta(d.name, projectPath, 0);
+        projectPath = deriveProjectPath(path.join(PROJECTS_DIR, name), name);
+        if (projectPath) {
+          setFolderMeta(name, projectPath, 0);
+          // Written back into the snapshot as well, so a second build over the
+          // same one does not re-derive it off disk.
+          folderMeta.set(name, { projectPath });
+        }
       }
       if (!projectPath) continue;
       if (hiddenProjects.has(projectPath)) continue;
@@ -296,6 +345,23 @@ function buildProjectsFromCache(showArchived) {
   return projects;
 }
 
+/**
+ * Both views of the tree, from one pass over the cache.
+ *
+ * The sidebar needs the list its archive filter selected and the unfiltered one
+ * at the same time — a project's own page shows archived sessions whether or
+ * not the sidebar is. They cannot be derived from one another in the renderer:
+ * a project whose folder is gone from disk but whose archived sessions are
+ * still cached belongs in `all` and not in `visible`, and nothing in the
+ * payload says which projects are still on disk.
+ */
+function buildProjectSets() {
+  const snapshot = readProjectsSnapshot();
+  return {
+    visible: buildProjectsFromCache(false, snapshot),
+    all: buildProjectsFromCache(true, snapshot),
+  };
+}
 
 function notifyRendererProjectsChanged() {
   const mainWindow = getMainWindow();
@@ -400,7 +466,7 @@ module.exports = {
   readFolderFromFilesystem,
   refreshFolder,
   populateCacheFromFilesystem,
-  buildProjectsFromCache,
+  buildProjectSets,
   notifyRendererProjectsChanged,
   sendStatus,
   populateCacheViaWorker,

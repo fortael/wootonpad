@@ -205,6 +205,10 @@ async function startSdkSession(sessionId, opts) {
 
   if (opts.permissionMode) options.permissionMode = opts.permissionMode;
   if (opts.model) options.model = opts.model;
+  // Effort has no query() option — it lives in the session-scoped flag layer,
+  // which only takes a control request, and a control request needs a session
+  // that is already answering. Parked here and applied on the first init.
+  entry.pendingEffort = opts.effort || null;
   if (opts.canUseTool) options.canUseTool = opts.canUseTool;
 
   // The second way a session can stop and wait for a person: an MCP server
@@ -293,6 +297,16 @@ function route(entry, message, opts) {
   // `system/init` arrives at the head of every turn and carries the id the CLI
   // actually used. It should equal the one we asked for, but a fork or an
   // older CLI can disagree, and the transcript on disk follows the CLI.
+  // The first sign the session is answering control requests, which is when a
+  // parked effort level can finally be set.
+  if (message.type === 'system' && message.subtype === 'init' && entry.pendingEffort) {
+    const level = entry.pendingEffort;
+    entry.pendingEffort = null;
+    entry.query?.applyFlagSettings({ effortLevel: level })
+      .then(() => log.info(`[sdk] session=${entry.realSessionId} effort=${level}`))
+      .catch(err => log.warn(`[sdk] session=${entry.realSessionId} effort=${level} refused: ${err.message}`));
+  }
+
   if (message.type === 'system' && message.subtype === 'init' && message.session_id) {
     if (message.session_id !== entry.realSessionId) {
       const previous = entry.realSessionId;

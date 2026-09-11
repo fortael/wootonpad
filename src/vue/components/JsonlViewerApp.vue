@@ -7,7 +7,8 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
+import { store } from '../store.js';
 // How a thinking block, a tool call or a screenshot looks now lives in one
 // place, shared with the SDK-backed session view — see message-render.js.
 import {
@@ -19,6 +20,18 @@ import {
 const title = ref('Message History');
 const sessionId = ref('');
 const bodyRef = ref(null);
+
+// A closed viewer keeps its markup, and a transcript is tens of thousands of
+// nodes; leaving it in the document makes every later layout in the app pay for
+// a view nobody is looking at. The component stays mounted — `v-show` is right
+// here, rebuilding the subtree on every open would be worse — but its contents
+// go. Watched rather than cleared by each caller: `showJsonl` is turned off from
+// half a dozen places in App.vue, and this is the one that has to be right.
+watch(() => store.showJsonl, (showing) => {
+  if (showing || !bodyRef.value) return;
+  bodyRef.value.replaceChildren();
+  sessionId.value = '';
+});
 
 // ── Public API ────────────────────────────────────────────────────
 async function open(session) {

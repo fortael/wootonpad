@@ -65,20 +65,31 @@
       <!-- Everything that changes how the next turn runs, on one line under
            the field: what Claude may do on the left, what it runs as on the
            right, and how full the window is at the end. -->
-      <div class="sbx-sdk__controls">
-        <select class="sbx-sdk__select" :value="permissionMode" @change="onPermissionMode">
+      <!-- All three are locked while a turn runs. Changing them mid-turn was
+           observed to wedge the session — the prompt never landed and the
+           conversation was gone on reopen — and none of them can affect a turn
+           that has already started anyway. -->
+      <div class="sbx-sdk__controls" :class="{ 'is-locked': busy }">
+        <select
+          class="sbx-sdk__select" :value="permissionMode" :disabled="busy"
+          :title="busy ? LOCKED_HINT : ''" @change="onPermissionMode"
+        >
           <option v-for="m in PERMISSION_MODES" :key="m.value" :value="m.value">{{ m.label }}</option>
         </select>
 
         <span class="sbx-sdk__spacer"></span>
 
-        <select class="sbx-sdk__select sbx-sdk__select--model" :value="model" @change="onModel" :title="modelTitle">
+        <select
+          class="sbx-sdk__select sbx-sdk__select--model" :value="model" :disabled="busy"
+          :title="busy ? LOCKED_HINT : modelTitle" @change="onModel"
+        >
           <option v-for="m in models" :key="m.value" :value="m.value">{{ modelLabel(m) }}</option>
         </select>
 
         <select
           v-if="effortLevels.length"
-          class="sbx-sdk__select" :value="effort" @change="onEffort"
+          class="sbx-sdk__select" :value="effort" :disabled="busy"
+          :title="busy ? LOCKED_HINT : ''" @change="onEffort"
         >
           <option v-for="e in effortLevels" :key="e" :value="e">{{ e }}</option>
         </select>
@@ -106,6 +117,7 @@ import UsageRing from './UsageRing.vue';
 import RequestDialog from './RequestDialog.vue';
 import { normalize } from '../message-normalizer.ts';
 import { modelLabels, defaultModelValue } from '../model-name.js';
+import { controlsFromTranscript } from '../session-controls.js';
 import {
   renderViewItems, renderJsonlEntry, renderJsonlText, mergeLocalCommandEntries,
 } from '../message-render.js';
@@ -129,6 +141,7 @@ const PERMISSION_MODES = [
   { value: 'acceptEdits', label: 'Accept edits' },
   { value: 'plan', label: 'Plan' },
 ];
+const LOCKED_HINT = 'Wait for the turn to finish — this cannot change mid-answer';
 const permissionMode = ref('default');
 const model = ref('');
 // Set once the user picks a row by hand. Until then the picker is only ever
@@ -178,16 +191,27 @@ const sessionId = computed(() => store.headerSession?.sessionId || '');
 let toolResults = new Map();
 
 // ── Rendering ─────────────────────────────────────────────────────
+//
+// Whether the view is following the bottom is tracked from the scroll event
+// rather than measured when something is about to be written. Reading
+// `scrollHeight` forces the browser to lay out the whole transcript first, and
+// the streaming path used to do it twice per token: on a real transcript that
+// single measurement costs tens of milliseconds, which is more than a frame.
+// A scroll handler reads the same numbers after layout has already happened,
+// so it costs nothing.
 
-function atBottom() {
+/** Is the view parked at the bottom, i.e. should new output be chased? */
+let pinned = true;
+
+function readPinned() {
   const el = bodyRef.value;
-  if (!el) return true;
-  return el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+  if (!el) return;
+  pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
 }
 
-function stickBottom(stick) {
+function stickBottom() {
   const el = bodyRef.value;
-  if (stick && el) el.scrollTop = el.scrollHeight;
+  if (pinned && el) el.scrollTop = el.scrollHeight;
 }
 
 // The working indicator and the paragraph being streamed both live at the end
@@ -200,13 +224,12 @@ function tail() {
 function append(nodes) {
   const el = bodyRef.value;
   if (!el || !nodes.childNodes.length) return;
-  // Only chase the bottom if the user was already there — otherwise reading
-  // back through a long turn would be yanked away on every message.
-  const stick = atBottom();
   const before = tail();
   if (before && before.parentNode === el) el.insertBefore(nodes, before);
   else el.appendChild(nodes);
-  stickBottom(stick);
+  // Only chase the bottom if the user was already there — otherwise reading
+  // back through a long turn would be yanked away on every message.
+  stickBottom();
 }
 
 // ── Streaming ─────────────────────────────────────────────────────
@@ -223,11 +246,36 @@ let liveText = '';
 /** @type {HTMLElement|null} the "working" row, last child while a turn runs */
 let workingEl = null;
 
-function streamDelta(text) {
-  const el = bodyRef.value;
-  if (!el || !text) return;
-  const stick = atBottom();
+// Painting is throttled, not done per token.
+//
+// A delta carries a few characters, and the paragraph is re-rendered from the
+// whole accumulated answer each time — so painting per delta is quadratic in
+// the length of the answer, and measurably so: the same paint costs 2.7ms at
+// 3k characters and 6.8ms at 23k. At the rate the SDK emits partial messages
+// that is more than a core, and it gets worse the longer Claude talks.
+//
+// A leading paint keeps the first token instant; everything after it lands on
+// a fixed cadence, which is well under the rate anyone reads at.
+const LIVE_PAINT_MS = 80;
+let livePaintTimer = 0;
+let livePending = false;
 
+function schedulePaint() {
+  livePending = true;
+  if (livePaintTimer) return;
+  paintLive();
+  livePaintTimer = setTimeout(() => {
+    livePaintTimer = 0;
+    // Re-arm only while tokens are still arriving, so a finished turn stops
+    // the timer rather than leaving it ticking for the life of the session.
+    if (livePending) schedulePaint();
+  }, LIVE_PAINT_MS);
+}
+
+function paintLive() {
+  livePending = false;
+  const el = bodyRef.value;
+  if (!el) return;
   if (!liveEl || liveEl.parentNode !== el) {
     liveEl = document.createElement('div');
     liveEl.className = 'jsonl-entry jsonl-assistant sbx-streaming';
@@ -236,15 +284,24 @@ function streamDelta(text) {
     liveEl.appendChild(body);
     if (workingEl && workingEl.parentNode === el) el.insertBefore(liveEl, workingEl);
     else el.appendChild(liveEl);
-    liveText = '';
   }
-
-  liveText += text;
   liveEl.firstChild.innerHTML = renderJsonlText(liveText);
-  stickBottom(stick);
+  stickBottom();
+}
+
+function streamDelta(text) {
+  if (!text || !bodyRef.value) return;
+  // A paragraph that is no longer in the transcript belonged to a turn that has
+  // ended, so the next delta starts a new answer rather than continuing its text.
+  if (!liveEl || liveEl.parentNode !== bodyRef.value) liveText = '';
+  liveText += text;
+  schedulePaint();
 }
 
 function endStream() {
+  clearTimeout(livePaintTimer);
+  livePaintTimer = 0;
+  livePending = false;
   liveEl?.remove();
   liveEl = null;
   liveText = '';
@@ -255,13 +312,12 @@ function setWorking(on) {
   if (!el) return;
   if (!on) { workingEl?.remove(); workingEl = null; return; }
   if (workingEl && workingEl.parentNode === el) return;
-  const stick = atBottom();
   workingEl = document.createElement('div');
   workingEl.className = 'jsonl-entry jsonl-assistant sbx-working';
   workingEl.innerHTML = '<span class="sbx-working__dots"><i></i><i></i><i></i></span>'
     + '<span class="sbx-working__label">Working</span>';
   el.appendChild(workingEl);
-  stickBottom(stick);
+  stickBottom();
 }
 
 watch(busy, setWorking);
@@ -271,6 +327,10 @@ function handle(message) {
     init.value = message;
     if (message.model) liveModel.value = message.model;
   }
+  // Nothing below this writes anywhere but the transcript, and building the
+  // nodes is the expensive half — so a view with no transcript to write into
+  // stops here rather than after the work is already done.
+  if (!bodyRef.value) return;
   const items = normalize(message);
 
   for (const item of items) {
@@ -282,9 +342,11 @@ function handle(message) {
     }
     if (item.kind === 'turn_end') {
       endStream();
+      noteTurnActivity();
       busy.value = false;
       refreshContext();
     } else if (item.kind === 'delta') {
+      noteTurnActivity();
       // Any frame at all means the turn is alive — including one carrying no
       // text, which is what a long thinking block looks like from here. That
       // also covers a session driven from somewhere else: nothing was typed
@@ -306,6 +368,43 @@ function handle(message) {
 
 // ── Input ─────────────────────────────────────────────────────────
 
+// ── Whether a turn is running ─────────────────────────────────────
+//
+// `busy` starts as this view's own optimism: something was sent, so a turn is
+// presumably about to run. That is a guess, and when it is wrong — a prompt
+// that never reached the CLI — the chat said "Working" for the rest of the
+// session while the board, which reads the status tracker, correctly said
+// idle. The two must not be able to disagree indefinitely.
+//
+// So the tracker in the main process is the authority, with one concession:
+// for a few seconds after sending it has not heard about the prompt yet, and
+// its `idle` is stale rather than wrong.
+
+const TURN_GRACE_MS = 20000;
+/** While set, an `idle` from the tracker is too early to believe. */
+let turnGraceUntil = 0;
+let turnWatchdog = null;
+
+function noteTurnActivity() {
+  turnGraceUntil = 0;
+  if (turnWatchdog) { clearTimeout(turnWatchdog); turnWatchdog = null; }
+}
+
+/** Nothing came back at all — say so rather than spin forever. */
+function startTurnWatchdog() {
+  if (turnWatchdog) clearTimeout(turnWatchdog);
+  turnWatchdog = setTimeout(() => {
+    turnWatchdog = null;
+    turnGraceUntil = 0;
+    if (!busy.value) return;
+    busy.value = false;
+    append(renderViewItems([{
+      kind: 'notice', level: 'warn',
+      text: 'That prompt never started a turn. Send it again.',
+    }]));
+  }, TURN_GRACE_MS);
+}
+
 function send() {
   const text = draft.value.trim();
   if (!text || !sessionId.value) return;
@@ -315,6 +414,8 @@ function send() {
   window.api.sendInput(sessionId.value, text);
   draft.value = '';
   busy.value = true;
+  turnGraceUntil = Date.now() + TURN_GRACE_MS;
+  startTurnWatchdog();
   nextTick(() => { autoGrow(); inputRef.value?.focus(); });
 }
 
@@ -386,12 +487,19 @@ function respond(decision) {
 // ── Session controls ──────────────────────────────────────────────
 
 async function onPermissionMode(event) {
+  // The select is disabled while busy; this is the same rule for anything
+  // that reaches the handler another way.
+  if (busy.value) { event.target.value = permissionMode.value; return; }
   const value = event.target.value;
   const res = await window.api.sdkSetPermissionMode(sessionId.value, value);
-  if (res?.ok) permissionMode.value = value;
+  if (!res?.ok) return;
+  permissionMode.value = value;
 }
 
 async function onModel(event) {
+  // The select is disabled while busy; this is the same rule for anything
+  // that reaches the handler another way.
+  if (busy.value) { event.target.value = model.value; return; }
   const value = event.target.value;
   const res = await window.api.sdkSetModel(sessionId.value, value);
   if (!res?.ok) return;
@@ -406,9 +514,40 @@ async function onModel(event) {
 }
 
 async function onEffort(event) {
+  // The select is disabled while busy; this is the same rule for anything
+  // that reaches the handler another way.
+  if (busy.value) { event.target.value = effort.value; return; }
   const value = event.target.value;
   const res = await window.api.sdkSetEffort(sessionId.value, value);
-  if (res?.ok) effort.value = value;
+  if (!res?.ok) return;
+  effort.value = value;
+}
+
+// ── Remembered controls ───────────────────────────────────────────
+//
+// Read back out of the session's own transcript rather than stored separately
+// — the CLI already records all three (see session-controls.js). Applied after
+// the session is up, so the picker and the live session agree.
+
+async function applyStoredControls(entries) {
+  const id = sessionId.value;
+  const found = controlsFromTranscript(entries);
+  if (!id) return;
+
+  if (found.permissionMode && PERMISSION_MODES.some(m => m.value === found.permissionMode)) {
+    const res = await window.api.sdkSetPermissionMode(id, found.permissionMode);
+    if (res?.ok && sessionId.value === id) permissionMode.value = found.permissionMode;
+  }
+  if (found.effort) {
+    const res = await window.api.sdkSetEffort(id, found.effort);
+    if (res?.ok && sessionId.value === id) effort.value = found.effort;
+  }
+  // The model is matched by wire id against the picker's rows, the same way a
+  // live `system/init` is — the transcript names the model, not the alias row.
+  if (found.model && !modelPinned) {
+    liveModel.value = found.model;
+    syncSelectedModel();
+  }
 }
 
 // Read after a turn ends rather than on a timer: the number only moves when
@@ -431,7 +570,10 @@ async function loadModels() {
 // before that it comes back empty — leaving the picker blank for the rest of
 // the session. `system/init` is the first thing that proves the CLI is
 // answering, so it is also the moment to ask again.
-watch(init, () => { if (!models.value.length) loadModels(); });
+watch(init, () => {
+  if (!models.value.length) loadModels();
+  if (!commandInfo.value.length) loadCommands();
+});
 
 /**
  * Point the picker at the row the session is actually running, matched by the
@@ -475,7 +617,12 @@ const files = ref([]);         // relative paths, flattened from the file tree
 // The SDK's own docs say remote surfaces should hide them, and a chat has no
 // terminal for them to act on.
 const availableCommands = computed(() => {
-  const all = init.value?.slash_commands || [];
+  // `supportedCommands()` answers as soon as the session is up; the list on
+  // `system/init` only arrives with the first turn. Reading init first meant a
+  // chat you had just opened — the one place you are most likely to reach for
+  // a command — offered none at all.
+  const named = commandInfo.value.map(c => c?.name).filter(Boolean);
+  const all = named.length ? named : (init.value?.slash_commands || []);
   const terminalOnly = new Set(init.value?.terminal_slash_commands || []);
   return all.filter(c => !terminalOnly.has(c));
 });
@@ -619,46 +766,173 @@ async function interrupt() {
 
 // ── Wiring ────────────────────────────────────────────────────────
 
-let detach = null;
+/** @type {Array<(() => void)|undefined>} one disposer per IPC subscription */
+const subscriptions = [];
 
 // A session opened in this view did not necessarily start in it. The transcript
 // on disk is the same file either way, so the history is read back and painted
 // with the same renderer the transcript viewer uses — a session started in a
 // terminal months ago opens here as a chat, and carries on as one.
+//
+// It is read a page at a time rather than whole. A long session's transcript is
+// tens of megabytes and paints tens of thousands of nodes, and a document that
+// size costs ~39ms per layout against ~0.7ms empty — which is more than a frame
+// for every scroll, every spinner tick and every streamed token, in this view
+// and in every other one sharing the document. Fifty messages is what fits on
+// screen; the rest arrives by scrolling up.
 const loadingHistory = ref(true);
+const HISTORY_PAGE = 50;
+
+/** Record index of the oldest entry on screen — where the next page ends. */
+let historyFrom = null;
+/** Is there anything above what is loaded, including a compact marker? */
+let historyHasMore = false;
+/** The `/compact` boundary directly above the loaded range, if the page hit one. */
+let historyCompact = null;
+let loadingEarlier = false;
+/** @type {IntersectionObserver|null} watches the top sentinel for an upward scroll */
+let topObserver = null;
+/** @type {HTMLElement|null} the marker or sentinel currently at the top */
+let topEl = null;
+
+/** 936783 → "937k". The exact figure is noise at this scale. */
+function shortTokens(n) {
+  if (!n) return '0';
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + 'M';
+  if (n >= 1000) return Math.round(n / 1000) + 'k';
+  return String(n);
+}
+
+function compactWhen(timestamp) {
+  if (!timestamp) return '';
+  const d = new Date(timestamp);
+  if (Number.isNaN(d.getTime())) return '';
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay
+    ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+/**
+ * The line across the transcript where the context was compacted.
+ *
+ * Everything above it was dropped from the model's own context, so it is drawn
+ * as a boundary rather than as more messages — and crossing it is a click, not
+ * something an upward scroll does on its own. The earlier segment is usually
+ * the larger half of the file, and loading it is the thing this view exists to
+ * avoid doing by default.
+ */
+function makeCompactMarker(compact) {
+  const el = document.createElement('div');
+  el.className = 'sbx-compact';
+
+  const label = document.createElement('div');
+  label.className = 'sbx-compact__label';
+  label.textContent = compact.trigger === 'auto'
+    ? 'Context automatically compacted'
+    : 'Conversation compacted';
+
+  const meta = document.createElement('div');
+  meta.className = 'sbx-compact__meta';
+  const when = compactWhen(compact.timestamp);
+  const tokens = compact.preTokens
+    ? `${shortTokens(compact.preTokens)} → ${shortTokens(compact.postTokens)} tokens`
+    : '';
+  meta.textContent = [when, tokens].filter(Boolean).join(' · ');
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'sbx-compact__more';
+  button.textContent = 'Load earlier messages';
+  button.addEventListener('click', () => {
+    button.disabled = true;
+    button.textContent = 'Loading…';
+    // `compact.index` is the marker's own record, so asking for everything
+    // before it steps over the boundary and lands in the previous segment.
+    loadEarlier(compact.index);
+  });
+
+  const text = document.createElement('div');
+  text.className = 'sbx-compact__text';
+  text.append(label, meta);
+  el.append(text, button);
+  return el;
+}
+
+/** Plain "there is more above" marker — the observer loads it on approach. */
+function makeTopSentinel() {
+  const el = document.createElement('div');
+  el.className = 'sbx-history-top';
+  el.innerHTML = '<span class="sbx-history-top__dots"><i></i><i></i><i></i></span>';
+  return el;
+}
+
+/** Put the right thing at the top of the transcript for the current range. */
+function refreshTopAffordance() {
+  const body = bodyRef.value;
+  if (!body) return;
+  topObserver?.disconnect();
+  topEl?.remove();
+  topEl = null;
+  if (!historyHasMore) return;
+
+  topEl = historyCompact ? makeCompactMarker(historyCompact) : makeTopSentinel();
+  body.insertBefore(topEl, body.firstChild);
+
+  // A compact marker is answered by hand; only the plain sentinel auto-loads.
+  if (historyCompact) return;
+  topObserver = new IntersectionObserver((entries) => {
+    if (entries.some(e => e.isIntersecting)) loadEarlier(historyFrom);
+  }, { root: body, rootMargin: '400px 0px 0px 0px' });
+  topObserver.observe(topEl);
+}
+
+/** Render one window into a fragment, newest last. Returns null if empty. */
+function renderWindow(rawEntries) {
+  const entries = mergeLocalCommandEntries(rawEntries || []);
+  // A tool's result lands in a later entry than its call. Collect them first
+  // so each call renders with its own result folded in, as the transcript
+  // viewer does.
+  const results = new Map();
+  for (const entry of entries) {
+    const blocks = entry.message?.content || entry.content;
+    if (!Array.isArray(blocks)) continue;
+    for (const block of blocks) {
+      if (block.type === 'tool_result' && block.tool_use_id) {
+        results.set(block.tool_use_id, block.content || block.output || '');
+      }
+    }
+  }
+  const frag = document.createDocumentFragment();
+  for (const entry of entries) {
+    const el = renderJsonlEntry(entry, results, { foldTools: true });
+    if (el) frag.appendChild(el);
+  }
+  return frag;
+}
 
 async function loadHistory() {
   const id = sessionId.value;
   if (!id) { loadingHistory.value = false; return; }
   try {
-    const result = await window.api.readSessionJsonl(id);
+    const result = await window.api.readSessionTranscript(id, { limit: HISTORY_PAGE });
     if (sessionId.value !== id) return;          // switched away mid-read
-    const entries = mergeLocalCommandEntries(result?.entries || []);
+    if (result?.error) return;
 
-    // A tool's result lands in a later entry than its call. Collect them first
-    // so each call renders with its own result folded in, as the transcript
-    // viewer does.
-    const results = new Map();
-    for (const entry of entries) {
-      const blocks = entry.message?.content || entry.content;
-      if (!Array.isArray(blocks)) continue;
-      for (const block of blocks) {
-        if (block.type === 'tool_result' && block.tool_use_id) {
-          results.set(block.tool_use_id, block.content || block.output || '');
-        }
-      }
-    }
+    historyFrom = result.from;
+    historyHasMore = !!result.hasMore;
+    historyCompact = result.compact || null;
 
-    const frag = document.createDocumentFragment();
-    for (const entry of entries) {
-      const el = renderJsonlEntry(entry, results, { foldTools: true });
-      if (el) frag.appendChild(el);
-    }
+    // The same entries carry what the session was last running as.
+    applyStoredControls(result.entries || []);
+
     const body = bodyRef.value;
-    if (body && frag.childNodes.length) {
-      body.appendChild(frag);
-      body.scrollTop = body.scrollHeight;
-    }
+    if (!body) return;
+    const frag = renderWindow(result.entries);
+    if (frag.childNodes.length) body.appendChild(frag);
+    refreshTopAffordance();
+    body.scrollTop = body.scrollHeight;
+    pinned = true;
   } catch {
     /* A session with no transcript yet is the normal case for a new one. */
   } finally {
@@ -666,36 +940,100 @@ async function loadHistory() {
   }
 }
 
-onMounted(() => {
-  const onMessage = (id, message) => {
-    if (id !== sessionId.value) return;
-    handle(message);
-  };
-  window.api.onSdkMessage(onMessage);
+/**
+ * Prepend the page ending at `before`, holding the reading position still.
+ *
+ * Inserting above the viewport moves everything under it down by the height of
+ * what was inserted, so the scroll offset is corrected by exactly that much —
+ * otherwise loading a page would throw the reader back to where they had
+ * already been.
+ */
+async function loadEarlier(before) {
+  const id = sessionId.value;
+  if (loadingEarlier || !id || before === null || before <= 0) return;
+  loadingEarlier = true;
+  try {
+    const result = await window.api.readSessionTranscript(id, { before, limit: HISTORY_PAGE });
+    if (sessionId.value !== id || result?.error) return;
 
-  // markRaw, because the request is read and never edited — and because the
-  // answer carries the tool input straight back over IPC. A reactive proxy
-  // cannot be structured-cloned, so making it reactive would break the reply.
-  window.api.onSdkPermissionRequest((id, incoming) => {
-    if (id !== sessionId.value) return;
-    request.value = markRaw(incoming);
-  });
-  window.api.onSdkElicitationRequest?.((id, incoming) => {
-    if (id !== sessionId.value) return;
-    request.value = markRaw({ ...incoming, kind: 'elicitation' });
-  });
-  window.api.onSdkDialogRequest?.((id, incoming) => {
-    if (id !== sessionId.value) return;
-    request.value = markRaw({ ...incoming, kind: 'dialog' });
-  });
-  // The CLI can withdraw the question — an interrupted turn. Take the dialog
-  // down rather than leave a button that answers nothing.
-  window.api.onSdkPermissionCancelled((id, requestId) => {
-    if (request.value?.requestId === requestId) request.value = null;
-  });
-  // preload exposes no unsubscribe; guard by id instead and drop the reference
-  // so a stale closure cannot keep rendering into a detached node.
-  detach = () => { bodyRef.value = null; };
+    const body = bodyRef.value;
+    if (!body) return;
+
+    historyFrom = result.from;
+    historyHasMore = !!result.hasMore;
+    historyCompact = result.compact || null;
+
+    const heightBefore = body.scrollHeight;
+    const scrollBefore = body.scrollTop;
+    const frag = renderWindow(result.entries);
+
+    // The marker goes first so the new entries land under it, then the
+    // affordance for whatever is above *this* page replaces it.
+    topObserver?.disconnect();
+    const anchor = topEl;
+    if (frag.childNodes.length) {
+      if (anchor && anchor.parentNode === body) body.insertBefore(frag, anchor.nextSibling);
+      else body.insertBefore(frag, body.firstChild);
+    }
+    anchor?.remove();
+    topEl = null;
+    refreshTopAffordance();
+
+    body.scrollTop = scrollBefore + (body.scrollHeight - heightBefore);
+    readPinned();
+  } catch {
+    /* A read that fails leaves the affordance in place to try again. */
+  } finally {
+    loadingEarlier = false;
+  }
+}
+
+onMounted(() => {
+  // This view is keyed by session id, so it is torn down and rebuilt on every
+  // switch. Each subscription's disposer is kept and called on unmount: a stale
+  // listener is not harmless here, because the id it guards on is read off the
+  // shared store and therefore always matches the *current* session — every
+  // past mount would go on rendering every message, invisibly.
+  subscriptions.push(
+    window.api.onSdkMessage((id, message) => {
+      if (id !== sessionId.value) return;
+      handle(message);
+    }),
+
+    // The same status the board draws from — see applySessionStatus in app.js.
+    window.api.onSessionStatus?.((id, status) => {
+      if (id !== sessionId.value || !status) return;
+      if (status.state === 'running') { noteTurnActivity(); busy.value = true; return; }
+      if (status.state !== 'idle' && status.state !== 'exited') return;
+      if (turnGraceUntil && Date.now() < turnGraceUntil) return;   // too early to believe
+      noteTurnActivity();
+      busy.value = false;
+    }),
+
+    // markRaw, because the request is read and never edited — and because the
+    // answer carries the tool input straight back over IPC. A reactive proxy
+    // cannot be structured-cloned, so making it reactive would break the reply.
+    window.api.onSdkPermissionRequest((id, incoming) => {
+      if (id !== sessionId.value) return;
+      request.value = markRaw(incoming);
+    }),
+    window.api.onSdkElicitationRequest?.((id, incoming) => {
+      if (id !== sessionId.value) return;
+      request.value = markRaw({ ...incoming, kind: 'elicitation' });
+    }),
+    window.api.onSdkDialogRequest?.((id, incoming) => {
+      if (id !== sessionId.value) return;
+      request.value = markRaw({ ...incoming, kind: 'dialog' });
+    }),
+    // The CLI can withdraw the question — an interrupted turn. Take the dialog
+    // down rather than leave a button that answers nothing.
+    window.api.onSdkPermissionCancelled((id, requestId) => {
+      if (request.value?.requestId === requestId) request.value = null;
+    }),
+  );
+
+  bodyRef.value?.addEventListener('scroll', readPinned, { passive: true });
+
   loadHistory();
   loadPending();
   loadModels();
@@ -706,7 +1044,16 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  detach?.();
+  if (turnWatchdog) clearTimeout(turnWatchdog);
+  clearTimeout(livePaintTimer);
+  livePaintTimer = 0;
+  livePending = false;
+  for (const off of subscriptions) off?.();
+  subscriptions.length = 0;
+  topObserver?.disconnect();
+  topObserver = null;
+  topEl = null;
+  bodyRef.value?.removeEventListener('scroll', readPinned);
   toolResults = new Map();
   liveEl = null;
   workingEl = null;
