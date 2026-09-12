@@ -66,6 +66,23 @@ export function paintedCount(segments) {
 }
 
 /**
+ * Would a window ending at `before` paint records that are already on screen?
+ *
+ * The runs are the record of what has been drawn, so they are also the answer
+ * to "has this been drawn already". Without asking, a compact notch for a
+ * boundary that had already been stepped over re-read its segment and prepended
+ * a second copy of it — once per click, so the same pages could be scrolled
+ * through over and over.
+ *
+ * `before` is exclusive, which is why the top edge of a run is not a hit: a
+ * page ending exactly where the painted range starts is the next page up, and
+ * it is the one legitimate way to walk backwards.
+ */
+export function isPainted(segments, before) {
+  return (segments || []).some(s => s && s.from < before && before <= s.to);
+}
+
+/**
  * The file record `offset` painted records into the transcript.
  *
  * Walking the runs rather than interpolating across them is the whole job: half
@@ -110,8 +127,13 @@ export function railBand(segments, total, view) {
   // A floor, because a viewport showing fifty records of forty thousand is a
   // true sliver — and a sliver nobody can see answers nothing.
   const height = Math.min(100, Math.max(MIN_THUMB_PERCENT, bottom - top));
+  // Grown around its middle rather than downward from its top. Hanging the
+  // extra height off the top pushes the thumb into the rail's end, where it
+  // sticks: the last stretch of a scroll then moves nothing, which reads as the
+  // rail having given up exactly where the reader was looking.
+  const middle = (top + bottom) / 2;
   return {
-    top: Math.min(100 - height, Math.max(0, top)),
+    top: Math.min(100 - height, Math.max(0, middle - height / 2)),
     height,
   };
 }

@@ -85,6 +85,11 @@ export const store = reactive({
   // different answers for it would only ever read as a bug. Persisted into
   // `ui_state` — see the watcher in App.vue.
   highlightFresh: true,
+  // sessionId → 1..3, from the last Summarize run: where the model says the
+  // work is worth looking at next. The board draws a flag and an outline off
+  // it. Deliberately not persisted — it describes a set of transcripts as they
+  // were at one moment, and a stale flag is worse than none.
+  boardFocus: new Map(),
   boardSplitHeight: 380,          // px, height of the session pane under the board
   // projectPath the board is scoped to, or null for every project. It lives
   // here rather than in SessionBoardApp because the control is in the board's

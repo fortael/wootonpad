@@ -1259,6 +1259,11 @@ let projectsSortOrder = 'name'; // 'name' | 'changes'
 const projectInfoCache = new Map(); // persists across renders
 
 function openProjectViewer(project) {
+  // The sidebar follows the main area. Reached from the spotlight while the
+  // board was up, this left the board's own sidebar — its summary box and its
+  // project filter — standing beside a project page, which is the other half
+  // of the two pages looking mixed together.
+  window.vueApp?.setTab('projects');
   hideAllViewers();
   placeholder.style.display = 'none';
   terminalArea.style.display = 'none';
@@ -1699,7 +1704,6 @@ window.__sb = {
   openProjectFile: (projectPath, relPath) => {
     const proj = cachedAllProjects.find(p => p.projectPath === projectPath)
       || { projectPath, name: projectPath.split('/').filter(Boolean).pop() };
-    window.vueApp?.setTab('projects');
     openProjectViewer(proj);
     // After open(), which resets viewedPath — the tree is read off that.
     setTimeout(() => window.vueProjectViewer?.openFile(relPath), 50);

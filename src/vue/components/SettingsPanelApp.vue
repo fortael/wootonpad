@@ -1,22 +1,24 @@
 <template>
   <div class="settings-panel">
+    <!-- Header and tabs are the project page's, down to the class names: this
+         panel opens in the same slot and has to read as the same kind of
+         place. See .pv-header / .pv-filtertabs in style.css. -->
     <div class="settings-panel-header">
-      <span class="settings-panel-title">{{ title }}</span>
-      <!-- Project settings only override what a session runs as, so their one
-           tab is the whole panel and a bar with a single button in it is noise. -->
-      <nav v-if="tabs.length > 1" class="settings-tabs" role="tablist">
-        <button
-          v-for="t in tabs"
-          :key="t.id"
-          type="button"
-          class="settings-tab"
-          :class="{ 'is-active': tab === t.id }"
-          role="tab"
-          :aria-selected="tab === t.id"
-          @click="tab = t.id"
-        >{{ t.label }}</button>
-      </nav>
+      <div class="settings-panel-titles">
+        <div class="settings-panel-title">{{ title }}</div>
+        <div class="settings-panel-scope">{{ scopeLabel }}</div>
+      </div>
     </div>
+
+    <!-- Project settings only override what a session runs as, so their one
+         tab is the whole panel and a row with a single tab in it is noise. -->
+    <FilterTabs
+      v-if="tabs.length > 1"
+      class="sbx-filtertabs--no-views settings-filtertabs"
+      :tabs="tabs"
+      :active="tab"
+      @select="tab = $event"
+    />
 
     <div class="settings-panel-body">
       <div v-if="loading" class="settings-loading">Loading…</div>
@@ -192,7 +194,7 @@
             </div>
 
             <!-- The rest of launching is one answer for the whole app: which
-                 shell, which transport, which IDE. None of it is per-project. -->
+                 shell it runs in, which IDE it talks to. Not per-project. -->
             <template v-if="!isProject">
               <div class="settings-field">
                 <div class="settings-field-info">
@@ -209,16 +211,6 @@
 
               <div class="settings-field">
                 <div class="settings-field-info">
-                  <span class="settings-label">Chat view (experimental)</span>
-                  <div class="settings-description">Render sessions as a chat instead of a terminal. Same Claude, same account, same transcript on disk — it drives the CLI through the Agent SDK rather than a terminal. New sessions only; existing ones keep their terminal.</div>
-                </div>
-                <div class="settings-field-control">
-                  <SbSwitch v-model="form.sdkMode" />
-                </div>
-              </div>
-
-              <div class="settings-field">
-                <div class="settings-field-info">
                   <span class="settings-label">IDE Emulation</span>
                   <div class="settings-description">Emulate an IDE so Claude can open files and diffs in a side panel. Disable to use your own IDE instead. Changes take effect for new sessions only.</div>
                 </div>
@@ -227,6 +219,27 @@
                 </div>
               </div>
             </template>
+          </div>
+
+          <!-- ── What the summarizer writes back ──────────────────── -->
+          <div v-if="!isProject" class="settings-section">
+            <div class="settings-section-title">Summaries</div>
+
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <span class="settings-label">Summary language</span>
+                <div class="settings-description">
+                  Language the board's Summarize and a session's own summary are written in.
+                  File paths, identifiers and commands are left as they are either way.
+                </div>
+              </div>
+              <div class="settings-field-control">
+                <select class="settings-select" v-model="form.summaryLanguage">
+                  <option value="">Match the session</option>
+                  <option v-for="lang in SUMMARY_LANGUAGES" :key="lang" :value="lang">{{ lang }}</option>
+                </select>
+              </div>
+            </div>
           </div>
         </template>
 
@@ -342,6 +355,16 @@
                   <input class="sbx-metric__range" type="range" min="1.1" max="2.2" step="0.05" v-model.number="form.uiLineHeight">
                   <span class="sbx-metric__value">{{ form.uiLineHeight.toFixed(2) }}</span>
                 </label>
+              </div>
+            </div>
+
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <span class="settings-label">Chat view (experimental)</span>
+                <div class="settings-description">Render sessions as a chat instead of a terminal. Same Claude, same account, same transcript on disk — it drives the CLI through the Agent SDK rather than a terminal. New sessions only; existing ones keep their terminal.</div>
+              </div>
+              <div class="settings-field-control">
+                <SbSwitch v-model="form.sdkMode" />
               </div>
             </div>
 
@@ -476,18 +499,19 @@ import { ref, reactive, computed, onMounted } from 'vue';
 import { store } from '../store.js';
 import SbSwitch from './SbSwitch.vue';
 import SbButton from './SbButton.vue';
+import FilterTabs from './FilterTabs.vue';
 import TerminalPreview from './TerminalPreview.vue';
 
 // ── Derived from store ────────────────────────────────────────────
 const isProject = computed(() => store.settingsScope === 'project');
 const projectPath = computed(() => store.settingsProjectPath);
 const settingsKey = computed(() => isProject.value ? 'project:' + projectPath.value : 'global');
-const title = computed(() => {
-  const shortName = isProject.value
-    ? (projectPath.value?.split('/').filter(Boolean).slice(-2).join('/') || projectPath.value)
-    : 'Global';
-  return (isProject.value ? 'Project Settings — ' : 'Global Settings — ') + shortName;
-});
+// Name over path, the way the project page titles itself: what this is, then
+// what it applies to.
+const title = computed(() => (isProject.value ? 'Project Settings' : 'Global Settings'));
+const scopeLabel = computed(() => (isProject.value
+  ? (projectPath.value || '')
+  : 'Applies to every project unless a project overrides it'));
 
 // ── Tabs ──────────────────────────────────────────────────────────
 //
@@ -513,6 +537,15 @@ const PERMISSION_MODES = [
   { value: 'plan', label: 'Plan' },
   { value: 'dontAsk', label: "Don't ask — deny instead" },
   { value: 'bypassPermissions', label: 'Bypass all checks' },
+];
+
+// Stored and sent as the language's own name: the value goes straight into the
+// summarize prompt, so "Русский" is both what the menu says and what the model
+// is asked for. Empty means the model answers in whatever the transcript is in.
+const SUMMARY_LANGUAGES = [
+  'English', 'Русский', 'Українська', 'Deutsch', 'Español', 'Français',
+  'Italiano', 'Português', 'Polski', 'Türkçe', 'Nederlands',
+  '中文', '日本語', '한국어',
 ];
 
 const PERMISSION_MODE_DESCS = {
@@ -573,6 +606,7 @@ const form = reactive({
   terminalLineHeight: 1.25,
   commitMessagePrompt: '',
   gitlabToken: '',
+  summaryLanguage: '',
 });
 
 const permissionModeDesc = computed(() =>
@@ -643,6 +677,7 @@ async function loadSettings() {
     form.terminalLineHeight = current.terminalLineHeight ?? METRIC_DEFAULTS.terminalLineHeight;
     form.commitMessagePrompt = current.commitMessagePrompt || COMMIT_MSG_PROMPT_DEFAULT;
     form.gitlabToken = current.gitlabToken || '';
+    form.summaryLanguage = current.summaryLanguage || '';
     originalMcpEmulation = form.mcpEmulation;
 
     try { shellProfiles.value = await window.api.getShellProfiles(); } catch { shellProfiles.value = []; }
@@ -701,6 +736,7 @@ async function save() {
       terminalLineHeight: Number(form.terminalLineHeight) || METRIC_DEFAULTS.terminalLineHeight,
       commitMessagePrompt: form.commitMessagePrompt === COMMIT_MSG_PROMPT_DEFAULT ? '' : (form.commitMessagePrompt || ''),
       gitlabToken: form.gitlabToken || '',
+      summaryLanguage: form.summaryLanguage || '',
     };
   }
 

@@ -55,7 +55,20 @@
         </p>
 
         <article v-for="entry in entries" :key="entry.sessionId" class="sbx-boardside__entry">
-          <p class="sbx-boardside__text">{{ entry.summary }}</p>
+          <p class="sbx-boardside__text">
+            <!-- Same flag the card carries, so the list and the board can be
+                 read against each other without matching titles by eye. -->
+            <span
+              v-if="focusLevel(entry.importance)"
+              class="sbx-focusflag"
+              :class="`sbx-focusflag--${entry.importance}`"
+              :data-tooltip="focusLevel(entry.importance).hint"
+            >
+              <SbIcon name="flag" :size="10" />
+              {{ focusLevel(entry.importance).label }}
+            </span>
+            {{ entry.summary }}
+          </p>
           <button
             type="button"
             class="sbx-boardside__link"
@@ -140,6 +153,7 @@ import { store } from '../store.js';
 import SbIcon from './SbIcon.vue';
 import ProjectAvatar from './ProjectAvatar.vue';
 import { filterSessions } from '../session-filter.js';
+import { focusLevel } from '../board-focus.js';
 
 const props = defineProps({
   callbacks: { type: Object, required: true },
@@ -255,6 +269,9 @@ async function summarize() {
   pending.value = true;
   error.value = '';
   usage.value = null;
+  // Whatever the last run flagged is about to be re-decided, and a run that
+  // fails or is stopped should leave the board unflagged rather than stale.
+  store.boardFocus = new Map();
   try {
     const byId = new Map(sessions.map(s => [s.sessionId, s]));
     const result = await call(sessions.map(s => ({
@@ -275,11 +292,18 @@ async function summarize() {
         return {
           sessionId: s.sessionId,
           summary: s.summary,
+          importance: s.importance || 0,
           session,
           title: titleOf(session),
           projectPath: session.projectPath,
         };
       });
+    // The board reads this to flag its cards. Replaced wholesale rather than
+    // merged: a card the new run did not call out is a card that is no longer
+    // where to look, and leaving its old flag up would be a lie.
+    store.boardFocus = new Map(
+      entries.value.filter(e => e.importance > 0).map(e => [e.sessionId, e.importance])
+    );
     usage.value = result.usage || null;
     if (!entries.value.length) error.value = 'claude returned no summaries for these sessions.';
   } catch (e) {

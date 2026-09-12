@@ -1550,6 +1550,10 @@ function sessionTranscriptTail(sessionId, limit = BOARD_SUMMARY_MAX_PER_SESSION)
   return turns.join('\n---\n').slice(-limit);
 }
 
+// What the board flags after a run, and how much of it — see
+// board-importance.js for why the cap is enforced rather than only asked for.
+const { IMPORTANCE_PROMPT: BOARD_IMPORTANCE_PROMPT, importanceRater } = require('./board-importance');
+
 // The child of the summarize run currently in flight, so the sidebar's Stop
 // button has something to kill. One at a time: the renderer disables Summarize
 // while a run is pending, and a second run would only queue behind this one on
@@ -1588,6 +1592,10 @@ ipcMain.handle('board-summarize-sessions', async (_event, sessions, options) => 
     }
     if (!blocks.length) return { ok: false, error: 'No readable transcripts for these sessions' };
 
+    // Which language the summaries come back in. A preference about reading
+    // rather than about the work, so it is global and not per-project.
+    const language = (getSetting('global') || {}).summaryLanguage || '';
+
     const prompt = 'Each <session> below is the tail of a Claude Code transcript.\n'
       + (detail
         ? 'Write 2-3 sentences in past tense describing what the last few turns of that session accomplished. '
@@ -1598,8 +1606,16 @@ ipcMain.handle('board-summarize-sessions', async (_event, sessions, options) => 
       + (detail
         ? 'Hard limit of 70 words — cut detail rather than run long.\n\n'
         : 'Hard limit of 35 words per summary — cut detail rather than run long.\n\n')
+      // Names stay in the language they were written in: a translated path or
+      // identifier cannot be searched for or pasted anywhere.
+      + (language
+        ? `Write every summary in ${language}, whatever language the transcript is in. Leave file paths, identifiers, branch names and commands exactly as they appear.\n\n`
+        : '')
+      + (detail ? '' : BOARD_IMPORTANCE_PROMPT)
       + 'Reply with ONLY a JSON array, no prose and no code fence, one object per session in the order given:\n'
-      + '[{"id": "<the session id exactly as given>", "summary": "<1-2 sentences>"}]\n\n'
+      + (detail
+        ? '[{"id": "<the session id exactly as given>", "summary": "<1-2 sentences>"}]\n\n'
+        : '[{"id": "<the session id exactly as given>", "summary": "<1-2 sentences>", "importance": <0-3>}]\n\n')
       + blocks.join('\n\n');
 
     // Nothing here is project work, but the CLI still runs somewhere: anchor it
@@ -1668,9 +1684,18 @@ ipcMain.handle('board-summarize-sessions', async (_event, sessions, options) => 
       return { ok: false, error: 'claude did not return JSON' };
     }
     if (!Array.isArray(parsed)) return { ok: false, error: 'claude did not return a JSON array' };
+    // One rater per run: the cap is asked for in the prompt and enforced here,
+    // because a model that flags six cards red has not answered the question
+    // and the board would be the one to show it.
+    const rateImportance = importanceRater();
+
     const summaries = parsed
       .filter(item => item && item.id && typeof item.summary === 'string' && item.summary.trim())
-      .map(item => ({ sessionId: String(item.id), summary: item.summary.trim() }));
+      .map(item => ({
+        sessionId: String(item.id),
+        summary: item.summary.trim(),
+        importance: rateImportance(item.importance),
+      }));
     if (!summaries.length) return { ok: false, error: 'claude returned no summaries' };
     return { ok: true, summaries, usage };
   } catch (e) { return { ok: false, error: e.message, cancelled: !!e.cancelled }; }
@@ -2679,6 +2704,10 @@ const SETTING_DEFAULTS = {
   // honoured on its own; this is for people whose system says nothing but who
   // still want the movement gone.
   reduceMotion: false,
+  // The language board and session summaries are written in, as a plain
+  // language name the prompt can carry. Empty means the model answers in
+  // whatever the transcript is in.
+  summaryLanguage: '',
 };
 
 ipcMain.handle('get-shell-profiles', () => {

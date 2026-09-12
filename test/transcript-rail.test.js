@@ -1,8 +1,41 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  mergeSegments, paintedCount, recordAtOffset, railBand, MIN_THUMB_PERCENT,
+  mergeSegments, paintedCount, recordAtOffset, railBand, viewSpanOf, MIN_THUMB_PERCENT,
+  isPainted,
 } = require('../src/vue/transcript-rail.js');
+
+// ── The viewport ──────────────────────────────────────────────────
+
+test('the viewport is the band of the scroll height actually on screen', () => {
+  assert.deepEqual(
+    viewSpanOf({ scrollTop: 0, scrollHeight: 1000, clientHeight: 250 }),
+    { start: 0, end: 0.25 },
+  );
+  assert.deepEqual(
+    viewSpanOf({ scrollTop: 750, scrollHeight: 1000, clientHeight: 250 }),
+    { start: 0.75, end: 1 },
+  );
+});
+
+// The bug: the rail did not move on the way back down. Whatever else changes,
+// scrolling down must raise both edges.
+test('scrolling down moves the viewport down', () => {
+  const at = (scrollTop) => viewSpanOf({ scrollTop, scrollHeight: 2000, clientHeight: 400 });
+  const seen = [0, 400, 800, 1600].map(at);
+  for (let i = 1; i < seen.length; i++) {
+    assert.ok(seen[i].start > seen[i - 1].start, `${seen[i - 1].start} → ${seen[i].start}`);
+    assert.ok(seen[i].end > seen[i - 1].end, `${seen[i - 1].end} → ${seen[i].end}`);
+  }
+});
+
+test('a transcript shorter than its own viewport is all of it', () => {
+  assert.deepEqual(
+    viewSpanOf({ scrollTop: 0, scrollHeight: 300, clientHeight: 600 }),
+    { start: 0, end: 1 },
+  );
+  assert.deepEqual(viewSpanOf(null), { start: 0, end: 0 });
+});
 
 // The whole file painted, so a fraction of the scroll is a fraction of the file.
 const WHOLE = [{ from: 0, to: 1000 }];
@@ -97,18 +130,33 @@ test('a sliver of a long file still has a thumb you can see', () => {
   assert.equal(band.height, MIN_THUMB_PERCENT);
 });
 
+// What the floor used to cost: grown from the top, a thumb at its minimum size
+// hit the end of the rail early and then stopped reporting, so the last stretch
+// of the scroll moved nothing.
+test('a floored thumb still moves over the last stretch of the scroll', () => {
+  const runs = [{ from: 3700, to: 4000 }];
+  const seen = [0.7, 0.8, 0.9, 1].map(f => railBand(runs, 4000, { start: f - 0.07, end: f }).top);
+  for (let i = 1; i < seen.length - 1; i++) {
+    assert.ok(seen[i] > seen[i - 1], `${seen[i - 1]} → ${seen[i]}`);
+  }
+  // Only the very end may repeat: the thumb cannot leave the rail.
+  assert.ok(seen[seen.length - 1] >= seen[seen.length - 2]);
+  assert.ok(seen[seen.length - 1] > seen[0]);
+});
+
 // Stepping over a compact: the two painted halves scroll as one column, and the
 // thumb has to be over the half being read rather than over the gap.
 test('across a compact, the thumb jumps the gap rather than crossing it', () => {
   const runs = [{ from: 100, to: 200 }, { from: 900, to: 1000 }];
   const inOlder = railBand(runs, 1000, { start: 0, end: 0.1 });
   const inNewer = railBand(runs, 1000, { start: 0.9, end: 1 });
-  assert.ok(inOlder.top >= 10 && inOlder.top < 20, `older half: ${inOlder.top}`);
-  assert.ok(inNewer.top >= 90, `newer half: ${inNewer.top}`);
+  const middle = (band) => band.top + band.height / 2;
+  assert.ok(middle(inOlder) >= 10 && middle(inOlder) < 20, `older half: ${middle(inOlder)}`);
+  assert.ok(middle(inNewer) >= 90, `newer half: ${middle(inNewer)}`);
   // Half way down the scroll is the boundary — record 900, where the newer run
   // starts — not record 550, which the compact threw away.
   const atBoundary = railBand(runs, 1000, { start: 0.5, end: 0.5 });
-  assert.equal(atBoundary.top, 90);
+  assert.equal(middle(atBoundary), 90);
 });
 
 test('nothing painted and no file leave nothing to place', () => {
@@ -122,4 +170,43 @@ test('a viewport reported out of order or out of range is clamped, not trusted',
   const over = railBand(WHOLE, 1000, { start: -1, end: 4 });
   assert.equal(over.top, 0);
   assert.equal(over.height, 100);
+});
+
+// ── Already painted ───────────────────────────────────────────────
+//
+// The guard on paging upward. Without it a compact notch for a boundary that
+// had already been stepped over re-read its segment and prepended a second copy
+// — once per click, so the same pages could be scrolled through over and over.
+
+test('a window ending inside a painted run is already on screen', () => {
+  const runs = [{ from: 100, to: 150 }];
+  assert.equal(isPainted(runs, 150), true);   // the run's own top
+  assert.equal(isPainted(runs, 125), true);   // its middle
+  assert.equal(isPainted(runs, 101), true);
+});
+
+// `before` is exclusive: a page ending exactly where the painted range starts
+// is the next page up, and the only legitimate way to walk backwards.
+test('a window ending where the painted range starts is the next page, not a repeat', () => {
+  assert.equal(isPainted([{ from: 100, to: 150 }], 100), false);
+});
+
+test('a window below the painted range is not a repeat either', () => {
+  assert.equal(isPainted([{ from: 100, to: 150 }], 99), false);
+  assert.equal(isPainted([{ from: 100, to: 150 }], 40), false);
+});
+
+// Two runs either side of a compact — the case the notch creates.
+test('every run is consulted, not just the topmost', () => {
+  const runs = [{ from: 50, to: 100 }, { from: 101, to: 200 }];
+  assert.equal(isPainted(runs, 100), true);
+  assert.equal(isPainted(runs, 200), true);
+  assert.equal(isPainted(runs, 50), false);
+  assert.equal(isPainted(runs, 101), false);   // steps over the boundary at 100
+});
+
+test('nothing painted means nothing is a repeat', () => {
+  for (const runs of [[], null, undefined]) {
+    assert.equal(isPainted(runs, 10), false);
+  }
 });

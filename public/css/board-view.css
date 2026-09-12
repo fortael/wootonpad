@@ -725,3 +725,69 @@ body.hide-avatars .sbx-boardside__avatar { display: none; }
   z-index: 9999;
   will-change: transform;
 }
+
+/* ------------------------------------------------------------------ *
+ * Focus flags
+ *
+ * What the last Summarize run said is worth looking at next: main.js rates
+ * each session 0-3 and hands back at most two of each level (see
+ * BOARD_IMPORTANCE_PROMPT). The same chip is drawn on the card and in the
+ * summary list beside the board — one meaning, one colour, two places.
+ *
+ * Only 3 and 2 also take the card's border. A third outline colour on the
+ * board would compete with the column stripes and with `is-selected`, and 1
+ * means "do not lose sight of this", not "act on this now".
+ * ------------------------------------------------------------------ */
+
+.sbx-focusflag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: 1.6;
+  white-space: nowrap;
+  color: var(--sbx-focus-tone);
+  background: color-mix(in srgb, var(--sbx-focus-tone) 14%, transparent);
+}
+
+.sbx-focusflag .sb-icon {
+  color: var(--sbx-focus-tone);
+}
+
+/* The card's variant carries no label — see SessionCard.vue. */
+.sbx-focusflag--glyph {
+  padding: 1px;
+  gap: 0;
+}
+
+.sbx-focusflag--3 { --sbx-focus-tone: var(--status-danger); }
+.sbx-focusflag--2 { --sbx-focus-tone: var(--orange-500); }
+.sbx-focusflag--1 { --sbx-focus-tone: var(--yellow-500); }
+
+/* In the summary list the chip leads the sentence rather than sitting in a row
+   of its own, so it has to sit on the text baseline run. */
+.sbx-boardside__text .sbx-focusflag {
+  margin-right: var(--space-1);
+  vertical-align: 1px;
+}
+
+.sbx-board__card.is-focus-3 {
+  border-color: color-mix(in srgb, var(--status-danger) 55%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--status-danger) 22%, transparent);
+}
+
+.sbx-board__card.is-focus-2 {
+  border-color: color-mix(in srgb, var(--orange-500) 45%, transparent);
+}
+
+/* Selection is a statement about *this* session and outranks a flag, which is
+   a statement about the board. Restated here because both set border-color and
+   the flag rules come later in the file. */
+.sbx-board__card.is-selected {
+  border-color: color-mix(in srgb, var(--status-running) 45%, transparent);
+  box-shadow: none;
+}

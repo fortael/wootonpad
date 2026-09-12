@@ -828,13 +828,22 @@ onMounted(async () => {
     }
     window.vuePlanViewer?.open(plan.title || plan.filename, result.filePath, result.content);
   };
-  window.hideAllViewers = () => {
+  /**
+   * Clear the main area for whatever is about to take it over.
+   *
+   * `keepBoard` is for the one caller that is *not* taking it over: showing a
+   * session the board itself asked for, in the board's own preview pane. That
+   * exemption used to apply to every caller, so a project — or an account, or
+   * the plans list — opened from the board left the board up and rendered on
+   * top of it.
+   */
+  window.hideAllViewers = (opts) => {
     if (window.vueStore) {
       window.vueStore.planViewerOpen = false;
       window.vueStore.settingsOpen = false;
-      // Opening a session calls through here; that must not close the board
-      // when the board is the thing showing that session.
-      if (!(window.vueStore.activeTab === 'board' && window.vueStore.boardPreviewId)) {
+      if (!(opts?.keepBoard
+        && window.vueStore.activeTab === 'board'
+        && window.vueStore.boardPreviewId)) {
         window.vueStore.showBoard = false;
       }
       window.vueStore.showJsonl = false;
@@ -846,6 +855,8 @@ onMounted(async () => {
     const ta = document.getElementById('terminal-area');
     if (ta) ta.style.display = '';
   };
-  window.hidePlanViewer = window.hideAllViewers;
+  // showSession's way in. The name is historical — it is the board-preview
+  // path, and the only one allowed to leave the board standing.
+  window.hidePlanViewer = () => window.hideAllViewers({ keepBoard: true });
 });
 </script>

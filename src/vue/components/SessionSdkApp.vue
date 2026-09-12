@@ -23,7 +23,7 @@
         :style="{ top: mark.at }"
         :data-tooltip="mark.label"
         :aria-label="mark.label"
-        @click="loadEarlier(mark.index)"
+        @click="revealRecord(mark.index)"
       ></button>
     </div>
 
@@ -221,7 +221,7 @@ import {
   promptText, promptContent, MAX_IMAGE_BYTES,
 } from '../composer-attachments.js';
 import { prepareImage } from '../composer-image.js';
-import { railBand, viewSpanOf } from '../transcript-rail.js';
+import { railBand, viewSpanOf, isPainted } from '../transcript-rail.js';
 import { isExternalPathToken, relativeTime } from '../chat-text.js';
 import { openSidePanelFile } from '../side-panel-tabs.js';
 
@@ -1759,9 +1759,46 @@ async function loadHistory() {
  * otherwise loading a page would throw the reader back to where they had
  * already been.
  */
+/** Where the next page up ends: the loaded top, or the compact just above it. */
+function nextPageStart() {
+  if (historyFrom === null || historyFrom <= 0) return null;
+  // Sitting on a boundary, a window ending at it holds nothing — the floor and
+  // the ceiling are the same record. Step over it instead.
+  if (historyCompact && historyCompact.index === historyFrom - 1) return historyCompact.index;
+  return historyFrom;
+}
+
+/** Pages to walk for one notch click. "Show me the whole session" is not what
+ *  a click on a 2px mark is asking for. */
+const REVEAL_MAX_PAGES = 12;
+
+/**
+ * Walk the transcript up until `index` is on screen, then go there.
+ *
+ * A notch names a compact anywhere in the file, and loading its segment
+ * directly would paint records a thousand apart as neighbours with nothing
+ * between them to say so. So it is walked a page at a time — the same path an
+ * upward scroll takes — and each step is the one `loadEarlier` would have taken
+ * on its own.
+ */
+async function revealRecord(index) {
+  for (let page = 0; page < REVEAL_MAX_PAGES; page++) {
+    if (historyFrom === null || historyFrom <= index) break;
+    const start = nextPageStart();
+    if (start === null) break;
+    const wasAt = historyFrom;
+    // eslint-disable-next-line no-await-in-loop -- each page's floor is where the next one starts
+    await loadEarlier(start);
+    if (historyFrom === wasAt) break;       // nothing moved; stop rather than spin
+  }
+  bodyRef.value?.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 async function loadEarlier(before) {
   const id = sessionId.value;
   if (loadingEarlier || !id || before === null || before <= 0) return;
+  // Already on screen — see isPainted. This is what a notch clicked twice hits.
+  if (isPainted(paintedRuns.value, before)) return;
   loadingEarlier = true;
   try {
     const result = await window.api.readSessionTranscript(id, { before, limit: HISTORY_PAGE });

@@ -28,6 +28,8 @@ const ICONS = [
   'play',
   // SDK chat composer — attachments
   'paperclip', 'file',
+  // Board — the summarizer's focus flag
+  'flag',
 ];
 
 const SRC = path.join(__dirname, '..', 'node_modules', 'lucide-static', 'icons');

@@ -1,7 +1,7 @@
 <template>
   <article
     class="sbx-board__card"
-    :class="{ 'is-selected': selected, 'is-active': isActive }"
+    :class="[{ 'is-selected': selected, 'is-active': isActive }, focus ? `is-focus-${focus}` : null]"
     :data-session-id="session.sessionId"
     :style="dim"
     @click="$emit('preview', session)"
@@ -15,6 +15,20 @@
     </div>
     <div class="sbx-board__cardtitle">{{ title }}</div>
     <div class="sbx-board__cardmeta">
+      <!-- Where the last Summarize said to look next. Ahead of the meta text
+           rather than over the title: the title is what the card *is*, and the
+           flag is a claim about it that only survives until the next run. -->
+      <!-- The glyph alone: a card is as wide as a board column is narrow, and
+           the label would take the row the timestamp needs. It is in the
+           tooltip, next to what the level means. -->
+      <span
+        v-if="level"
+        class="sbx-focusflag sbx-focusflag--glyph"
+        :class="`sbx-focusflag--${focus}`"
+        :data-tooltip="`${level.label} — ${level.hint}`"
+      >
+        <SbIcon name="flag" :size="10" />
+      </span>
       <UsageRing
         v-if="contextPct !== null"
         class="sbx-board__ring"
@@ -34,8 +48,10 @@
 <script setup>
 import { computed } from 'vue';
 import { store } from '../store.js';
+import SbIcon from './SbIcon.vue';
 import UsageRing from './UsageRing.vue';
 import SessionMenu from './SessionMenu.vue';
+import { focusLevel } from '../board-focus.js';
 import { contextPercent, formatContextLabel } from '../context-window.js';
 import { freshnessOpacity } from '../freshness.js';
 import { sessionChurn } from '../session-churn.js';
@@ -81,6 +97,11 @@ const churn = computed(() => sessionChurn(props.session));
 const dim = computed(() =>
   props.highlightFresh ? { opacity: freshnessOpacity(time.value) } : null
 );
+
+// From the last Summarize run — see board-focus.js. Nothing is flagged until
+// one has been asked for, and a new run replaces the whole map.
+const focus = computed(() => store.boardFocus.get(id.value) || 0);
+const level = computed(() => focusLevel(focus.value));
 
 const contextPct = computed(() => contextPercent(props.session.contextTokens, props.session));
 const contextLabel = computed(() => formatContextLabel(props.session.contextTokens, props.session));
