@@ -1822,7 +1822,7 @@ body { display: flex; flex-direction: column; }
   position: relative;
   min-height: 0;
   min-width: 0;
-  background: var(--surface-app);
+  background: var(--surface-panel);
 }
 
 #sidebar-collapse-btn {
@@ -2438,6 +2438,41 @@ body { display: flex; flex-direction: column; }
   position: relative !important;
   flex: 1;
   min-height: 0;
+}
+
+/* The same slot, for a session that is a chat rather than a terminal. The
+   component mounts its own root inside this one, and that root is what
+   scrolls — see mountChatBody in grid-view.js. */
+.grid-card-chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* Scrolls on its own; a click anywhere in it opens the session for real. */
+.sbx-gridchat {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-app);
+  cursor: pointer;
+  /* A screen of these is a screen of transcripts; keep each one's layout its
+     own business. The entries themselves are already skipped off-screen — see
+     content-visibility on .jsonl-entry. */
+  contain: layout;
+}
+
+.grid-card-chat .jsonl-entry {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-2xs);
+}
+
+/* A card is a few hundred pixels tall: a tool call that unfolds nine screens
+   of diff inside one would bury the conversation it is there to show. */
+.grid-card-chat .jsonl-tool-body {
+  max-height: 120px;
+  overflow: auto;
 }
 
 .grid-card-footer {

@@ -33,6 +33,8 @@ function createDockAttention(deps) {
   let bounceId = null;
   /** Ids that were already waiting, so only a newly blocked one bounces. */
   let waitingBefore = new Set();
+  /** The number currently on the icon; null until the first report. */
+  let badgeShown = null;
 
   function stopBounce() {
     if (bounceId === null) return;
@@ -52,9 +54,18 @@ function createDockAttention(deps) {
     // macOS and the Unity launcher; a no-op everywhere else. On macOS the badge
     // needs notification permission, so a refused prompt means no number —
     // which is why nothing below depends on it having worked.
-    let badged = false;
-    try { badged = deps.setBadgeCount(total) !== false; } catch { badged = false; }
-    log(`[dock] badge=${total} (waiting ${waiting.size}, done ${done}) set=${badged}`);
+    //
+    // Only when the number moved. The renderer reports whenever any session
+    // changes state, and most of those changes do not change this count — a
+    // session starting a turn, say — so the icon was being set to what it
+    // already said several times a second. The bounce below is a separate
+    // question and is still asked on every report.
+    if (total !== badgeShown) {
+      badgeShown = total;
+      let badged = false;
+      try { badged = deps.setBadgeCount(total) !== false; } catch { badged = false; }
+      log(`[dock] badge=${total} (waiting ${waiting.size}, done ${done}) set=${badged}`);
+    }
 
     const arrived = [...waiting].some(id => !waitingBefore.has(id));
     waitingBefore = waiting;

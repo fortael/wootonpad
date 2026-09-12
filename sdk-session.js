@@ -442,6 +442,15 @@ function activeSdkSessions() {
   return [...sessions.values()].map(e => e.realSessionId);
 }
 
+/**
+ * The project each live SDK session is working in. An SDK session counts as
+ * activity in its project exactly as a PTY one does — see project-polling.js.
+ * May repeat; the caller de-duplicates.
+ */
+function activeSdkProjectPaths() {
+  return [...sessions.values()].map(e => e.projectPath).filter(Boolean);
+}
+
 module.exports = {
   configure,
   startSdkSession,
@@ -457,6 +466,7 @@ module.exports = {
   stopAllSdkSessions,
   isSdkSession,
   activeSdkSessions,
+  activeSdkProjectPaths,
   DIALOG_KINDS,
   // exported for tests
   createInputQueue,

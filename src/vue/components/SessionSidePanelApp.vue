@@ -354,12 +354,40 @@ async function reset(p) {
   }
 }
 
-// No polling. get-project-detail broadcasts `projects-changed` on every call,
-// which re-renders the whole sidebar, so a timer here would be far from free.
-// Instead: on open, on project change, on an explicit refresh — and once each
-// time the CLI stops working, which is exactly when the working tree has just
-// stopped moving. 'requires_action' counts: a permission prompt for an Edit
-// means the previous edits have already landed.
+// Two refreshes, deliberately different in weight.
+//
+// The full one — get-project-detail — runs the log, tags, worktrees and
+// `docker compose ps`, and broadcasts projects-changed, which re-renders the
+// whole sidebar. It runs on open, on project change, on an explicit refresh,
+// and once each time the CLI stops working, which is exactly when the working
+// tree has just stopped moving. ('requires_action' counts: a permission prompt
+// for an Edit means the previous edits have already landed.)
+//
+// The light one is a single `git diff --numstat` with no broadcast, on a timer
+// while the panel is open. Edits land throughout a turn, not only at the end
+// of it, and a changed-files list that only moves when the turn does is stale
+// for most of the time you are looking at it.
+
+const CHANGES_POLL_MS = 15000;
+let changesTimer = null;
+
+/** The working tree only, folded into whatever the full read last produced. */
+async function pollChanges() {
+  const p = projectPath.value;
+  if (!p || loading.value) return;
+  const changes = await window.api.getProjectChanges?.(p).catch(() => null);
+  if (!changes || projectPath.value !== p || !detail.value) return;
+  publish({ ...detail.value, ...changes });
+}
+
+function startPolling() {
+  stopPolling();
+  changesTimer = setInterval(pollChanges, CHANGES_POLL_MS);
+}
+
+function stopPolling() {
+  if (changesTimer) { clearInterval(changesTimer); changesTimer = null; }
+}
 const sessionState = computed(() =>
   store.sessionBusyState.get(sessionId.value) ? 'running' : 'idle'
 );
@@ -565,9 +593,11 @@ function resetWidth() {
 onMounted(() => {
   reset(projectPath.value);
   startShell();
+  startPolling();
 });
 
 onBeforeUnmount(() => {
+  stopPolling();
   cancelAnimationFrame(fitRaf);
   clearTimeout(gitMsgTimer);
   if (diffView) {

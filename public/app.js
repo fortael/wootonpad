@@ -151,15 +151,13 @@ function trackActivity(sessionId, data) {
 }
 
 // The board reads this set straight off the store, so every write has to be
-// mirrored there — app.js owns the truth, Vue only renders it.
+// mirrored there — app.js owns the truth, Vue only renders it. Through the
+// bridge rather than into the store directly, so one module owns the shape of
+// these collections.
 function setReadPending(sessionId, pending) {
-  if (pending) {
-    readPendingSessions.add(sessionId);
-    window.vueStore?.readPendingSessions?.add(sessionId);
-  } else {
-    readPendingSessions.delete(sessionId);
-    window.vueStore?.readPendingSessions?.delete(sessionId);
-  }
+  if (pending) readPendingSessions.add(sessionId);
+  else readPendingSessions.delete(sessionId);
+  window.vueSidebar?.setReadPending(sessionId, pending);
 }
 
 function clearUnread(sessionId) {
@@ -178,6 +176,15 @@ function clearNotifications(sessionId) {
   if (blockedSessions.has(sessionId)) return;
   attentionSessions.delete(sessionId);
   window.vueSidebar?.clearNotifications(sessionId);
+}
+
+/** Is this session in any of the collections a sweep would have to clear? */
+function hasSessionState(sessionId) {
+  return attentionSessions.has(sessionId)
+    || responseReadySessions.has(sessionId)
+    || readPendingSessions.has(sessionId)
+    || blockedSessions.has(sessionId)
+    || sessionBusyState.has(sessionId);
 }
 
 /** Only the status tracker moves this — see applySessionStatus. */
@@ -370,7 +377,7 @@ function applySessionStatus(sessionId, status) {
     // Belt and braces with onProcessExited: whichever lands first wins, and the
     // sets must not keep a spinner for a session that is gone.
     sessionBusyState.delete(sessionId);
-    window.vueStore?.sessionBusyState?.delete(sessionId);
+    window.vueSidebar?.setBusy(sessionId, false);
     setBlocked(sessionId, false);   // a session that is gone is not waiting
     clearNotifications(sessionId);
     setReadPending(sessionId, false);
@@ -526,7 +533,10 @@ function updateRunningIndicators() {
     const id = item.dataset.sessionId;
     const running = activePtyIds.has(id);
     item.classList.toggle('has-running-pty', running);
-    if (!running) {
+    // Only when there is something to clear. This runs for every row on screen
+    // twenty times a minute, and unguarded it did six set operations and two
+    // store writes per row each time, every one of them a no-op.
+    if (!running && hasSessionState(id)) {
       item.classList.remove('needs-attention', 'response-ready', 'cli-busy');
       setBlocked(id, false);   // no process, nothing left to answer
       attentionSessions.delete(id);
@@ -536,7 +546,7 @@ function updateRunningIndicators() {
       // The board and the header read the store, not these local sets. Clearing
       // only the local copies left the Vue side showing "Working…" for a
       // session that had already exited.
-      window.vueStore?.sessionBusyState?.delete(id);
+      window.vueSidebar?.setBusy(id, false);
       window.vueSidebar?.clearNotifications(id);
     }
     const dot = item.querySelector('.session-status-dot');
@@ -553,8 +563,7 @@ function updateRunningIndicators() {
     attentionSessions.delete(id);
     responseReadySessions.delete(id);
     setReadPending(id, false);
-    sessionBusyState.delete(id);
-    window.vueStore?.sessionBusyState?.delete(id);
+    if (sessionBusyState.delete(id)) window.vueSidebar?.setBusy(id, false);
     window.vueSidebar?.clearNotifications(id);
   }
 
@@ -1077,19 +1086,21 @@ window.api.onProjectsChanged(() => {
     return;
   }
 
+  // The board draws the same sessions as the sidebar, so it needs the same
+  // reload. Leaving it out is why a card's file count and diff totals sat
+  // still while you watched them: the change arrived, and was deferred until
+  // you happened to switch tabs.
+  const LIVE_TABS = ['sessions', 'projects', 'board'];
   const activeTab = window.vueStore?.activeTab || 'sessions';
-  if (activeTab !== 'sessions' && activeTab !== 'projects') {
+  if (!LIVE_TABS.includes(activeTab)) {
     projectsChangedWhileAway = true;
     return;
   }
   projectsChangedTimer = setTimeout(() => {
     projectsChangedTimer = null;
     const tab = window.vueStore?.activeTab || 'sessions';
-    if (tab === 'sessions') {
-      loadProjects();
-    } else if (tab === 'projects') {
-      loadProjects().then(() => renderProjectsPanel());
-    }
+    if (tab === 'projects') loadProjects().then(() => renderProjectsPanel());
+    else if (LIVE_TABS.includes(tab)) loadProjects();
   }, 300);
 });
 

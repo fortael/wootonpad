@@ -80,9 +80,15 @@ contextBridge.exposeInMainWorld('api', {
   browseFolder: () => ipcRenderer.invoke('browse-folder'),
   addProject: (projectPath) => ipcRenderer.invoke('add-project', projectPath),
   removeProject: (projectPath) => ipcRenderer.invoke('remove-project', projectPath),
-  getProjectInfo: (projectPath) => ipcRenderer.invoke('get-project-info', projectPath),
+  // `{ force: true }` overrides every polling interval — see project-polling.js.
+  getProjectInfo: (projectPath, opts) => ipcRenderer.invoke('get-project-info', projectPath, opts),
   getProjectDetail: (projectPath) => ipcRenderer.invoke('get-project-detail', projectPath),
+  // Per-project flags: `{ hasCompose, composeCheckedAt, archived }` by path.
+  getProjectMeta: () => ipcRenderer.invoke('get-project-meta'),
+  setProjectArchived: (projectPath, archived) => ipcRenderer.invoke('set-project-archived', projectPath, archived),
   getProjectGitCache: (projectPath) => ipcRenderer.invoke('get-project-git-cache', projectPath),
+  // Working-tree diff only — cheap enough to poll. See main.js.
+  getProjectChanges: (projectPath) => ipcRenderer.invoke('get-project-changes', projectPath),
   getFileDiff: (projectPath, filePath) => ipcRenderer.invoke('get-file-diff', projectPath, filePath),
   gitBranches: (projectPath) => ipcRenderer.invoke('git-branches', projectPath),
   gitCheckout: (projectPath, branch) => ipcRenderer.invoke('git-checkout', projectPath, branch),

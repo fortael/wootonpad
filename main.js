@@ -27,6 +27,9 @@ const { buildHookSettings } = require('./hook-settings');
 const { SessionStatusTracker } = require('./session-status');
 const { readTranscriptWindow, forgetTranscript } = require('./transcript-window');
 const { createDockAttention } = require('./dock-attention');
+const {
+  detectCompose, composeCheckDue, pollPlan, activeProjectPaths,
+} = require('./project-polling');
 const sdkSession = require('./sdk-session');
 const { fetchAndTransformUsage, getOAuthToken, probeUsage } = require('./claude-auth');
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
@@ -103,6 +106,7 @@ const {
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   getProjectGitCache, setProjectGitCache, getAllProjectGitCounts,
+  getProjectMeta, getAllProjectMeta, setProjectCompose, setProjectArchived, deleteProjectMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting,
@@ -895,6 +899,7 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
     deleteCachedFolder(folder);
     deleteSearchFolder(folder);
     deleteSetting('project:' + projectPath);
+    deleteProjectMeta(projectPath);
 
     notifyRendererProjectsChanged();
     return { ok: true };
@@ -903,19 +908,68 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
   }
 });
 
-// --- IPC: get-project-info (git branch/diff + docker compose, cached with jittered TTL) ---
-const PROJECT_INFO_TTL_MS = 60 * 1000;
+// --- IPC: get-project-info (git branch/diff + docker compose, cached per TTL) ---
+//
+// The intervals themselves, and the rules for which project gets which, are in
+// project-polling.js so they can be tested without an Electron app, a git
+// repository or a Docker daemon. Read that file first; this one only carries
+// them out.
 // du -sk is expensive; cache with a random long TTL so projects don't all expire at once
 const SIZE_TTL_OPTIONS_MS = [3 * 3600000, 20 * 3600000, 24 * 3600000];
 
 const DOCKER_PATH = (process.env.PATH || '') + ':/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin';
 
-// ±30 s jitter so projects cached at the same time don't all expire simultaneously
-function infoJitter() {
-  return PROJECT_INFO_TTL_MS + (Math.random() * 60000 - 30000);
+// Which projects are being worked in right now — a PTY session or an SDK one
+// counts the same. Their numbers are the only ones that are moving, so they
+// are the only ones worth a short interval.
+function liveSessionProjectPaths() {
+  const paths = [];
+  for (const [, session] of activeSessions) {
+    if (session?.projectPath) paths.push(session.projectPath);
+  }
+  try { paths.push(...sdkSession.activeSdkProjectPaths()); } catch {}
+  return paths;
 }
 
-function fetchProjectInfo(projectPath) {
+function isProjectActive(projectPath) {
+  return liveSessionProjectPaths().includes(projectPath);
+}
+
+/**
+ * Look for a compose file and record the answer, so `docker compose ps` is
+ * never again run for a project that cannot have containers. Cheap — a handful
+ * of existsSync calls — and re-run on open, on refresh and once a day.
+ */
+function refreshComposeFlag(projectPath) {
+  try {
+    const found = detectCompose(projectPath, {
+      exists: (p) => { try { return fs.existsSync(hostPath(p)); } catch { return false; } },
+      join: (...parts) => projectJoin(...parts),
+      dirname: (p) => (isPosixAbsolutePath(p) ? path.posix.dirname(p) : path.dirname(p)),
+      stopAt: os.homedir(),
+    });
+    setProjectCompose(projectPath, found);
+    return found;
+  } catch {
+    return null;
+  }
+}
+
+function parseComposePs(dockerOut) {
+  return dockerOut.split('\n').filter(Boolean).map(line => {
+    try {
+      const c = JSON.parse(line);
+      return { name: c.Service || c.Name, state: (c.State || '').toLowerCase(), status: c.Status || '' };
+    } catch { return null; }
+  }).filter(Boolean);
+}
+
+/**
+ * @param {string} projectPath
+ * @param {{git: boolean, docker: boolean}} plan  which halves to actually run
+ * @param {object|null} previous  the last answer, for the half being skipped
+ */
+function fetchProjectInfo(projectPath, plan = { git: true, docker: true }, previous = null) {
   const { execFile } = require('child_process');
   // argv form: for a WSL account these run inside the distribution, where the
   // project's git and docker live, instead of over the 9p share.
@@ -925,30 +979,44 @@ function fetchProjectInfo(projectPath) {
       resolve(err ? null : (stdout || '').trim());
     });
   });
+  const skip = Promise.resolve(null);
   const data = { branch: null, added: null, deleted: null, containers: null };
   return Promise.all([
-    run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 5000 }),
-    run(['git', 'diff', '--shortstat', 'HEAD'], { timeout: 5000 }),
-    run(['docker', 'compose', 'ps', '--format', 'json'], {
+    plan.git ? run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 5000 }) : skip,
+    plan.git ? run(['git', 'diff', '--shortstat', 'HEAD'], { timeout: 5000 }) : skip,
+    plan.docker ? run(['docker', 'compose', 'ps', '--format', 'json'], {
       timeout: 8000,
       env: { ...process.env, PATH: DOCKER_PATH },
-    }),
+    }) : skip,
   ]).then(([branch, stat, dockerOut]) => {
-    if (branch) data.branch = branch;
-    if (stat) {
-      const addM = stat.match(/(\d+) insertion/);
-      const delM = stat.match(/(\d+) deletion/);
-      if (addM) data.added = parseInt(addM[1]);
-      if (delM) data.deleted = parseInt(delM[1]);
+    if (plan.git) {
+      if (branch) data.branch = branch;
+      if (stat) {
+        const addM = stat.match(/(\d+) insertion/);
+        const delM = stat.match(/(\d+) deletion/);
+        if (addM) data.added = parseInt(addM[1]);
+        if (delM) data.deleted = parseInt(delM[1]);
+      }
+    } else {
+      // A half that was not run keeps what it last said, rather than blanking
+      // the row it is drawn in.
+      data.branch = previous?.branch ?? null;
+      data.added = previous?.added ?? null;
+      data.deleted = previous?.deleted ?? null;
     }
-    if (dockerOut) {
-      data.containers = dockerOut.split('\n').filter(Boolean).map(line => {
-        try {
-          const c = JSON.parse(line);
-          return { name: c.Service || c.Name, state: (c.State || '').toLowerCase(), status: c.Status || '' };
-        } catch { return null; }
-      }).filter(Boolean);
+    if (plan.docker) {
+      if (dockerOut) data.containers = parseComposePs(dockerOut);
+      // A project with a compose file that answers with containers settles the
+      // question even if the file lives somewhere the walk did not look.
+      if (data.containers?.length) {
+        try { setProjectCompose(projectPath, true); } catch {}
+      }
+    } else {
+      data.containers = previous?.containers ?? null;
     }
+    data.fetchedAt = Date.now();
+    data.gitFetchedAt = plan.git ? data.fetchedAt : (previous?.gitFetchedAt ?? null);
+    data.dockerFetchedAt = plan.docker ? data.fetchedAt : (previous?.dockerFetchedAt ?? null);
     return data;
   });
 }
@@ -974,38 +1042,129 @@ function cacheProjectSize(projectPath) {
   }).catch(() => {});
 }
 
-ipcMain.handle('get-project-info', (_event, projectPath) => {
-  if (!projectPath || !fs.existsSync(hostPath(projectPath))) return null;
+/**
+ * Bring one project's info up to date, if anything about it is due.
+ *
+ * Returns the cached answer synchronously and refreshes behind it — the list
+ * draws immediately and corrects itself. `force` is an explicit refresh: it
+ * overrides every interval, and is the only thing that reaches an archived
+ * project.
+ */
+// One fetch per project at a time. The tick, the list and an explicit refresh
+// all land on the same handler, and a second fetch started while the first is
+// still running does the same work twice and reports out of order.
+const projectInfoInFlight = new Set();
+
+function refreshProjectInfo(projectPath, { force = false } = {}) {
   const cacheKey = 'project-info:' + projectPath;
   const cached = getSetting(cacheKey);
-  const cachedSize = getSetting('project-size:' + projectPath);
+  const previous = cached?.data ?? null;
 
-  const gitFresh = cached && cached.fetchedAt && (Date.now() - cached.fetchedAt) < (cached.ttl || PROJECT_INFO_TTL_MS);
+  let meta = null;
+  try { meta = getProjectMeta(projectPath); } catch {}
+  const hasCompose = (force || composeCheckDue(meta))
+    ? refreshComposeFlag(projectPath)
+    : meta.hasCompose;
+
+  const plan = pollPlan({
+    active: isProjectActive(projectPath),
+    archived: !!meta?.archived,
+    hasCompose,
+    // Old cache entries predate the split and carry only `fetchedAt`.
+    gitFetchedAt: previous?.gitFetchedAt ?? cached?.fetchedAt ?? null,
+    dockerFetchedAt: previous?.dockerFetchedAt ?? cached?.fetchedAt ?? null,
+    force,
+  });
+
+  if (!plan.git && !plan.docker) return previous;
+  if (projectInfoInFlight.has(projectPath)) return previous;
+
+  projectInfoInFlight.add(projectPath);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('project-info-loading', projectPath);
+  }
+  const sizeMb = previous?.sizeMb ?? getSetting('project-size:' + projectPath)?.sizeMb ?? null;
+  fetchProjectInfo(projectPath, plan, previous).then(data => {
+    const merged = sizeMb !== null ? { ...data, sizeMb } : data;
+    setSetting(cacheKey, { data: merged, fetchedAt: Date.now() });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('project-info-updated', projectPath, merged);
+    }
+  }).catch(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('project-info-updated', projectPath, null);
+    }
+  }).finally(() => {
+    projectInfoInFlight.delete(projectPath);
+  });
+  return previous;
+}
+
+ipcMain.handle('get-project-info', (_event, projectPath, opts) => {
+  if (!projectPath || !fs.existsSync(hostPath(projectPath))) return null;
+  const cachedSize = getSetting('project-size:' + projectPath);
   const sizeFresh = cachedSize && cachedSize.fetchedAt && (Date.now() - cachedSize.fetchedAt) < (cachedSize.ttl || SIZE_TTL_OPTIONS_MS[0]);
   const sizeMb = cachedSize?.sizeMb ?? null;
 
-  if (!gitFresh) {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('project-info-loading', projectPath);
-    }
-    fetchProjectInfo(projectPath).then(data => {
-      const merged = sizeMb !== null ? { ...data, sizeMb } : data;
-      setSetting(cacheKey, { data: merged, fetchedAt: Date.now(), ttl: infoJitter() });
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('project-info-updated', projectPath, merged);
-      }
-    }).catch(() => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('project-info-updated', projectPath, null);
-      }
-    });
-  }
+  const base = refreshProjectInfo(projectPath, { force: !!opts?.force });
 
   // Refresh size in background if its long-TTL has expired
   if (!sizeFresh) cacheProjectSize(projectPath);
 
-  const base = cached?.data ?? null;
   return base && sizeMb !== null ? { ...base, sizeMb } : base;
+});
+
+// --- Activity-driven polling ---
+//
+// Only projects with a live session, and only what their own intervals say is
+// due. Deliberately not a sweep over every project: that is a separate feature
+// with a separate cost, and doing it here by accident is what this whole file
+// change exists to stop.
+// Deliberately shorter than the shortest interval in project-polling.js. A tick
+// that runs exactly as often as the TTL it checks is a race: a tick landing a
+// millisecond early finds nothing due and the next one is a whole period away,
+// so a 20 s interval polled every 20 s refreshes every 40 s. Measured, before
+// this was halved: one refresh in a 70 s window where three were due. The tick
+// itself is a Map scan and a subtraction, so running it spare costs nothing.
+const ACTIVE_POLL_MS = 10 * 1000;
+let activePollTimer = null;
+
+function pollActiveProjects() {
+  let metaByPath = new Map();
+  try { metaByPath = getAllProjectMeta(); } catch {}
+  for (const projectPath of activeProjectPaths(liveSessionProjectPaths(), metaByPath)) {
+    try {
+      if (!fs.existsSync(hostPath(projectPath))) continue;
+      refreshProjectInfo(projectPath);
+    } catch {}
+  }
+}
+
+function startActiveProjectPolling() {
+  if (activePollTimer) clearInterval(activePollTimer);
+  activePollTimer = setInterval(pollActiveProjects, ACTIVE_POLL_MS);
+}
+
+// --- IPC: project archiving ---
+//
+// An archived project folds away in the list and is not polled at all. The
+// data it already has stays in the cache, so opening it still draws something
+// while the forced refresh runs.
+ipcMain.handle('set-project-archived', (_event, projectPath, archived) => {
+  try {
+    setProjectArchived(projectPath, !!archived);
+    return { ok: true };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('get-project-meta', () => {
+  try {
+    return Object.fromEntries(getAllProjectMeta());
+  } catch {
+    return {};
+  }
 });
 
 // --- IPC: get-project-detail (full git log + docker details, no cache) ---
@@ -1079,26 +1238,71 @@ ipcMain.handle('get-project-detail', (_event, projectPath) => {
       }).sort((a, b) => (b.added + b.deleted) - (a.added + a.deleted));
     }
   } catch {}
-  try {
-    const raw = sh(['docker', 'compose', 'ps', '--format', 'json'], {
-      timeout: 8000,
-      env: { ...process.env, PATH: DOCKER_PATH },
-    });
-    if (raw) {
-      detail.containers = raw.split('\n').filter(Boolean).map(line => {
-        try {
-          const c = JSON.parse(line);
-          const ports = (c.Publishers || []).map(p => `${p.PublishedPort}→${p.TargetPort}/${p.Protocol}`).filter(p => !p.startsWith('0→')).join(', ');
-          return { name: c.Service || c.Name, state: (c.State || '').toLowerCase(), status: c.Status || '', ports };
-        } catch { return null; }
-      }).filter(Boolean);
-    }
-  } catch {}
+  // Opening a project, and the Refresh button, are where the compose flag is
+  // (re)established — this is the one call that always runs in full, so it is
+  // the honest place to answer the question the polling then relies on.
+  const hasCompose = refreshComposeFlag(projectPath);
+  if (hasCompose !== false) {
+    try {
+      const raw = sh(['docker', 'compose', 'ps', '--format', 'json'], {
+        timeout: 8000,
+        env: { ...process.env, PATH: DOCKER_PATH },
+      });
+      if (raw) {
+        detail.containers = raw.split('\n').filter(Boolean).map(line => {
+          try {
+            const c = JSON.parse(line);
+            const ports = (c.Publishers || []).map(p => `${p.PublishedPort}→${p.TargetPort}/${p.Protocol}`).filter(p => !p.startsWith('0→')).join(', ');
+            return { name: c.Service || c.Name, state: (c.State || '').toLowerCase(), status: c.Status || '', ports };
+          } catch { return null; }
+        }).filter(Boolean);
+      }
+      // Containers where the walk found no file: believe the daemon, not us.
+      if (detail.containers.length && hasCompose !== true) {
+        try { setProjectCompose(projectPath, true); } catch {}
+      }
+    } catch {}
+  }
   try {
     setProjectGitCache(projectPath, detail);
     notifyRendererProjectsChanged();
   } catch {}
   return detail;
+});
+
+// --- IPC: get-project-changes ---
+// Just the working tree, for polling. `get-project-detail` above answers the
+// same question, but it also runs the log, tags, worktrees and
+// `docker compose ps` (an 8s timeout), and it broadcasts projects-changed,
+// which re-renders the whole sidebar. That is fine once when a panel opens and
+// far too much every fifteen seconds.
+ipcMain.handle('get-project-changes', (_event, projectPath) => {
+  if (!projectPath || !fs.existsSync(hostPath(projectPath))) return null;
+  const { execFileSync } = require('child_process');
+  try {
+    const [file, args, options] = projectExecFile(
+      ['git', 'diff', '--numstat', 'HEAD'], projectPath,
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 },
+    );
+    const numstat = execFileSync(file, args, options).trim();
+    const changedFiles = [];
+    let totalAdded = 0;
+    let totalDeleted = 0;
+    for (const line of numstat.split('\n')) {
+      if (!line) continue;
+      const [added, deleted, changed] = line.split('\t');
+      const a = parseInt(added, 10) || 0;
+      const d = parseInt(deleted, 10) || 0;
+      totalAdded += a;
+      totalDeleted += d;
+      changedFiles.push({ file: changed, added: a, deleted: d });
+    }
+    changedFiles.sort((x, y) => (y.added + y.deleted) - (x.added + x.deleted));
+    return { changedFiles, totalAdded, totalDeleted };
+  } catch {
+    // Not a repo, or git took too long. The panel keeps what it had.
+    return null;
+  }
 });
 
 ipcMain.handle('get-project-git-cache', (_event, projectPath) => {
@@ -3363,6 +3567,7 @@ app.whenReady().then(() => {
   buildMenu();
   createWindow();
   startProjectsWatcher();
+  startActiveProjectPolling();
 
   // Both schedule modules resolve their directories per call, so schedules
   // follow the active account instead of the Windows home, and project paths

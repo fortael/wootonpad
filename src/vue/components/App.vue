@@ -487,11 +487,27 @@ onMounted(loadRateLimits);
 // for a while — only the first should bounce the icon.
 const attentionSummary = computed(() => {
   const { waiting, done } = wantsAttention(stateFromStore(store));
+  // Sorted so the key below means the same thing twice. The ids come out of a
+  // Set in insertion order, and two runs that agree on which sessions are
+  // waiting can still list them differently.
+  waiting.sort();
   return { waiting, done: done.length };
 });
 
-watch(attentionSummary, (summary) => window.api?.reportAttention?.(summary),
-  { immediate: true });
+// Watched by value, not by the object.
+//
+// The computed builds a fresh object on every invalidation and `watch`
+// compares by identity, so this used to fire on every status change anywhere —
+// an IPC message and a dock API call each time, usually carrying the number
+// already on the icon. Four status flips a second produced four of them.
+watch(
+  () => {
+    const summary = attentionSummary.value;
+    return `${summary.waiting.join(',')}|${summary.done}`;
+  },
+  () => window.api?.reportAttention?.(attentionSummary.value),
+  { immediate: true },
+);
 
 // Two buttons write this flag — the board's and a project's Sessions tab —
 // so it is persisted here, once, rather than in each of them. app.js owns
@@ -583,8 +599,15 @@ const sidePanelVisible = computed(() =>
 // An SDK-backed session has no xterm to show. Keyed by session id in the
 // template so switching sessions rebuilds the transcript rather than appending
 // one conversation onto another.
+//
+// Not in the grid. This sits inside #terminal-area, where the grid also lives,
+// and it covers the whole of it — so the one chat for the session in the header
+// would be drawn over the grid of all of them. In the grid each session gets its
+// own read-only card instead; see mountChatBody in grid-view.js.
 const sdkSessionVisible = computed(() =>
-  !!store.headerSession && store.sdkSessionIds.has(store.headerSession.sessionId)
+  !!store.headerSession
+  && !store.gridViewActive
+  && store.sdkSessionIds.has(store.headerSession.sessionId)
 );
 
 watch(sidePanelVisible, () => {

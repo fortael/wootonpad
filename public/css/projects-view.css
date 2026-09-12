@@ -44,17 +44,193 @@
   flex-direction: column;
 }
 
+/* Not a scroller any more, despite the name: the blocks inside are bounded and
+   each scrolls its own body, exactly as a board column does. Renaming it would
+   touch the tab's own markup, app.js and the light theme for no gain. */
 .projects-scroll {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  /* Matches .sbx-sidebar-panel's own gutter, which #projects-content gave up
-     above so the tab row could sit flush under the command bar. */
-  padding: var(--space-2) 0 var(--space-4);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  /* The gutter the blocks below sit in. Matches .sbx-boardside-panel, which is
+     the same sidebar one tab over. */
+  padding: var(--space-3) var(--space-3) var(--space-4);
 }
 
 .projects-scroll .project-group:first-child {
   margin-top: 0;
+}
+
+/* ------------------------------------------------------------------ *
+ * Project blocks
+ *
+ * Deliberately .sbx-boardside__block's box, token for token: the projects
+ * tab and the board's sidebar are the same rail seen on two tabs, and a
+ * list laid straight onto the panel next to a bordered one reads as an
+ * unfinished screen rather than a different one. Not shared with the board
+ * by selector — that file styles a component this one does not use, and
+ * one rule serving two templates is how a change to either breaks both.
+ * ------------------------------------------------------------------ */
+
+.projects-block {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-panel-raised);
+  border: var(--border-width-hairline) solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+/* The live list is the tab's reason to exist, so it takes the free space. */
+.projects-block--live {
+  flex: 1 1 auto;
+}
+
+/* Bounded rather than sized: it takes the height of its rows and stops at 45%,
+   which is the point where the live list above would stop being usable.
+   `flex-shrink: 0` is load-bearing — the live block takes all the free space,
+   so anything shrinkable below it gets squeezed to its header and the fold
+   silently stops opening. */
+.projects-block--archived {
+  flex: 0 0 auto;
+  max-height: 45%;
+}
+
+.projects-block__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  min-height: var(--hit-sm);
+  padding: 0 var(--space-2) 0 var(--space-3);
+  cursor: pointer;
+  user-select: none;
+}
+
+/* The border only earns its keep when there is a body under it. */
+.projects-block__head:not([aria-expanded='false']) {
+  border-bottom: var(--border-width-hairline) solid var(--border-subtle);
+}
+
+@media (hover: hover) {
+  .projects-block__head:hover {
+    background: var(--surface-card);
+  }
+}
+
+.projects-block__head:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.projects-block__chevron {
+  flex: none;
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.projects-block__chevron.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+.projects-block__title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.projects-block__count {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-disabled);
+  padding-right: var(--space-1);
+}
+
+.projects-block__body {
+  min-height: 0;
+  padding: var(--space-1) 0;
+}
+
+.projects-block__body--scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+/* style.css thins the scrollbar on #projects-content; the scrolling element is
+   now the block body, so the same skin has to follow it there. */
+.projects-block__body--scroll::-webkit-scrollbar { width: 5px; }
+.projects-block__body--scroll::-webkit-scrollbar-track { background: transparent; }
+.projects-block__body--scroll::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: var(--radius-xs);
+}
+.projects-block__body--scroll::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* Pinned under the scroller, not inside it. */
+.projects-block--live .projects-add-row {
+  flex: none;
+  border-top: var(--border-width-hairline) solid var(--border-subtle);
+}
+
+/* An archived row is quiet: it carries no branch, no diff and no containers,
+   because nothing polls it. Dimming says that rather than implying the
+   numbers are simply zero. */
+.project-item--archived {
+  opacity: 0.62;
+}
+
+@media (hover: hover) {
+  .project-item--archived:hover {
+    opacity: 1;
+  }
+}
+
+/* Archive/restore, in the row's action cluster. Same role as the delete
+   button beside it, which style.css sizes through its own selector list. */
+.project-card-arch-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--hit-xs);
+  height: var(--hit-xs);
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  line-height: 1;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+@media (hover: hover) {
+  .project-card-arch-btn:hover {
+    background: var(--surface-card);
+    color: var(--text-secondary);
+  }
+}
+
+.project-card-arch-btn:hover .sb-icon {
+  color: var(--text-secondary);
+}
+
+.project-card-arch-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus-ring);
 }
 
 /* style.css thins the scrollbar on #projects-content; the scrolling element

@@ -9,7 +9,61 @@
 // Depends on: cleanDisplayName, formatDate (utils.js), fitAndScroll, showSession (terminal-manager.js)
 
 let gridCards = new Map(); // sessionId → card wrapper element
+/** sessionId → the mounted chat card, for the sessions that have one. */
+let gridChats = new Map();
 let gridFocusedSessionId = null;
+
+/** Is this session drawn as a chat rather than a terminal? */
+function isSdkSession(sessionId) {
+  return !!window.vueStore?.sdkSessionIds?.has(sessionId);
+}
+
+/**
+ * The body of a chat session's card: its transcript, read-only.
+ *
+ * A PTY session's card holds the terminal itself, live and typeable. A chat has
+ * no terminal to hold — the conversation is one Vue component bound to the
+ * session in the header — so these cards used to come out empty. This mounts
+ * the transcript on its own, which is a thing there can be several of.
+ *
+ * Scrolling reads back through it. Anything else opens the session for real:
+ * the card is for watching, and a screen of composers is not.
+ */
+function mountChatBody(card, sessionId) {
+  const slot = document.createElement('div');
+  slot.className = 'grid-card-chat';
+  card.appendChild(slot);
+
+  const chat = window.createSdkGridCard?.(slot, sessionId);
+  if (!chat) return slot;
+  gridChats.set(sessionId, chat);
+
+  // Vue mounts the component's own root inside the slot, and that root is the
+  // element that scrolls — so it is the one the gestures below have to read.
+  const scroller = slot.firstElementChild;
+  if (!scroller) return slot;
+
+  // A click, not a drag and not a scroll. Reading back through a card moves
+  // the pointer and the scroll position, and neither should throw you out of
+  // the grid into the session.
+  let down = null;
+  scroller.addEventListener('pointerdown', (event) => {
+    down = { x: event.clientX, y: event.clientY, top: scroller.scrollTop };
+  });
+  scroller.addEventListener('click', (event) => {
+    const from = down;
+    down = null;
+    if (!from) return;
+    if (Math.abs(event.clientX - from.x) > 4 || Math.abs(event.clientY - from.y) > 4) return;
+    if (scroller.scrollTop !== from.top) return;
+    // A fold inside the transcript is part of reading it, not a way out.
+    if (event.target.closest('.jsonl-toggle, .jsonl-tool-header, a')) return;
+    gridFocusedSessionId = sessionId;
+    toggleGridView();
+  });
+
+  return slot;
+}
 
 function wrapInGridCard(sessionId) {
   const entry = openSessions.get(sessionId);
@@ -27,8 +81,11 @@ function wrapInGridCard(sessionId) {
   header.className = 'grid-card-header';
   card.appendChild(header);
 
-  entry.element.classList.add('visible', 'grid-mode');
-  card.appendChild(entry.element);
+  const chatBody = isSdkSession(sessionId) ? mountChatBody(card, sessionId) : null;
+  if (!chatBody) {
+    entry.element.classList.add('visible', 'grid-mode');
+    card.appendChild(entry.element);
+  }
 
   const footer = document.createElement('div');
   footer.className = 'grid-card-footer';
@@ -98,11 +155,15 @@ function wrapInGridCard(sessionId) {
     e.stopPropagation();
     focusGridCard(sessionId);
   });
-  entry.element.addEventListener('focusin', () => {
-    if (gridViewActive && gridFocusedSessionId !== sessionId) {
-      focusGridCard(sessionId);
-    }
-  });
+  // Only a terminal takes focus. A chat card has nothing focusable in it —
+  // that is what makes it a card you watch rather than one you work in.
+  if (!chatBody) {
+    entry.element.addEventListener('focusin', () => {
+      if (gridViewActive && gridFocusedSessionId !== sessionId) {
+        focusGridCard(sessionId);
+      }
+    });
+  }
 
   gridCards.set(sessionId, card);
 }
@@ -110,13 +171,17 @@ function wrapInGridCard(sessionId) {
 function unwrapGridCards() {
   for (const [sid, card] of gridCards) {
     window.vueGrid?.removeCard(sid);
+    // A chat card owns its Vue app; leaving it mounted would leave its
+    // `sdk-message` listener running against a card that is no longer anywhere.
+    gridChats.get(sid)?.destroy();
     const entry = openSessions.get(sid);
-    if (entry) {
+    if (entry && !gridChats.has(sid)) {
       entry.element.classList.remove('grid-mode', 'visible');
       card.parentNode.insertBefore(entry.element, card);
     }
     card.remove();
   }
+  gridChats.clear();
   gridCards.clear();
   terminalsEl.querySelectorAll('.grid-project-heading').forEach(el => el.remove());
 }
@@ -136,6 +201,9 @@ function focusGridCard(sessionId) {
     card.classList.add('focused');
     card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
+  // A chat card has no terminal to hand the keyboard to, and taking it would
+  // only steal it from wherever it usefully was.
+  if (gridChats.has(sessionId)) return;
   const entry = openSessions.get(sessionId);
   if (entry) entry.terminal.focus();
 }
@@ -206,8 +274,10 @@ function showGridView() {
   // Show grid header bar with session count
   if (window.vueStore) window.vueStore.gridViewerCount = sessionIds.length + ' session' + (sessionIds.length !== 1 ? 's' : '');
 
-  // Fit all terminals after layout resolves
+  // Fit all terminals after layout resolves. A chat card has none to fit —
+  // fitting the unused one behind it would only cost a resize round trip.
   for (const sid of sessionIds) {
+    if (gridChats.has(sid)) continue;
     const entry = openSessions.get(sid);
     if (entry) fitAndScroll(entry);
   }

@@ -188,6 +188,28 @@ const migrations = [
     try { db.exec('DELETE FROM session_cache'); } catch {}
     try { db.exec('DELETE FROM cache_meta'); } catch {}
   },
+  // v11: project_meta — what we know about a project rather than about its git.
+  //
+  // `hasCompose` is the expensive question answered cheaply: `docker compose
+  // ps` costs a process launch and up to eight seconds of timeout, and for a
+  // project with no compose file the answer is always "nothing". Recording it
+  // once turns that poll from thirty projects into the handful that can
+  // actually have containers. NULL means "not looked yet" — deliberately not 0,
+  // so an unanswered project is polled once rather than written off.
+  //
+  // `archived` lives here rather than in session_meta because it is a property
+  // of the project: an archived project is folded away in the list and is not
+  // polled at all until it is opened.
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS project_meta (
+        projectPath TEXT PRIMARY KEY,
+        hasCompose INTEGER,
+        composeCheckedAt INTEGER,
+        archived INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+  },
 ];
 
 const currentDbVersion = (() => {
@@ -525,6 +547,69 @@ function getAllProjectGitCounts() {
   return map;
 }
 
+// --- Project meta (compose flag, archived) ---
+//
+// Prepared lazily, like project_git_cache above: the table is created by a
+// migration that runs after this module's top-level statements would.
+let _pm = null;
+function pm() {
+  if (_pm) return _pm;
+  _pm = {
+    get: db.prepare('SELECT * FROM project_meta WHERE projectPath = ?'),
+    getAll: db.prepare('SELECT * FROM project_meta'),
+    upsertCompose: db.prepare(`
+      INSERT INTO project_meta (projectPath, hasCompose, composeCheckedAt) VALUES (?, ?, ?)
+      ON CONFLICT(projectPath) DO UPDATE SET
+        hasCompose = excluded.hasCompose,
+        composeCheckedAt = excluded.composeCheckedAt
+    `),
+    upsertArchived: db.prepare(`
+      INSERT INTO project_meta (projectPath, archived) VALUES (?, ?)
+      ON CONFLICT(projectPath) DO UPDATE SET archived = excluded.archived
+    `),
+    deleteRow: db.prepare('DELETE FROM project_meta WHERE projectPath = ?'),
+  };
+  return _pm;
+}
+
+/** `{ hasCompose, composeCheckedAt, archived }`, or null when never recorded. */
+function getProjectMeta(projectPath) {
+  const row = pm().get.get(projectPath);
+  if (!row) return null;
+  return {
+    projectPath: row.projectPath,
+    // NULL survives as null — "not looked yet" is not the same as "no compose".
+    hasCompose: row.hasCompose === null || row.hasCompose === undefined ? null : !!row.hasCompose,
+    composeCheckedAt: row.composeCheckedAt || null,
+    archived: !!row.archived,
+  };
+}
+
+/** Every row at once — the projects list needs all of them to draw one frame. */
+function getAllProjectMeta() {
+  const map = new Map();
+  for (const row of pm().getAll.all()) {
+    map.set(row.projectPath, {
+      hasCompose: row.hasCompose === null || row.hasCompose === undefined ? null : !!row.hasCompose,
+      composeCheckedAt: row.composeCheckedAt || null,
+      archived: !!row.archived,
+    });
+  }
+  return map;
+}
+
+function setProjectCompose(projectPath, hasCompose) {
+  pm().upsertCompose.run(projectPath, hasCompose ? 1 : 0, Date.now());
+}
+
+function setProjectArchived(projectPath, archived) {
+  pm().upsertArchived.run(projectPath, archived ? 1 : 0);
+}
+
+function deleteProjectMeta(projectPath) {
+  try { pm().deleteRow.run(projectPath); } catch {}
+}
+
 // --- Project avatar ---
 
 let _pa = null;
@@ -585,6 +670,7 @@ module.exports = {
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   getProjectGitCache, setProjectGitCache, getAllProjectGitCounts,
+  getProjectMeta, getAllProjectMeta, setProjectCompose, setProjectArchived, deleteProjectMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting,
