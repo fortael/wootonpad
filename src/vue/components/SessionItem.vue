@@ -12,7 +12,7 @@
       <div class="session-info">
         <div class="session-summary">
           <!-- eslint-disable-next-line vue/no-v-html -->
-          <span v-if="session.type === 'terminal'" class="terminal-badge" v-html="terminalBadgeSvg"></span>
+          <span v-if="session.type === 'terminal'" class="terminal-badge"><SbIcon name="terminal" :size="13" /></span>
           {{ displayName }}
         </div>
         <div v-if="session.aiTitle" class="session-subtitle">{{ cleanName(session.aiTitle) }}</div>
@@ -44,6 +44,7 @@
 
 <script setup>
 import { computed } from 'vue';
+import SbIcon from './SbIcon.vue';
 import UsageRing from './UsageRing.vue';
 import SessionMenu from './SessionMenu.vue';
 import { contextPercent, formatContextLabel } from '../context-window.js';
@@ -91,6 +92,4 @@ const itemClasses = computed(() => ({
   'is-terminal': props.session.type === 'terminal',
 }));
 
-// The only inline glyph this row still owns; the menu's icons come from SbIcon.
-const terminalBadgeSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>';
 </script>

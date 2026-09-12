@@ -16,7 +16,8 @@
 //   3. Archived sessions and archived projects are never searched. They are
 //      the things that have been put away on purpose.
 
-import { matchProjectPaths } from './project-search.js';
+import { projectName } from './project-search.js';
+import { fuzzyMatch, isTightMatch } from './fuzzy-match.js';
 
 export const SPOTLIGHT_LIMITS = {
   projects: 6,      // only while searching; an empty query lists them all
@@ -40,7 +41,17 @@ export function spotlightResults({ projects, plans = [], query = '', projectMeta
 
   if (!q) return { projects: live, sessions: [], plans: [] };
 
-  const matched = matchProjectPaths(live, q);
+  // Ranked, not just filtered: with fuzzy matching several projects can
+  // qualify on three letters, so which one is first is the whole answer.
+  const scoredProjects = [];
+  const matched = new Set();
+  for (const project of live) {
+    const hit = matchProject(project, q);
+    if (!hit) continue;
+    matched.add(project.projectPath);
+    scoredProjects.push({ project, score: hit.score });
+  }
+  scoredProjects.sort((a, b) => b.score - a.score);
 
   const fromMatchedProjects = [];
   const fromTitles = [];
@@ -48,32 +59,77 @@ export function spotlightResults({ projects, plans = [], query = '', projectMeta
     const projectMatched = matched.has(project.projectPath);
     for (const session of project.sessions || []) {
       if (session?.archived) continue;
-      if (projectMatched) fromMatchedProjects.push({ project, session });
-      else if (sessionHaystack(session).includes(q)) fromTitles.push({ project, session });
+      if (projectMatched) { fromMatchedProjects.push({ project, session }); continue; }
+      const hit = matchSession(session, q);
+      if (hit) fromTitles.push({ project, session, score: hit.score });
     }
   }
+  // A named project's own sessions stay in time order — they are one project's
+  // history, and how well a title happens to echo the project name is not a
+  // reason to reorder it. Everything else is a search result and ranks.
   fromMatchedProjects.sort(byRecency);
-  fromTitles.sort(byRecency);
+  fromTitles.sort((a, b) => b.score - a.score || byRecency(a, b));
 
   return {
-    projects: live.filter(p => matched.has(p.projectPath)).slice(0, limits.projects),
+    projects: scoredProjects.map(entry => entry.project).slice(0, limits.projects),
     sessions: [...fromMatchedProjects, ...fromTitles].slice(0, limits.sessions),
     // Title and filename only. A plan's body is searchable on the plans tab,
     // where the result is a document you then read; here it is a name you are
     // trying to get back to.
     plans: (plans || [])
-      .filter(p => `${p?.title || ''} ${p?.filename || ''}`.toLowerCase().includes(q))
+      .map(plan => ({ plan, hit: matchPlan(plan, q) }))
+      .filter(entry => entry.hit)
+      .sort((a, b) => b.hit.score - a.hit.score)
+      .map(entry => entry.plan)
       .slice(0, limits.plans),
   };
+}
+
+// Fuzzy on the name — the thing the row shows and the thing you type — and
+// plain substring on the folder. A subsequence over a whole path matches
+// nearly every project (the home directory alone carries most letters), so
+// the loose matcher is kept to the short string it was meant for.
+function matchProject(project, q) {
+  const path = project?.projectPath || '';
+  const name = tight(projectName(path), q);
+  if (name) return name;
+  return folderPart(path).toLowerCase().includes(q) ? { score: 0, ranges: [] } : null;
+}
+
+function matchSession(session, q) {
+  let best = null;
+  for (const field of [session?.name, session?.summary, session?.aiTitle]) {
+    if (!field) continue;
+    const hit = tight(field, q);
+    if (hit && (!best || hit.score > best.score)) best = hit;
+  }
+  return best;
+}
+
+function matchPlan(plan, q) {
+  return tight(plan?.title || '', q)
+    || (String(plan?.filename || '').toLowerCase().includes(q) ? { score: 0, ranges: [] } : null);
+}
+
+/** A fuzzy hit, but only if it is one a reader would recognise as one. */
+function tight(text, q) {
+  const hit = fuzzyMatch(text, q);
+  return hit && isTightMatch(hit, q) ? hit : null;
+}
+
+// Everything above the project's own directory, minus the home prefix — the
+// same rule project-search.js applies, for the same reason: without it, "users"
+// selects every project on the machine.
+function folderPart(projectPath) {
+  const segments = String(projectPath || '').split('/').filter(Boolean);
+  const parent = segments.slice(0, -1);
+  const home = parent.findIndex(s => s === 'Users' || s === 'home');
+  return (home === -1 ? parent : parent.slice(home + 2)).join('/');
 }
 
 /** The projects a palette may offer: everything not archived. */
 export function livingProjects(projects, projectMeta = {}) {
   return (projects || []).filter(p => p?.projectPath && !projectMeta?.[p.projectPath]?.archived);
-}
-
-function sessionHaystack(session) {
-  return [session?.name, session?.summary, session?.aiTitle].filter(Boolean).join(' ').toLowerCase();
 }
 
 function byRecency(a, b) {

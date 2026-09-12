@@ -1536,7 +1536,10 @@ window.__sb = {
   // The menu confirms before calling. Main kills the PTY and removes the
   // transcript; here we only have to stop showing it.
   deleteSession: async (id) => {
-    const result = await window.api.deleteSession(id);
+    // A session that has not written a transcript yet exists only here, so the
+    // project has to travel with the id — main cannot look it up.
+    const projectPath = sessionMap.get(id)?.projectPath || pendingSessions.get(id)?.projectPath || null;
+    const result = await window.api.deleteSession(id, projectPath);
     if (!result?.ok) {
       window.vueStatusBar?.setActivity('Delete failed: ' + (result?.error || 'unknown error'), 'error');
       return;

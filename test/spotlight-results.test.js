@@ -112,3 +112,41 @@ test('survives missing input', () => {
   assert.deepEqual(livingProjects(null), []);
   assert.deepEqual(livingProjects([{ projectPath: '/p/a' }, {}]).length, 1);
 });
+
+// ── Fuzzy matching ────────────────────────────────────────────────
+
+test('initials find a project the substring matcher would miss', () => {
+  const out = spotlightResults({ projects: projects(), query: 'wp', projectMeta: META });
+  assert.deepEqual(paths(out.projects), ['/Users/zakhar/Projects/wooton-pad']);
+});
+
+test('projects come back ranked, best first', () => {
+  const list = [
+    { projectPath: '/Users/zakhar/Projects/web-api-playground', sessions: [] },
+    { projectPath: '/Users/zakhar/Projects/api', sessions: [] },
+  ];
+  // Both match "api"; the one that is the word wins over the one that spells
+  // it out of three separate pieces.
+  assert.deepEqual(paths(spotlightResults({ projects: list, query: 'api' }).projects), [
+    '/Users/zakhar/Projects/api',
+    '/Users/zakhar/Projects/web-api-playground',
+  ]);
+});
+
+test('a fuzzy match still has to be a subsequence', () => {
+  const out = spotlightResults({ projects: projects(), query: 'pw', projectMeta: META });
+  assert.deepEqual(paths(out.projects), [], 'letters out of order do not match');
+});
+
+test('a loose match buried in a long title is not a match', () => {
+  const list = [{
+    projectPath: '/p/one',
+    sessions: [
+      session('long', 'Set up the schema and seed the staging database from a snapshot', '2026-09-01T00:00:00Z'),
+      session('short', 'Session cache rewrite', '2026-09-01T00:00:00Z'),
+    ],
+  }];
+  // "sess" is a subsequence of the long one (s…e…s…s) and the word in the
+  // other. Only the second is a result a reader would recognise.
+  assert.deepEqual(ids(spotlightResults({ projects: list, query: 'sess' }).sessions), ['short']);
+});

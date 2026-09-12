@@ -70,7 +70,7 @@
               <div v-if="showContainers && projectInfo[project.projectPath]?.containers?.length" class="project-card-env">
                 <div class="project-env-containers-box">
                   <div class="project-env-containers-hdr">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-4 0v2M8 7V5a2 2 0 0 0-4 0v2"/></svg>
+                    <SbIcon name="container" :size="12" tone="muted" />
                     CONTAINERS · {{ projectInfo[project.projectPath].containers.length }}
                   </div>
                   <div
@@ -102,23 +102,20 @@
                 data-tooltip="New session"
                 @click.stop="callbacks.newSession?.(project, $event.currentTarget)"
               >
-                <svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-                  <line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/>
-                </svg>
+                <SbIcon name="plus" :size="13" tone="muted" />
               </button>
               <button
                 class="project-card-arch-btn"
                 data-tooltip="Archive project"
                 @click.stop="setArchived(project, true)"
               >
-                <SbIcon name="archive" :size="12" tone="muted" />
+                <SbIcon name="archive" :size="13" tone="muted" />
               </button>
               <button
                 class="project-card-del-btn"
                 data-tooltip="Remove project"
                 @click.stop="removeProject(project)"
-                v-html="trashSvg"
-              ></button>
+              ><SbIcon name="trash-2" :size="13" tone="muted" /></button>
             </div>
           </div>
         </div>
@@ -129,9 +126,7 @@
            something you have to scroll thirty rows to reach. -->
       <div class="sbx-block__foot projects-add-row">
         <button class="projects-add-btn" @click="callbacks.addProject?.()">
-          <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-            <line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/>
-          </svg>
+          <SbIcon name="plus" :size="12" tone="muted" />
           Add project
         </button>
       </div>
@@ -183,7 +178,7 @@
                 data-tooltip="Restore project"
                 @click.stop="setArchived(project, false)"
               >
-                <SbIcon name="folder-open" :size="12" tone="muted" />
+                <SbIcon name="folder-open" :size="13" tone="muted" />
               </button>
             </div>
           </div>
@@ -400,5 +395,4 @@ defineExpose({
   },
 });
 
-const trashSvg = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>';
 </script>

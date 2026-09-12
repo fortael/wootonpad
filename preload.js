@@ -38,7 +38,7 @@ contextBridge.exposeInMainWorld('api', {
   archiveSession: (id, archived) => ipcRenderer.invoke('archive-session', id, archived),
   // Deletes the .jsonl as well as the cache rows. Unrecoverable — the caller
   // confirms first.
-  deleteSession: (id) => ipcRenderer.invoke('delete-session', id),
+  deleteSession: (id, projectPath) => ipcRenderer.invoke('delete-session', id, projectPath),
   // Aggregated facts about one session, read from its transcript on demand.
   getSessionMeta: (id) => ipcRenderer.invoke('get-session-meta', id),
   openTerminal: (id, projectPath, isNew, sessionOptions) => ipcRenderer.invoke('open-terminal', id, projectPath, isNew, sessionOptions),

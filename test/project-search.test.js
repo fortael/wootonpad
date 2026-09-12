@@ -53,3 +53,9 @@ test('projectName is the last segment, trailing slash or not', () => {
   assert.equal(projectName('/Users/zakhar/Projects/switchboard/'), 'switchboard');
   assert.equal(projectName(''), '');
 });
+
+// The palette matches loosely (src/vue/fuzzy-match.js); the tabs do not. A
+// list you can see the whole of wants the tight answer.
+test('tab search stays substring — initials do not match', () => {
+  assert.deepEqual(paths('wp'), []);
+});

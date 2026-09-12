@@ -45,8 +45,20 @@
               </span>
 
               <div class="sbx-spotlight__text">
-                <div class="sbx-spotlight__title">{{ row.title }}</div>
-                <div class="sbx-spotlight__sub">{{ row.subtitle }}</div>
+                <div class="sbx-spotlight__title">
+                  <span
+                    v-for="(part, pi) in row.titleParts"
+                    :key="pi"
+                    :class="{ 'sbx-spotlight__hit': part.hit }"
+                  >{{ part.text }}</span>
+                </div>
+                <div class="sbx-spotlight__sub">
+                  <span
+                    v-for="(part, pi) in highlight(row.subtitle)"
+                    :key="pi"
+                    :class="{ 'sbx-spotlight__hit': part.hit }"
+                  >{{ part.text }}</span>
+                </div>
               </div>
 
               <span
@@ -55,7 +67,22 @@
                 :class="row.statusClass"
               ></span>
               <span v-if="row.meta" class="sbx-spotlight__meta">{{ row.meta }}</span>
-              <kbd v-if="i === cursor" class="sbx-spotlight__kbd">{{ row.kind === 'project' ? '↵ new' : '↵' }}</kbd>
+
+              <!-- The row's second verb, spelled out. Enter goes to the thing;
+                   this starts work in it, and is here so that is discoverable
+                   with a mouse rather than only from the footer legend. -->
+              <button
+                v-if="row.kind === 'project'"
+                type="button"
+                class="sbx-spotlight__action"
+                data-tooltip="New session (⇧↵)"
+                aria-label="New session in this project"
+                @click.stop="activate(row, 'create')"
+              >
+                <SbIcon name="plus" :size="13" />
+              </button>
+
+              <kbd v-if="i === cursor" class="sbx-spotlight__kbd">↵</kbd>
             </div>
           </template>
 
@@ -67,6 +94,7 @@
         <div class="sbx-spotlight__footer">
           <span class="sbx-spotlight__hint"><kbd class="sbx-spotlight__kbd">↑</kbd><kbd class="sbx-spotlight__kbd">↓</kbd> navigate</span>
           <span class="sbx-spotlight__hint"><kbd class="sbx-spotlight__kbd">↵</kbd> open</span>
+          <span class="sbx-spotlight__hint"><kbd class="sbx-spotlight__kbd">⇧↵</kbd> new session</span>
           <span class="sbx-spotlight__hint"><kbd class="sbx-spotlight__kbd">{{ modKey }}</kbd><kbd class="sbx-spotlight__kbd">K</kbd> toggle</span>
           <span class="sbx-spotlight__spacer"></span>
           <span>{{ liveProjects.length }} projects</span>
@@ -101,6 +129,7 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { store } from '../store.js';
 import { projectName } from '../project-search.js';
 import { spotlightResults, livingProjects } from '../spotlight-results.js';
+import { highlightParts, matches } from '../fuzzy-match.js';
 import ProjectAvatar from './ProjectAvatar.vue';
 import SbIcon from './SbIcon.vue';
 
@@ -134,6 +163,10 @@ const liveProjects = computed(() => {
   return livingProjects(all, projectMeta.value);
 });
 
+/** Subtitles are marked at render time — they are the same string for every
+ *  row kind and do not need a second field on the row. */
+function highlight(text) { return highlightParts(text, query.value); }
+
 function displayName(session) {
   const raw = session.name || session.summary || 'Session';
   return window.cleanDisplayName ? window.cleanDisplayName(raw) : raw;
@@ -163,7 +196,6 @@ const results = computed(() => spotlightResults({
 }));
 
 const rows = computed(() => {
-  const searching = !!query.value.trim();
   const out = [];
 
   results.value.projects.forEach((project, i) => {
@@ -171,24 +203,34 @@ const rows = computed(() => {
     out.push({
       key: 'p:' + project.projectPath,
       kind: 'project',
-      section: i === 0 ? (searching ? 'Projects' : 'Start a session in…') : null,
+      section: i === 0 ? 'Projects' : null,
       project,
       projectPath: project.projectPath,
       title: projectName(project.projectPath),
+      titleParts: highlightParts(projectName(project.projectPath), query.value),
       subtitle: project.projectPath,
       meta: open ? `${open} session${open === 1 ? '' : 's'}` : 'empty',
     });
   });
 
   results.value.sessions.forEach(({ project, session }, i) => {
+    const title = displayName(session);
+    // A row whose visible title does not contain the query looks like a wrong
+    // answer. When it is the model's title that matched, say so on the row
+    // instead of leaving the reader to guess.
+    const explained = !matches(title, query.value) && session.aiTitle && matches(session.aiTitle, query.value);
+    const subtitle = explained
+      ? `${projectName(project.projectPath)} · ${displayName({ name: session.aiTitle })}`
+      : projectName(project.projectPath);
     out.push({
       key: 's:' + session.sessionId,
       kind: 'session',
       section: i === 0 ? 'Sessions' : null,
       session,
       projectPath: project.projectPath,
-      title: displayName(session),
-      subtitle: projectName(project.projectPath),
+      title,
+      titleParts: highlightParts(title, query.value),
+      subtitle,
       meta: timeAgo(session),
       statusClass: statusClass(session),
     });
@@ -201,6 +243,7 @@ const rows = computed(() => {
       section: i === 0 ? 'Plans' : null,
       plan,
       title: plan.title || plan.filename,
+      titleParts: highlightParts(plan.title || plan.filename, query.value),
       subtitle: plan.filename,
       meta: plan.modified && window.formatDate ? window.formatDate(new Date(plan.modified)) : '',
     });
@@ -253,10 +296,25 @@ function scrollCursorIntoView() {
 }
 
 function onKeyDown(e) {
+  const row = rows.value[cursor.value];
   if (e.key === 'Escape') { e.preventDefault(); close(); }
   else if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
   else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
-  else if (e.key === 'Enter') { e.preventDefault(); activate(rows.value[cursor.value]); }
+  else if (e.key === 'Enter') { e.preventDefault(); activate(row, e.shiftKey ? 'create' : 'primary'); }
+  // → is the same gesture as ⇧↵, but only from the end of the query: the
+  // cursor key has to keep moving the caret while there is still text to its
+  // right, or fixing a typo mid-word would start a session instead.
+  else if (e.key === 'ArrowRight' && atEndOfQuery()) {
+    if (row?.kind !== 'project') return;
+    e.preventDefault();
+    activate(row, 'create');
+  }
+}
+
+function atEndOfQuery() {
+  const el = inputRef.value;
+  if (!el) return false;
+  return el.selectionStart === el.selectionEnd && el.selectionStart === el.value.length;
 }
 
 // The palette is a window-level gesture: it has to answer while the focus is
@@ -276,13 +334,25 @@ onMounted(() => document.addEventListener('keydown', onGlobalKey, true));
 onUnmounted(() => document.removeEventListener('keydown', onGlobalKey, true));
 
 // ── Activation ────────────────────────────────────────────────────
-function activate(row) {
+//
+// Two verbs, the same two everywhere: Enter goes to the thing under the
+// cursor, ⇧↵ (or → , or the + on the row) starts work in it. Only a project
+// has something to start, so 'create' is a no-op on the other kinds rather
+// than a second meaning for the same key.
+function activate(row, action = 'primary') {
   if (!row) return;
+  if (action === 'create') {
+    if (row.kind !== 'project') return;
+    close();
+    window.__sb?.quickNewSession?.(row.project);
+    return;
+  }
   close();
   if (row.kind === 'project') {
-    // The same thing the popover's first button does, without the popover:
-    // picking a project here is already the decision it would ask about.
-    window.__sb?.quickNewSession?.(row.project);
+    // Enter on a project is navigation, like Enter on everything else here:
+    // it opens the project's own page — git state, changed files, its
+    // sessions. Starting a session is the row's second verb, above.
+    window.__sb?.openProject?.(row.project);
   } else if (row.kind === 'session') {
     window.vueApp?.setTab?.('sessions');
     window.__sb?.openSession?.(row.session);

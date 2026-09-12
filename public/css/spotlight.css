@@ -18,10 +18,10 @@
   align-items: flex-start;
   padding: 11vh var(--space-5) var(--space-5);
   background: var(--surface-overlay);
-  /* The blur is the point: it says the app is still there and still yours,
-     which a flat scrim does not. */
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  /* Enough blur to push the app back a step, not enough to turn it into
+     wallpaper — it should still read as your window behind the palette. */
+  backdrop-filter: blur(2.5px);
+  -webkit-backdrop-filter: blur(2.5px);
   animation: sbx-spotlight-in var(--duration-fast) var(--ease-standard);
 }
 
@@ -167,6 +167,13 @@
   text-overflow: ellipsis;
 }
 
+/* The characters the query actually matched. Weight and colour only: a
+   background chip on every other letter of a fuzzy hit is confetti. */
+.sbx-spotlight__hit {
+  color: var(--orange-500);
+  font-weight: var(--weight-semibold);
+}
+
 .sbx-spotlight__sub {
   margin-top: 2px;
   font-family: var(--font-mono);
@@ -202,6 +209,51 @@
   text-align: center;
   font-size: var(--text-xs);
   color: var(--text-disabled);
+}
+
+/* The row's create button. Present in the DOM for every project row so the
+   layout does not shift when it appears; visible on hover or under the
+   keyboard cursor, which are the two ways a row is "the one you mean". */
+.sbx-spotlight__action {
+  width: var(--hit-xs);
+  height: var(--hit-xs);
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity var(--duration-fast) var(--ease-standard),
+    background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+.sbx-spotlight__row:hover .sbx-spotlight__action,
+.sbx-spotlight__row.is-active .sbx-spotlight__action {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: hover) {
+  .sbx-spotlight__action:hover {
+    background: var(--orange-500);
+    border-color: var(--orange-500);
+    color: var(--text-on-accent);
+  }
+}
+
+.sbx-spotlight__action:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus-ring);
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* ── Footer legend ───────────────────────────────────────────────── */

@@ -2758,7 +2758,10 @@ ipcMain.handle('archive-session', (_event, sessionId, archived) => {
 // and off the startup path — nothing on screen depends on it.
 ipcMain.handle('get-session-meta', (_event, sessionId) => {
   const folder = getCachedFolder(sessionId);
-  if (!folder) return { ok: false, error: 'Session not found in cache' };
+  // Not an error the user can act on: a session that has not written its
+  // first turn yet is not in the index, and saying so in the index's own
+  // vocabulary reads like corruption.
+  if (!folder) return { ok: false, error: 'No transcript yet — this session has not written its first turn.' };
   // activeProjectsDir() is already the host's view of the account's home — for
   // a WSL account, the UNC path. Same composition read-session-jsonl uses.
   const jsonlPath = path.join(activeProjectsDir(), folder, sessionId + '.jsonl');
@@ -2869,9 +2872,12 @@ ipcMain.handle('get-session-meta', (_event, sessionId) => {
 // Removes the transcript itself, not just the row: a session deleted here is
 // gone from ~/.claude/projects too, so the next scan cannot bring it back.
 // Destructive and unrecoverable — the renderer confirms before calling.
-ipcMain.handle('delete-session', async (_event, sessionId) => {
-  const folder = getCachedFolder(sessionId);
-  if (!folder) return { ok: false, error: 'Session not found in cache' };
+ipcMain.handle('delete-session', async (_event, sessionId, projectPath) => {
+  // The cache is not the only place a session can exist. One launched a moment
+  // ago has no .jsonl yet, so nothing indexed it — and refusing to delete it
+  // left the row in the sidebar with no way to get rid of it. The renderer
+  // knows which project it is in; that is enough to name the file.
+  const folder = getCachedFolder(sessionId) || (projectPath ? encodeProjectPath(projectPath) : null);
 
   // A live PTY holds the file open and would keep writing to it.
   const live = activeSessions.get(sessionId);
@@ -2880,14 +2886,16 @@ ipcMain.handle('delete-session', async (_event, sessionId) => {
     await new Promise(r => setTimeout(r, 150));
   }
 
-  const jsonlPath = path.join(activeProjectsDir(), folder, sessionId + '.jsonl');
-  try {
-    fs.unlinkSync(jsonlPath);
-  } catch (err) {
-    // Already gone on disk is not a failure — the cache rows still have to go.
-    if (err.code !== 'ENOENT') return { ok: false, error: err.message };
+  const jsonlPath = folder ? path.join(activeProjectsDir(), folder, sessionId + '.jsonl') : null;
+  if (jsonlPath) {
+    try {
+      fs.unlinkSync(jsonlPath);
+    } catch (err) {
+      // Already gone on disk is not a failure — the cache rows still have to go.
+      if (err.code !== 'ENOENT') return { ok: false, error: err.message };
+    }
+    forgetTranscript(jsonlPath);
   }
-  forgetTranscript(jsonlPath);
   deleteCachedSession(sessionId);
   deleteSearchSession(sessionId);
   deleteSessionMeta(sessionId);
