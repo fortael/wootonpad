@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  columnOf, mostUrgent, worstColumn, wantsAttention, OPEN_ORDER,
+  columnOf, mostUrgent, worstColumn, wantsAttention, unreadSessions, OPEN_ORDER,
 } = require('../src/vue/session-column.js');
 
 const state = (over = {}) => ({
@@ -156,4 +156,71 @@ test('the open order puts an answer before a read and a read before work', () =>
   assert.ok(OPEN_ORDER.waiting < OPEN_ORDER.done);
   assert.ok(OPEN_ORDER.done < OPEN_ORDER.running);
   assert.ok(OPEN_ORDER.running < OPEN_ORDER.idle);
+});
+
+// ── The unread rail ───────────────────────────────────────────────
+//
+// The rail used to show one entry per project with a live PTY, which is a
+// different question from the one the dock badge answers. The badge could read
+// 1 with nothing on the rail accounting for it — "непонятно из-за какой
+// сессии у нас единичка на доке". Both read unreadSessions/wantsAttention now.
+
+const proj = (path, sessions) => ({ projectPath: path, sessions });
+const sess = (sessionId, modified) => ({ sessionId, modified });
+
+test('the rail shows exactly what the dock counts', () => {
+  const s = state({ attention: ['a'], responseReady: ['b'], busy: ['c'], readPending: ['d'] });
+  const projects = [proj('/x/one', [sess('a'), sess('b'), sess('c'), sess('d')])];
+
+  const rows = unreadSessions(projects, s);
+  const { waiting, done } = wantsAttention(s);
+
+  assert.deepEqual(rows.map(r => r.sessionId).sort(), [...waiting, ...done].sort());
+  // Working and already-read are not unread, on the rail or on the dock.
+  assert.deepEqual(rows.map(r => r.sessionId).sort(), ['a', 'b']);
+});
+
+test('every unread session gets its own entry, never stacked per project', () => {
+  const s = state({ attention: ['a', 'b'] });
+  const rows = unreadSessions([proj('/x/one', [sess('a'), sess('b')])], s);
+  assert.equal(rows.length, 2, 'two sessions of one project collapsed into one entry');
+  assert.deepEqual(rows.map(r => r.project), ['one', 'one']);
+});
+
+test('waiting comes before done, and newer before older inside a band', () => {
+  const s = state({ attention: ['w1', 'w2'], responseReady: ['d1'] });
+  const rows = unreadSessions([proj('/x/one', [
+    sess('d1', '2026-01-03'),
+    sess('w1', '2026-01-01'),
+    sess('w2', '2026-01-02'),
+  ])], s);
+  assert.deepEqual(rows.map(r => r.sessionId), ['w2', 'w1', 'd1']);
+});
+
+test('a session both blocked and finished is listed once, as blocked', () => {
+  const s = state({ attention: ['a'], responseReady: ['a'] });
+  const rows = unreadSessions([proj('/x/one', [sess('a')])], s);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, 'waiting');
+});
+
+test('each entry carries its project and the session itself', () => {
+  const session = sess('a', '2026-01-01');
+  const rows = unreadSessions([proj('/Users/me/Projects/thing', [session])], state({ attention: ['a'] }));
+  assert.equal(rows[0].projectPath, '/Users/me/Projects/thing');
+  assert.equal(rows[0].project, 'thing');
+  assert.equal(rows[0].session, session, 'the row cannot open the session it names');
+});
+
+test('nothing unread is an empty list, not a missing one', () => {
+  assert.deepEqual(unreadSessions([proj('/x/one', [sess('a')])], state({ busy: ['a'] })), []);
+  assert.deepEqual(unreadSessions([], state({})), []);
+  assert.deepEqual(unreadSessions(null, state({})), []);
+});
+
+// A session marked unread that no project claims cannot be drawn, and must not
+// crash the rail on its way past.
+test('an id with no session behind it is skipped', () => {
+  const rows = unreadSessions([proj('/x/one', [sess('a')])], state({ attention: ['a', 'ghost'] }));
+  assert.deepEqual(rows.map(r => r.sessionId), ['a']);
 });

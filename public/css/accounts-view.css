@@ -23,7 +23,9 @@
   inset: 0;
   display: flex;
   flex-direction: column;
-  background: var(--surface-app);
+  /* --surface-panel, like #board-viewer and the project page: a main-area
+     panel, not the shell showing through. */
+  background: var(--surface-panel);
 }
 
 .acct-viewer {
@@ -33,13 +35,16 @@
   min-height: 0;
 }
 
+/* Sits on the page, like .pv-header on the project page — not on a raised
+   white strip with a rule under it. The cards below already carry borders;
+   a bordered bar above a bordered card is two lines saying the same thing,
+   and the page read as two stacked panels instead of one. */
 .acct-viewer__header {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-4);
-  background: var(--surface-panel-raised);
-  border-bottom: var(--border-width-hairline) solid var(--border-subtle);
+  padding: var(--space-4) var(--space-5) var(--space-3);
+  background: var(--surface-panel);
   flex-shrink: 0;
 }
 

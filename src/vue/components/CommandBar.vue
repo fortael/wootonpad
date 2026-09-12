@@ -8,15 +8,14 @@
         :value="modelValue"
         :placeholder="placeholder"
         @input="$emit('update:modelValue', $event.target.value)"
-        @keydown.enter.prevent="$emit('spotlight')"
       >
       <slot name="field-actions" />
       <button
         type="button"
         class="sbx-commandbar__chip"
-        title="Open spotlight"
+        title="Open the command palette"
         @click="$emit('spotlight')"
-      >⌘K</button>
+      >{{ modLabel }}K</button>
     </div>
     <button
       type="button"
@@ -32,6 +31,10 @@
 
 <script setup>
 import SbIcon from './SbIcon.vue';
+
+// The chip is a keyboard legend, so it has to name the key the user actually
+// presses. Everything else here is platform-agnostic.
+const modLabel = /Mac|iPhone|iPad/.test(navigator.platform) ? '\u2318' : 'Ctrl ';
 
 defineProps({
   modelValue: { type: String, default: '' },

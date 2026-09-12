@@ -168,7 +168,12 @@ const boardFilters = computed(() => ({
 const rows = computed(() => {
   const out = [];
   for (const project of store.projects) {
-    const count = filterSessions(project.sessions, boardFilters.value).length;
+    // Same rule as the board itself: a project the query named counts all of
+    // its sessions, not just the ones whose titles matched too.
+    const filters = store.searchMatchProjectPaths?.has(project.projectPath)
+      ? { ...boardFilters.value, searchMatchIds: null }
+      : boardFilters.value;
+    const count = filterSessions(project.sessions, filters).length;
     if (!count) continue;
     out.push({
       projectPath: project.projectPath,

@@ -1,4 +1,4 @@
-/* Sidebar redesign chrome — CommandBar, FilterTabs, AttentionRail.
+/* Sidebar redesign chrome — CommandBar, FilterTabs, UnreadRail.
    Ported from design/ui_kits/wootonpad/WootonPadScreen.jsx.
 
    Every class is prefixed `sbx-` so nothing here collides with style.css.
@@ -226,10 +226,12 @@
 }
 
 /* ------------------------------------------------------------------ *
- * AttentionRail
+ * UnreadRail — one avatar per session that wants something from you.
+ * The same set the dock badge counts; see unreadSessions() in
+ * src/vue/session-column.js.
  * ------------------------------------------------------------------ */
 
-.sbx-attention {
+.sbx-unread {
   margin: var(--space-3) var(--space-3) 0;
   padding: var(--space-3);
   border-radius: var(--radius-sm);
@@ -237,7 +239,7 @@
   border: 1px solid var(--border-subtle);
 }
 
-.sbx-attention__header {
+.sbx-unread__header {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -245,7 +247,7 @@
   padding-left: 2px;
 }
 
-.sbx-attention__dot {
+.sbx-unread__dot {
   width: 5px;
   height: 5px;
   flex: none;
@@ -253,7 +255,25 @@
   background: var(--amber-500);
 }
 
-.sbx-attention__label {
+/* Nothing waiting. The widget stays, so the dot has to stop claiming there is
+   something to deal with. */
+.sbx-unread__dot.is-quiet {
+  background: var(--border-strong);
+}
+
+/* The placeholder that keeps the widget's height when the rail is empty —
+   one avatar row, so reading the last turn does not move the sidebar under
+   the pointer. */
+.sbx-unread__empty {
+  display: flex;
+  align-items: center;
+  height: 30px;
+  padding-left: 2px;
+  font-size: var(--text-2xs);
+  color: var(--text-disabled);
+}
+
+.sbx-unread__label {
   font-size: var(--text-2xs);
   letter-spacing: var(--tracking-wide);
   text-transform: uppercase;
@@ -261,17 +281,17 @@
   font-weight: var(--weight-semibold);
 }
 
-.sbx-attention__spacer {
+.sbx-unread__spacer {
   flex: 1;
 }
 
-.sbx-attention__count {
+.sbx-unread__count {
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   color: var(--text-disabled);
 }
 
-.sbx-attention__rail {
+.sbx-unread__rail {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -279,13 +299,13 @@
   scrollbar-width: none;
 }
 
-.sbx-attention__rail::-webkit-scrollbar {
+.sbx-unread__rail::-webkit-scrollbar {
   display: none;
 }
 
 /* Each avatar carries its status colour as --sbx-tone so the monogram and
    the count badge can both read it without an inline style. */
-.sbx-attention__avatar {
+.sbx-unread__avatar {
   --sbx-tone: var(--gray-500);
   position: relative;
   flex: none;
@@ -306,17 +326,18 @@
     padding var(--duration-base) var(--ease-standard);
 }
 
-.sbx-attention__avatar--running { --sbx-tone: var(--green-500); }
-.sbx-attention__avatar--waiting { --sbx-tone: var(--amber-500); }
-.sbx-attention__avatar--done    { --sbx-tone: var(--blue-500); }
-.sbx-attention__avatar--idle    { --sbx-tone: var(--gray-500); }
+/* Only two lanes can reach this rail. The running and idle tones went with
+   the project-stacking version: a session that is working or asleep is not
+   unread, and the dock does not count it either. */
+.sbx-unread__avatar--waiting { --sbx-tone: var(--amber-500); }
+.sbx-unread__avatar--done    { --sbx-tone: var(--blue-500); }
 
 /* ProjectAvatar renders an <img> when the project has an icon and a
    colour-filled <span> of initials when it does not — the same avatar the
    session list and the collapsed rail use, so a project looks identical
    everywhere. Status is a ring around it rather than a tint, which would
    fight the avatar's own colour. */
-.sbx-attention__monogram {
+.sbx-unread__monogram {
   width: 22px;
   height: 22px;
   flex: none;
@@ -333,7 +354,7 @@
   letter-spacing: var(--tracking-normal);
 }
 
-.sbx-attention__monogram:is(img) {
+.sbx-unread__monogram:is(img) {
   display: block;
   object-fit: cover;
 }
@@ -341,7 +362,7 @@
 /* Open state (active or hovered) reveals the meta column and hides the
    badge. Width intentionally snaps 30px → auto, matching the mockup, which
    transitions only background, border-color and padding. */
-.sbx-attention__meta {
+.sbx-unread__meta {
   display: none;
   flex-direction: column;
   align-items: flex-start;
@@ -349,69 +370,37 @@
   white-space: nowrap;
 }
 
-.sbx-attention__name {
+.sbx-unread__name {
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--text-primary);
   font-weight: var(--weight-semibold);
 }
 
-.sbx-attention__reason {
-  font-size: 9px;
-  color: var(--text-tertiary);
-}
-
-/* Sized to ride the monogram's corner, not cover it: the button is only
-   30px wide, so content-box padding + border has to stay tiny. */
-.sbx-attention__badge {
-  position: absolute;
-  top: 0;
-  right: 0;
-  min-width: 9px;
-  height: 11px;
-  padding: 0 2px;
-  border-radius: var(--radius-full);
-  background: var(--sbx-tone);
-  color: var(--surface-panel);
-  font-family: var(--font-mono);
-  font-size: 8px;
-  line-height: 1;
-  font-weight: var(--weight-bold);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1.5px solid var(--surface-panel);
-  box-sizing: content-box;
-}
-
-.sbx-attention__avatar--open {
+.sbx-unread__avatar--open {
   width: auto;
   padding: 0 10px 0 var(--space-1);
   background: var(--surface-card-hover);
   border-color: var(--border-default);
 }
 
-.sbx-attention__avatar--open .sbx-attention__meta {
+.sbx-unread__avatar--open .sbx-unread__meta {
   display: flex;
 }
 
-.sbx-attention__avatar--open .sbx-attention__badge {
-  display: none;
-}
-
 @media (hover: hover) {
-  .sbx-attention__avatar:hover {
+  .sbx-unread__avatar:hover {
     width: auto;
     padding: 0 10px 0 var(--space-1);
     background: var(--surface-card-hover);
     border-color: var(--border-default);
   }
 
-  .sbx-attention__avatar:hover .sbx-attention__meta {
+  .sbx-unread__avatar:hover .sbx-unread__meta {
     display: flex;
   }
 
-  .sbx-attention__avatar:hover .sbx-attention__badge {
+  .sbx-unread__avatar:hover .sbx-unread__badge {
     display: none;
   }
 }

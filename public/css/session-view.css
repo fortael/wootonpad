@@ -11,16 +11,25 @@
 
 /* ─── Session header ────────────────────────────────────────────── */
 
-/* Between the mockup's 64px and a cramped toolbar: 46px, one line, with
-   real breathing room on the sides. The terminal is the work; the header
-   still has to look designed. */
+/* Two lines of identity (name + project, then the model's title) in a box
+   that does not change height when the second line is missing — the side
+   panel and the SDK view are positioned against this number, and a header
+   that grew with its content would move them under it.
+
+   Fixed rather than derived for the same reason: --bar-height is every other
+   bar above a work area (viewer toolbars, settings, diff nav), all of which
+   are still one line. */
+:root {
+  --sbx-sesshead-h: 56px;
+}
+
 .sbx-sesshead {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
   flex-shrink: 0;
-  height: 46px;
+  height: var(--sbx-sesshead-h);
   padding: 0 var(--space-5);
   background: var(--surface-panel);
   /* No bottom hairline: the raised surface already separates the header from
@@ -66,6 +75,24 @@
   object-fit: cover;
 }
 
+/* The two stacked lines. Column rather than wrapping: the second line has to
+   start under the title, not under the avatar. */
+.sbx-sesshead__text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sbx-sesshead__titlerow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
 .sbx-sesshead__title {
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
@@ -95,25 +122,17 @@
   flex: 0 1 auto;
 }
 
-.sbx-sesshead__id {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  color: var(--text-disabled);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-/* Model-written session title — no slot in the mockup, kept as trailing
-   secondary text that gives up its width before anything else does. */
+/* Model-written session title — the second line, under the name it is a
+   title for. Not italic any more: it is a caption now, and the position
+   already says it is not the name the user gave. */
 .sbx-sesshead__ai {
   font-size: var(--text-xs);
-  font-style: italic;
   color: var(--text-tertiary);
+  line-height: var(--leading-tight);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
-  flex: 1 1 auto;
 }
 
 /* ─── Right-hand control cluster ────────────────────────────────── */
@@ -262,14 +281,14 @@
   background: color-mix(in srgb, var(--status-danger) 10%, transparent);
 }
 
-/* Narrow windows: the identity line keeps title + project, everything
-   else in it folds away before the controls do. */
+/* Narrow windows: the identity block keeps both its lines — the model's
+   title has its own row now and is no longer competing for width — and the
+   count/time pair in the controls is what folds away. */
 @media (max-width: 900px) {
   .sbx-sesshead {
     padding: 0 var(--space-3);
     gap: var(--space-2);
   }
-  .sbx-sesshead__ai,
   .sbx-sesshead__meta {
     display: none;
   }
@@ -293,7 +312,7 @@
 
 .sbx-sdk {
   position: absolute;
-  top: 46px;              /* clears .sbx-sesshead, as the side panel does */
+  top: var(--sbx-sesshead-h);   /* clears .sbx-sesshead, as the side panel does */
   right: 0;
   bottom: 0;
   left: 0;

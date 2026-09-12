@@ -1,5 +1,6 @@
 import { createApp } from 'vue';
 import { store } from '../vue/store.js';
+import { matchProjectPaths } from '../vue/project-search.js';
 import LandingApp from './LandingApp.vue';
 import {
   MOCK_PROJECTS,
@@ -36,6 +37,7 @@ import '../../public/css/board-view.css';
 import '../../public/css/session-menu.css';
 import '../../public/css/side-panel.css';
 import '../../public/css/terminal-preview.css';
+import '../../public/css/spotlight.css';
 import '../../public/css/theme-light.css';
 // Landing-only CSS. Lives here rather than in a .vue <style> block: the app's
 // `vite build` writes its CSS asset straight over public/style.css.
@@ -88,7 +90,7 @@ const MOCK_FILE_CONTENT = {
   margin-right: calc(var(--sbx-sidepanel-w) + var(--sbx-sidepanel-gap) * 2);
 }`,
 
-  'src/landing/mock-data.js': `// Live PTYs. Three of the projects below own at least one, so AttentionRail
+  'src/landing/mock-data.js': `// Live PTYs. Three of the projects below own at least one, so UnreadRail
 // renders a row per project and CollapsedRailApp has avatars to show.
 export const MOCK_ACTIVE_PTY_IDS = new Set([
   'sess-001', 'sess-004', 'sess-006', 'sess-003', 'sess-term',
@@ -271,24 +273,31 @@ window.__sb = {
     store.attentionProject = findSession(session.sessionId)?.project.projectPath || null;
   },
 
-  search(query, titlesOnly) {
+  // The demo has no FTS index, but it answers the same question the app does:
+  // session titles, plus the projects the query names.
+  search(query) {
     const q = String(query || '').toLowerCase();
     const ids = new Set();
-    const paths = new Set();
     for (const p of store.projects) {
-      if (!titlesOnly && p.projectPath.toLowerCase().includes(q)) paths.add(p.projectPath);
       for (const s of p.sessions) {
         const haystack = `${s.name || ''} ${s.aiTitle || ''}`.toLowerCase();
         if (haystack.includes(q)) ids.add(s.sessionId);
       }
     }
     store.searchMatchIds = ids;
-    store.searchMatchProjectPaths = paths;
+    store.searchMatchProjectPaths = matchProjectPaths(store.projects, query);
   },
 
   clearSearch() {
     store.searchMatchIds = null;
     store.searchMatchProjectPaths = null;
+  },
+
+  // Spotlight's Enter on a project. The demo cannot spawn a PTY, so it does
+  // the nearest honest thing: opens the project's most recent session.
+  quickNewSession(project) {
+    const latest = (project?.sessions || [])[0];
+    if (latest) window.__sb.openSession(latest);
   },
 
   toggleGridView() { store.gridViewActive = !store.gridViewActive; },

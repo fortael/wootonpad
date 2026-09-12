@@ -16,7 +16,7 @@
       :session-busy-state="store.sessionBusyState"
       :attention-sessions="store.attentionSessions"
       :response-ready-sessions="store.responseReadySessions"
-      :search-match-ids="store.searchMatchIds"
+      :search-match-ids="project._projectMatched ? null : store.searchMatchIds"
       :show-archived="store.showArchived"
       :show-starred-only="store.showStarredOnly"
       :show-running-only="store.showRunningOnly"
@@ -70,15 +70,20 @@ const visibleProjects = computed(() => {
   let projects = store.projects;
 
   if (store.searchMatchIds !== null) {
-    // Search: show all projects that match by session or by project name
+    // Search: show every project that matches by session title or by its own
+    // name. A project that matched by name keeps all of its sessions — the
+    // query named the project, so the whole project is the result; trimming it
+    // to the sessions whose titles happen to contain the same string would
+    // answer a question nobody asked.
     projects = projects
       .map(p => {
         const hasMatchingSessions = p.sessions.some(s => store.searchMatchIds.has(s.sessionId));
-        const projectMatched = store.searchMatchProjectPaths?.has(p.projectPath);
+        const projectMatched = !!store.searchMatchProjectPaths?.has(p.projectPath);
         if (!hasMatchingSessions && !projectMatched) return null;
         return {
           ...p,
-          sessions: hasMatchingSessions ? p.sessions.filter(s => store.searchMatchIds.has(s.sessionId)) : [],
+          sessions: projectMatched ? p.sessions : p.sessions.filter(s => store.searchMatchIds.has(s.sessionId)),
+          _projectMatched: projectMatched,
           _projectMatchedOnly: projectMatched && !hasMatchingSessions,
         };
       })

@@ -1,0 +1,252 @@
+/* ═══════════════════════════════════════════════════════════════════
+   Spotlight — the ⌘K command palette (SpotlightApp.vue)
+
+   Ported from design/components/core/Spotlight.jsx: dimmed, blurred
+   backdrop, a 640px panel anchored near the top (11vh — it is a jump-to
+   tool, not a dialog, so it does not sit dead centre), one large input,
+   sectioned rows, a key-legend footer.
+
+   Load order: after public/style.css (tokens) and css/controls.css.
+   ═══════════════════════════════════════════════════════════════════ */
+
+.sbx-spotlight {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 11vh var(--space-5) var(--space-5);
+  background: var(--surface-overlay);
+  /* The blur is the point: it says the app is still there and still yours,
+     which a flat scrim does not. */
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  animation: sbx-spotlight-in var(--duration-fast) var(--ease-standard);
+}
+
+@keyframes sbx-spotlight-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.sbx-spotlight__panel {
+  width: 640px;
+  max-width: 100%;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-modal);
+  font-family: var(--font-ui);
+}
+
+/* ── Input ───────────────────────────────────────────────────────── */
+
+.sbx-spotlight__field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.sbx-spotlight__field .sb-icon {
+  flex: none;
+}
+
+.sbx-spotlight__input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  padding: 0;
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+}
+
+.sbx-spotlight__input::placeholder {
+  color: var(--text-disabled);
+}
+
+/* ── Rows ────────────────────────────────────────────────────────── */
+
+.sbx-spotlight__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: var(--space-2);
+}
+
+/* The separator the sections read as: a heading with a rule above it, so
+   Projects and Sessions are two lists rather than one long one. */
+.sbx-spotlight__section {
+  padding: var(--space-3) var(--space-3) var(--space-1);
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  font-weight: var(--weight-semibold);
+  color: var(--text-disabled);
+}
+
+.sbx-spotlight__section:not(:first-child) {
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  padding-top: var(--space-3);
+}
+
+.sbx-spotlight__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.sbx-spotlight__row.is-active {
+  background: var(--surface-card-hover);
+}
+
+/* Cursor bar. On the row rather than a separate element so it cannot fall out
+   of step with the highlight. */
+.sbx-spotlight__row.is-active::before {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 9px;
+  bottom: 9px;
+  width: 2px;
+  border-radius: var(--radius-full);
+  background: var(--orange-500);
+}
+
+.sbx-spotlight__avatar {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  color: var(--white);
+}
+
+.sbx-spotlight__avatar:is(img) {
+  display: block;
+  object-fit: cover;
+}
+
+.sbx-spotlight__avatar--plan {
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+}
+
+.sbx-spotlight__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sbx-spotlight__title {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sbx-spotlight__sub {
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sbx-spotlight__dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: var(--radius-full);
+  background: var(--status-idle);
+}
+
+.sbx-spotlight__dot.is-running { background: var(--status-running); }
+.sbx-spotlight__dot.is-busy { background: var(--blue-500); }
+.sbx-spotlight__dot.is-attention { background: var(--orange-500); }
+
+.sbx-spotlight__meta {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-disabled);
+  white-space: nowrap;
+}
+
+.sbx-spotlight__empty {
+  padding: var(--space-6) var(--space-3);
+  text-align: center;
+  font-size: var(--text-xs);
+  color: var(--text-disabled);
+}
+
+/* ── Footer legend ───────────────────────────────────────────────── */
+
+.sbx-spotlight__footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-panel-raised);
+  font-size: var(--text-2xs);
+  color: var(--text-disabled);
+}
+
+.sbx-spotlight__hint {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.sbx-spotlight__spacer {
+  flex: 1;
+}
+
+.sbx-spotlight__kbd {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-style: normal;
+  line-height: 1.4;
+  color: var(--text-tertiary);
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  padding: 1px var(--space-1);
+}
+
+/* Narrow windows: the panel takes the width it is given and the legend drops
+   to what still fits. */
+@media (max-width: 720px) {
+  .sbx-spotlight {
+    padding: 8vh var(--space-3) var(--space-3);
+  }
+  .sbx-spotlight__footer .sbx-spotlight__hint:nth-child(3) {
+    display: none;
+  }
+}

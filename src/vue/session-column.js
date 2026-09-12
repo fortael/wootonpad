@@ -123,6 +123,59 @@ export function wantsAttention(state) {
   return { waiting, done };
 }
 
+/**
+ * The unread rail's contents: one entry per session that wants something,
+ * flattened out of the projects and ordered as a worklist.
+ *
+ * Deliberately built on `wantsAttention` rather than on a second reading of the
+ * collections, because the dock badge counts exactly this. The rail used to
+ * show one entry per project with a *live PTY* — a different question with a
+ * different answer — so the badge could read 1 with nothing on the rail
+ * explaining it, which is the confusion this replaces.
+ *
+ * One entry per session, never stacked: two sessions of the same project both
+ * waiting are two things to answer, and a badge reading "2" on one avatar
+ * says which project but not which session.
+ *
+ * @param {Array<{projectPath: string, sessions: Array<object>}>} projects
+ * @param {SessionState} state
+ * @returns {Array<{sessionId: string, projectPath: string, project: string,
+ *                  status: 'waiting'|'done', modified: string|null}>}
+ */
+export function unreadSessions(projects, state) {
+  const { waiting, done } = wantsAttention(state);
+  if (!waiting.length && !done.length) return [];
+
+  // done after waiting, so a session in both lists is recorded as waiting —
+  // matching columnOf's precedence, where blocked outranks finished.
+  const status = new Map();
+  for (const id of done) status.set(id, 'done');
+  for (const id of waiting) status.set(id, 'waiting');
+
+  const out = [];
+  for (const project of projects || []) {
+    const name = project.projectPath?.split('/').filter(Boolean).pop() || project.projectPath || '';
+    for (const session of project.sessions || []) {
+      const lane = status.get(session?.sessionId);
+      if (!lane) continue;
+      out.push({
+        sessionId: session.sessionId,
+        projectPath: project.projectPath,
+        project: name,
+        status: lane,
+        modified: session.modified || null,
+        session,
+      });
+    }
+  }
+
+  // Waiting first — it is the only state that cannot progress without you —
+  // then most recent within each band.
+  return out.sort((a, b) =>
+    OPEN_ORDER[a.status] - OPEN_ORDER[b.status]
+    || (new Date(b.modified || 0).getTime() || 0) - (new Date(a.modified || 0).getTime() || 0));
+}
+
 /** The worst lane anything in this list is in — a project's status in one word. */
 export function worstColumn(sessions, state) {
   let worst = 'idle';

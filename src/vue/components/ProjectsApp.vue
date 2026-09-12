@@ -199,6 +199,7 @@ import { ref, reactive, computed, onMounted } from 'vue';
 import ProjectAvatar from './ProjectAvatar.vue';
 import FilterTabs from './FilterTabs.vue';
 import SbIcon from './SbIcon.vue';
+import { matchProjectPaths } from '../project-search.js';
 
 const props = defineProps({
   callbacks: { type: Object, required: true },
@@ -243,14 +244,12 @@ function scheduleInfoFlush() {
 const WORKTREE_RE = /\/\.claude\/worktrees\/[^/]+\/?$/;
 
 const filteredProjects = computed(() => {
-  const q = searchQuery.value.trim().toLowerCase();
+  const q = searchQuery.value.trim();
   const base = projects.value.filter(p => !WORKTREE_RE.test(p.projectPath));
-  let list = q
-    ? base.filter(p => {
-        const name = p.projectPath.split('/').filter(Boolean).pop() || '';
-        return name.toLowerCase().includes(q) || p.projectPath.toLowerCase().includes(q);
-      })
-    : [...base];
+  // Name or folder, decided by the same matcher the sessions list and the
+  // board use — one rule for "this project matches", wherever it is asked.
+  const matched = q ? matchProjectPaths(base, q) : null;
+  let list = matched ? base.filter(p => matched.has(p.projectPath)) : [...base];
 
   if (sortOrder.value === 'name') {
     list.sort((a, b) => {

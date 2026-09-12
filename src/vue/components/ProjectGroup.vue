@@ -179,6 +179,10 @@ const worktreeName = computed(() => {
 // truthy, so every group mounted collapsed and the heuristic never ran.
 function initialCollapsed() {
   if (props.project._projectMatchedOnly) return true;
+  // A name match with session hits inside it arrives with searchMatchIds null
+  // — the list already picked the sessions (SidebarApp) — so the flag, not the
+  // match set, is what says "this group is a search result, open it".
+  if (props.project._projectMatched) return false;
   if (props.searchMatchIds || props.showStarredOnly || props.showRunningOnly) return false;
   const sessions = props.project.sessions || [];
   if (sessions.length === 0) return false;

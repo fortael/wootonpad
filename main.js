@@ -1193,21 +1193,48 @@ ipcMain.handle('get-project-detail', (_event, projectPath) => {
         return { hash, message, author, date };
       });
     }
+    // The upstream first, and on its own. It used to be read *after* the
+    // unpushed log inside the same try, so when that log threw it took the
+    // upstream and the remote URL down with it.
     try {
-      const unpushed = sh(['git', 'log', '--format=%h\x1f%s\x1f%an\x1f%ar', '@{u}..HEAD'], { timeout: 5000 });
-      if (unpushed) {
-        detail.unpushedCommits = unpushed.split('\n').filter(Boolean).map(line => {
-          const [hash, message, author, date] = line.split('\x1f');
-          return { hash, message, author, date };
-        });
-      }
-      const upstream = sh(['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], { timeout: 3000 });
-      detail.upstream = upstream;
-      const remoteName = upstream.split('/')[0];
+      detail.upstream = sh(['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], { timeout: 3000 });
+      const remoteName = detail.upstream.split('/')[0];
       try {
         detail.remoteUrl = sh(['git', 'remote', 'get-url', remoteName], { timeout: 3000 });
       } catch {}
-    } catch {} // no upstream set — just leave empty
+    } catch {} // no upstream configured for this branch
+
+    // What is here and is not on the remote.
+    //
+    // `@{u}..HEAD` is the precise question and was the only one asked — but it
+    // fails outright on a branch with no upstream, which is every branch
+    // before its first push. The page then reported zero unpushed commits for
+    // a branch on which every commit was unpushed.
+    //
+    // Without an upstream the honest answer is everything no remote branch can
+    // reach, which is what `git push -u` would send. Only when there is a
+    // remote to compare against, though: in a repository with none, that range
+    // is the entire history, and "you have 4000 commits to push" is not an
+    // answer to anything.
+    let unpushedRange = null;
+    if (detail.upstream) {
+      unpushedRange = ['@{u}..HEAD'];
+    } else {
+      try {
+        if (sh(['git', 'remote'], { timeout: 3000 })) unpushedRange = ['HEAD', '--not', '--remotes'];
+      } catch {}
+    }
+    if (unpushedRange) {
+      try {
+        const unpushed = sh(['git', 'log', '--format=%h\x1f%s\x1f%an\x1f%ar', ...unpushedRange], { timeout: 5000 });
+        if (unpushed) {
+          detail.unpushedCommits = unpushed.split('\n').filter(Boolean).map(line => {
+            const [hash, message, author, date] = line.split('\x1f');
+            return { hash, message, author, date };
+          });
+        }
+      } catch {}
+    }
     // Always try origin as fallback even without upstream
     if (!detail.remoteUrl) {
       try {

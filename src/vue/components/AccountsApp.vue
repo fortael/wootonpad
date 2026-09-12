@@ -7,11 +7,15 @@
       <header class="sbx-block__head">
         <SbIcon name="users" :size="13" tone="muted" />
         <span class="sbx-block__title">Accounts</span>
-        <span class="sbx-block__count">{{ accounts.length }}</span>
+        <span class="sbx-block__count">{{ visibleAccounts.length }}</span>
       </header>
       <div class="sbx-block__body sbx-block__body--scroll">
+        <!-- Same hint box the projects tab uses for the same situation. -->
+        <div v-if="searchQuery && !visibleAccounts.length" class="projects-empty-hint">
+          No accounts match “{{ searchQuery }}”.
+        </div>
         <div
-          v-for="acc in accounts"
+          v-for="acc in visibleAccounts"
           :key="acc.id"
           class="session-item account-item"
           :class="{ active: acc.id === activeAccountId, 'account-item--selected': acc.id === store.accountViewerId }"
@@ -138,7 +142,7 @@
 </template>
 
 <script setup>
-import { ref, nextTick } from 'vue';
+import { ref, computed, nextTick } from 'vue';
 import { store } from '../store.js';
 import SbIcon from './SbIcon.vue';
 
@@ -147,6 +151,19 @@ const props = defineProps({
 });
 
 const accounts = ref([]);
+const searchQuery = ref('');
+
+// An account is a name over a config directory, and both are on the row — so
+// both are what the command bar searches here. Nothing else about an account
+// is text.
+const visibleAccounts = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase();
+  if (!q) return accounts.value;
+  return accounts.value.filter(acc =>
+    String(acc.name || '').toLowerCase().includes(q)
+    || String(acc.configDir || '').toLowerCase().includes(q)
+  );
+});
 const activeAccountId = ref('default');
 const usage = ref({});
 const editingId = ref(null);
@@ -263,6 +280,7 @@ defineExpose({
   },
   setActiveAccount(id) { activeAccountId.value = id; },
   setUsage(usageObj) { usage.value = { ...usageObj }; },
+  setSearch(q) { searchQuery.value = q || ''; },
 });
 
 const editSvg = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';

@@ -6,7 +6,8 @@
 :root {
   --rail-width: 56px;
   /* The mockup says 52px. 42 keeps the nav subordinate to the work area
-     without cramping it, and sits just under the 46px session header. */
+     without cramping it, and stays below the session header
+     (--sbx-sesshead-h, css/session-view.css). */
   --topnav-height: 42px;
 }
 

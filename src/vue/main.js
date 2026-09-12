@@ -3,9 +3,14 @@ import { store } from './store.js';
 import App from './components/App.vue';
 import ViewerContentApp from './components/ViewerContentApp.vue';
 import SdkGridCard from './components/SdkGridCard.vue';
+import { matchProjectPaths } from './project-search.js';
 
 // Expose store for direct mutation from app.js
 window.vueStore = store;
+
+// app.js runs the sessions-tab search and needs the same project matcher the
+// board uses — it is not a module, so it reads this.
+window.sbMatchProjectPaths = matchProjectPaths;
 
 // Status writes go straight in, and deliberately so.
 //

@@ -33,7 +33,7 @@
         </p>
 
         <!-- The demo below renders the app's own components (TopNavApp,
-             CommandBar, AttentionRail, FilterTabs, SidebarApp,
+             CommandBar, UnreadRail, FilterTabs, SidebarApp,
              SessionHeaderApp, SessionPanelRail, SessionSidePanelApp,
              SessionBoardApp …) inside App.vue's wrapper markup, driven by
              mock-data.js. Change a component in src/vue/components and this
@@ -83,10 +83,10 @@
                 <CommandBar
                   :model-value="store.searchQuery"
                   :placeholder="searchPlaceholder"
-                  add-title="Add project"
+                  add-title="Quick open"
                   @update:model-value="onSearchValue"
-                  @add="onAddProject"
-                  @spotlight="focusSearch"
+                  @add="openSpotlight"
+                  @spotlight="openSpotlight"
                 >
                   <template #field-actions>
                     <button
@@ -96,25 +96,17 @@
                       aria-label="Clear search"
                       @click="doClearSearch"
                     >&times;</button>
-                    <button
-                      type="button"
-                      class="sbx-commandbar__chip"
-                      :class="{ 'is-active': store.searchTitlesOnly }"
-                      data-tooltip="Search titles only"
-                      aria-label="Search titles only"
-                      @click="toggleTitlesOnly"
-                    >Tt</button>
                   </template>
                 </CommandBar>
 
                 <!-- Not scoped to the sessions tab any more: live sessions are
                      worth watching from wherever you are. The board is the one
                      exception — it already shows every one of them as a card. -->
-                <AttentionRail
+                <UnreadRail
                   v-if="store.activeTab !== 'board'"
-                  :items="attentionProjects"
-                  :active-name="attentionActiveName"
-                  @select="onSelectAttentionName"
+                  :items="unreadRows"
+                  :active-session-id="store.activeSessionId || ''"
+                  @select="onSelectUnread"
                 />
 
                 <!-- Shared with the board: same sessions, same filter flags. -->
@@ -443,6 +435,10 @@
       </div>
     </section>
 
+    <!-- The ⌘K palette. Same component the app mounts; landing.css keeps its
+         backdrop inside the demo window instead of over the whole page. -->
+    <SpotlightApp to=".lp-app-window" />
+
     <!-- Tooltip element (matches public/style.css #app-tooltip) -->
     <div id="app-tooltip"></div>
 
@@ -472,9 +468,11 @@ import TopNavApp from '../vue/components/TopNavApp.vue';
 import CollapsedRailApp from '../vue/components/CollapsedRailApp.vue';
 import CommandBar from '../vue/components/CommandBar.vue';
 import FilterTabs from '../vue/components/FilterTabs.vue';
-import AttentionRail from '../vue/components/AttentionRail.vue';
+import UnreadRail from '../vue/components/UnreadRail.vue';
+import { unreadSessions, stateFromStore } from '../vue/session-column.js';
 import SidebarApp from '../vue/components/SidebarApp.vue';
 import SessionHeaderApp from '../vue/components/SessionHeaderApp.vue';
+import SpotlightApp from '../vue/components/SpotlightApp.vue';
 import SessionPanelRail from '../vue/components/SessionPanelRail.vue';
 import SessionSidePanelApp from '../vue/components/SessionSidePanelApp.vue';
 import SessionBoardApp from '../vue/components/SessionBoardApp.vue';
@@ -590,12 +588,15 @@ function syncPanelToWidth() {
   }
 }
 
+// Same wording the app uses — each tab names the fields it searches, because
+// there is no modifier on the field to explain them.
 const searchPlaceholder = computed(() => {
   switch (store.activeTab) {
-    case 'plans': return 'Search plans...';
-    case 'projects': return 'Search projects…';
-    case 'board': return 'Search the board...';
-    default: return 'Search sessions...';
+    case 'plans': return 'Search plans by title or text…';
+    case 'projects': return 'Search projects by name or folder…';
+    case 'accounts': return 'Search accounts by name or folder…';
+    case 'board': return 'Search the board by session or project…';
+    default: return 'Search sessions by title or project…';
   }
 });
 
@@ -608,7 +609,7 @@ function onSearchValue(value) {
     searchDebounceTimer = null;
     const query = store.searchQuery.trim();
     if (!query) { doClearSearch(); return; }
-    window.__sb?.search?.(query, store.searchTitlesOnly);
+    window.__sb?.search?.(query);
   }, 200);
 }
 
@@ -618,16 +619,7 @@ function doClearSearch() {
   window.__sb?.clearSearch?.();
 }
 
-function focusSearch() {
-  document.querySelector('.lp-app-window .sbx-commandbar__input')?.focus();
-}
-
-function toggleTitlesOnly() {
-  store.searchTitlesOnly = !store.searchTitlesOnly;
-  if (store.searchQuery.trim()) {
-    window.__sb?.search?.(store.searchQuery.trim(), store.searchTitlesOnly);
-  }
-}
+function openSpotlight() { store.spotlightOpen = true; }
 
 // ── Theme ────────────────────────────────────────────────────────
 // The app mirrors this onto <html data-theme>; the landing scopes it to the
@@ -665,13 +657,12 @@ const attentionProjects = computed(() => {
   return out.sort((a, b) => ATTENTION_ORDER[a.status] - ATTENTION_ORDER[b.status]);
 });
 
-const attentionActiveName = computed(() =>
-  attentionProjects.value.find(p => p.projectPath === store.attentionProject)?.name || ''
-);
+// Same set the app's rail shows — one entry per unread session, from the
+// mock store rather than a live one.
+const unreadRows = computed(() => unreadSessions(store.projects, stateFromStore(store)));
 
-function onSelectAttentionName(name) {
-  const hit = attentionProjects.value.find(p => p.name === name);
-  if (hit) onSelectAttentionProject(hit.projectPath);
+function onSelectUnread(session) {
+  if (session?.projectPath) onSelectAttentionProject(session.projectPath);
 }
 
 function onSelectAttentionProject(projectPath) {
@@ -720,8 +711,6 @@ function onViewMode(mode) {
 // ── Sidebar action callbacks (identical shape to App.vue) ────────
 function onGlobalSettings() { window.__sb?.openGlobalSettings?.(); }
 function onResort() { window.__sb?.resort?.(); }
-function onAddProject() { window.__sb?.addProject?.(); }
-
 // Per-session actions are not here: SessionMenu calls window.__sb directly, so
 // the list only forwards what the rows themselves still do. Same five App.vue
 // passes — keep them in step.

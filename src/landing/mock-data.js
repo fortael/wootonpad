@@ -3,7 +3,7 @@ const mins = (n) => new Date(now - n * 60 * 1000).toISOString();
 const hours = (n) => new Date(now - n * 60 * 60 * 1000).toISOString();
 const days = (n) => new Date(now - n * 24 * 60 * 60 * 1000).toISOString();
 
-// Live PTYs. Three of the projects below own at least one, so AttentionRail
+// Live PTYs. Three of the projects below own at least one, so UnreadRail
 // renders a row per project and CollapsedRailApp has avatars to show.
 export const MOCK_ACTIVE_PTY_IDS = new Set(['sess-001', 'sess-004', 'sess-006', 'sess-003', 'sess-term']);
 // One project per rail status: wooton-pad waits on input, my-api is working,

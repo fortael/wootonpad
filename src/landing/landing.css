@@ -289,6 +289,18 @@ html, body {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* The ⌘K palette teleports into .lp-app-window here rather than into <body>,
+   so it dims the demo and not the marketing page around it. `fixed` would
+   ignore that and cover the viewport, so inside the demo it is absolute. */
+.lp-app-window .sbx-spotlight {
+  position: absolute;
+  padding: 8% var(--space-4) var(--space-4);
+}
+
+.lp-app-window .sbx-spotlight__panel {
+  width: 520px;
+}
+
 /* App window frame */
 .lp-app-window {
   position: relative;

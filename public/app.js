@@ -450,7 +450,7 @@ function refreshSidebar({ resort = false } = {}) {
 }
 
 // --- Search & filter handlers moved to App.vue ---
-// App.vue calls window.__sb.search(query, titlesOnly) and window.__sb.clearSearch()
+// App.vue calls window.__sb.search(query) and window.__sb.clearSearch()
 // App.vue calls window.__sb.onFilterChange(filters) for filter toggles
 
 function clearSearch() {
@@ -465,6 +465,8 @@ function clearSearch() {
   } else if (activeTab === 'projects') {
     projectsSearchQuery = '';
     window.vueProjects?.setSearch('');
+  } else if (activeTab === 'accounts') {
+    window.vueAccounts?.setSearch('');
   }
 }
 
@@ -1349,6 +1351,12 @@ window.__sb = {
     searchMatchIds = null;
     searchMatchProjectPaths = null;
     window.vueSidebar?.setSearch(null, null);
+    // App.vue empties the field on a tab switch; the two tabs that filter
+    // their own list from a local copy of the query have to hear about it, or
+    // they keep filtering by a query no longer on screen.
+    projectsSearchQuery = '';
+    window.vueProjects?.setSearch('');
+    window.vueAccounts?.setSearch('');
     saveUiState({ sidebarTab: tabName });
 
     // Not every branch below routes through hideAllViewers() (the sessions tab
@@ -1413,30 +1421,32 @@ window.__sb = {
     refreshSidebar({ resort: true });
   },
 
-  async search(query, titlesOnly) {
+  // What each tab searches is fixed per tab — there is no modifier on the
+  // field. Sessions and the board match a session's own title and the name of
+  // the project holding it; plans match their title and their text; projects
+  // and accounts match the name and the folder on the row.
+  async search(query) {
     const tab = activeTab;
     try {
       if (tab === 'sessions') {
-        const results = await window.api.search('session', query, titlesOnly);
+        // Titles only. A transcript hit puts a row on screen whose visible text
+        // has nothing to do with the query, which reads as a wrong result.
+        const results = await window.api.search('session', query, true);
         searchMatchIds = new Set(results.map(r => r.id));
-        searchMatchProjectPaths = null;
-        if (titlesOnly) {
-          const matchProjects = new Set();
-          for (const r of results) {
-            const s = sessionMap.get(r.id);
-            if (s?.projectPath) matchProjects.add(s.projectPath);
-          }
-          searchMatchProjectPaths = matchProjects;
-        }
+        // The index has no rows for projects — see src/vue/project-search.js.
+        searchMatchProjectPaths = window.sbMatchProjectPaths?.(cachedAllProjects, query) || null;
         window.vueSidebar?.setSearch(searchMatchIds, searchMatchProjectPaths);
         refreshSidebar({ resort: true });
       } else if (tab === 'plans') {
-        const results = await window.api.search('plan', query, titlesOnly);
+        // A plan is one document; its body is the thing worth finding in it.
+        const results = await window.api.search('plan', query, false);
         const matchIds = new Set(results.map(r => r.id));
         renderPlans(window.cachedPlans.filter(p => matchIds.has(p.filename)));
       } else if (tab === 'projects') {
         projectsSearchQuery = query;
         window.vueProjects?.setSearch(query);
+      } else if (tab === 'accounts') {
+        window.vueAccounts?.setSearch(query);
       }
     } catch {
       if (tab === 'sessions') {
@@ -1594,6 +1604,19 @@ window.__sb = {
 
   newSession: (project, anchorEl) => {
     if (typeof showNewSessionPopover === 'function') showNewSessionPopover(project, anchorEl);
+  },
+
+  // Spotlight's Enter on a project. The popover asks Claude / Claude with
+  // config / Terminal; picking a project in the palette has already answered
+  // the question the palette was opened to answer, so this takes the popover's
+  // first button directly. The other two stay on the project header's +.
+  quickNewSession: async (project) => {
+    if (!project?.projectPath) return;
+    window.vueApp?.setTab?.('sessions');
+    const options = typeof resolveDefaultSessionOptions === 'function'
+      ? await resolveDefaultSessionOptions(project)
+      : undefined;
+    launchNewSession(project, options);
   },
 
   openSettings: (path) => openSettingsViewer('project', path),

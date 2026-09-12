@@ -36,10 +36,10 @@
     <CommandBar
       :model-value="store.searchQuery"
       :placeholder="searchPlaceholder"
-      add-title="Add project"
+      :add-title="`Quick open (${modLabel}K)`"
       @update:model-value="onSearchValue"
-      @add="onAddProject"
-      @spotlight="focusSearch"
+      @add="openSpotlight"
+      @spotlight="openSpotlight"
     >
       <template #field-actions>
         <button
@@ -49,14 +49,6 @@
           aria-label="Clear search"
           @click="doClearSearch"
         >&times;</button>
-        <button
-          type="button"
-          class="sbx-commandbar__chip"
-          :class="{ 'is-active': store.searchTitlesOnly }"
-          data-tooltip="Search titles only"
-          aria-label="Search titles only"
-          @click="toggleTitlesOnly"
-        >Tt</button>
       </template>
     </CommandBar>
 
@@ -64,11 +56,11 @@
          wherever you are. Renders nothing when nothing is running. The board
          is the exception — it already shows every live session as a card, so
          a rail of the same projects above it is noise. -->
-    <AttentionRail
+    <UnreadRail
       v-if="store.activeTab !== 'board'"
-      :items="attentionProjects"
-      :active-name="attentionActiveName"
-      @select="onSelectAttentionName"
+      :items="unreadRows"
+      :active-session-id="store.activeSessionId || ''"
+      @select="openUnread"
     />
 
     <!-- Shared with the board: its cards are the same sessions under the same
@@ -221,6 +213,8 @@
 
   <!-- Dialogs (overlays + popover, rendered via Teleport to body inside the component) -->
   <DialogsApp ref="dialogsRef" />
+
+  <SpotlightApp />
 </template>
 
 <script setup>
@@ -231,7 +225,7 @@ import TopNavApp from './TopNavApp.vue';
 import CollapsedRailApp from './CollapsedRailApp.vue';
 import CommandBar from './CommandBar.vue';
 import FilterTabs from './FilterTabs.vue';
-import AttentionRail from './AttentionRail.vue';
+import UnreadRail from './UnreadRail.vue';
 import SidebarApp from './SidebarApp.vue';
 import SessionHeaderApp from './SessionHeaderApp.vue';
 import SessionSidePanelApp from './SessionSidePanelApp.vue';
@@ -239,7 +233,8 @@ import SessionPanelRail from './SessionPanelRail.vue';
 import SessionSdkApp from './SessionSdkApp.vue';
 import { loadSidePanelTab } from '../side-panel-tabs.js';
 import { isPlainTerminal } from '../session-filter.js';
-import { OPEN_ORDER, mostUrgent, worstColumn, wantsAttention, stateFromStore } from '../session-column.js';
+import { matchProjectPaths } from '../project-search.js';
+import { OPEN_ORDER, mostUrgent, worstColumn, wantsAttention, unreadSessions, stateFromStore } from '../session-column.js';
 import { parseRateLimitEvent } from '../rate-limits.js';
 import PlansApp from './PlansApp.vue';
 import AccountsApp from './AccountsApp.vue';
@@ -255,6 +250,7 @@ import SessionBoardApp from './SessionBoardApp.vue';
 import BoardSidebarApp from './BoardSidebarApp.vue';
 import ViewerContentApp from './ViewerContentApp.vue';
 import DialogsApp from './DialogsApp.vue';
+import SpotlightApp from './SpotlightApp.vue';
 
 // ── Template refs ────────────────────────────────────────────────
 const plansRef = ref(null);
@@ -329,12 +325,16 @@ const boardSplitActive = computed(() =>
 
 const sessionListVisible = computed(() => store.activeTab === 'sessions');
 
+// Each tab searches what it shows, and the placeholder says which fields —
+// there is no modifier on the field any more, so the rule has to be readable
+// from the bar itself.
 const searchPlaceholder = computed(() => {
   switch (store.activeTab) {
-    case 'plans': return 'Search plans...';
-    case 'projects': return 'Search projects…';
-    case 'board': return 'Search the board...';
-    default: return 'Search sessions...';
+    case 'plans': return 'Search plans by title or text…';
+    case 'projects': return 'Search projects by name or folder…';
+    case 'accounts': return 'Search accounts by name or folder…';
+    case 'board': return 'Search the board by session or project…';
+    default: return 'Search sessions by title or project…';
   }
 });
 
@@ -348,7 +348,7 @@ function onSearchValue(value) {
     const query = store.searchQuery.trim();
     if (!query) { doClearSearch(); return; }
     if (store.activeTab === 'board') { runBoardSearch(query); return; }
-    window.__sb?.search?.(query, store.searchTitlesOnly);
+    window.__sb?.search?.(query);
   }, 200);
 }
 
@@ -358,15 +358,21 @@ function onSearchValue(value) {
 // store.searchMatchIds through the same bridge app.js uses, which is what the
 // board's filterSessions() call already reads.
 let boardSearchIds = null;
+let boardSearchProjectPaths = null;
 
 async function runBoardSearch(query) {
+  // Session titles only: the board is a set of cards labelled by title, and a
+  // hit somewhere in a transcript leaves a card on screen with nothing on it
+  // to say why. Project names come from the list, which the index has no rows
+  // for — see project-search.js.
   try {
-    const results = await window.api.search('session', query, store.searchTitlesOnly);
+    const results = await window.api.search('session', query, true);
     boardSearchIds = new Set(results.map(r => r.id));
   } catch {
     boardSearchIds = null;
   }
-  window.vueSidebar?.setSearch(boardSearchIds, null);
+  boardSearchProjectPaths = matchProjectPaths(store.projects, query);
+  window.vueSidebar?.setSearch(boardSearchIds, boardSearchProjectPaths);
 }
 
 // app.js re-asserts its own (null) search set on every refreshSidebar, and
@@ -376,29 +382,22 @@ async function runBoardSearch(query) {
 watch(() => store.searchMatchIds, (ids) => {
   if (ids === null && boardSearchIds && store.activeTab === 'board' && store.searchQuery.trim()) {
     store.searchMatchIds = boardSearchIds;
+    store.searchMatchProjectPaths = boardSearchProjectPaths;
   }
 });
 
 function doClearSearch() {
   store.searchQuery = '';
   boardSearchIds = null;
+  boardSearchProjectPaths = null;
   if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
   window.__sb?.clearSearch?.();
 }
 
-// No command palette yet — the ⌘K chip parks focus in the search field.
-function focusSearch() {
-  document.querySelector('.sbx-commandbar__input')?.focus();
-}
-
-async function toggleTitlesOnly() {
-  store.searchTitlesOnly = !store.searchTitlesOnly;
-  await window.api?.setSetting('searchTitlesOnly', store.searchTitlesOnly);
-  const query = store.searchQuery.trim();
-  if (!query) return;
-  if (store.activeTab === 'board') runBoardSearch(query);
-  else window.__sb?.search?.(query, store.searchTitlesOnly);
-}
+// The command palette. The sidebar field filters the tab you are on; this
+// crosses all of them — see SpotlightApp.vue.
+const modLabel = /Mac|iPhone|iPad/.test(navigator.platform) ? '\u2318' : 'Ctrl+';
+function openSpotlight() { store.spotlightOpen = true; }
 
 // ── Theme ────────────────────────────────────────────────────────
 // Mirrored onto <html data-theme> — public/css/theme-light.css keys off it.
@@ -513,17 +512,18 @@ watch(
 // `ui_state` and the round trip to SQLite; this only reports the change.
 watch(() => store.highlightFresh, (on) => window.__sb?.setHighlightFresh?.(on));
 
-// AttentionRail addresses entries by display name; the rail and the store
-// speak projectPath.
-const attentionActiveName = computed(() =>
-  attentionProjects.value.find(p => p.projectPath === store.attentionProject)?.name || ''
-);
+// ── Unread rail ──────────────────────────────────────────────────
+//
+// The same set the dock badge counts — see unreadSessions() — so a badge
+// reading 1 always has exactly one avatar on the rail explaining it.
+const unreadRows = computed(() => unreadSessions(store.projects, stateFromStore(store)));
 
-function onSelectAttentionName(name) {
-  const hit = attentionProjects.value.find(p => p.name === name);
-  if (hit) onSelectAttentionProject(hit.projectPath);
+function openUnread(session) {
+  if (session) window.__sb?.openSession?.(session);
 }
 
+// The collapsed rail still addresses entries by display name; it and the store
+// speak projectPath.
 function onSelectAttentionProject(projectPath) {
   store.attentionProject = projectPath;
   // The rail is on every tab, so a click from Plans or Projects has to take
@@ -625,7 +625,8 @@ watch(sidePanelVisible, () => {
 // ── Sidebar action callbacks ──────────────────────────────────────
 function onGlobalSettings() { window.__sb?.openGlobalSettings?.(); }
 function onResort() { window.__sb?.resort?.(); }
-function onAddProject() { window.__sb?.addProject?.(); }
+// The command bar's + is parked (see CommandBar.vue) — adding a project is the
+// projects tab's own button now.
 
 // ── Component callbacks ───────────────────────────────────────────
 // Per-session actions are not here: SessionMenu calls window.__sb directly, so
@@ -695,6 +696,7 @@ onMounted(async () => {
     setAccounts: (list, id) => accountsRef.value?.setAccounts(list, id),
     setActiveAccount: (id) => accountsRef.value?.setActiveAccount(id),
     setUsage: (usage) => accountsRef.value?.setUsage(usage),
+    setSearch: (q) => accountsRef.value?.setSearch(q),
   });
   Object.assign(window.vueAccountDropdown, {
     setAccounts: (list, id, usage) => accountDropdownRef.value?.setAccounts(list, id, usage),
@@ -771,10 +773,6 @@ onMounted(async () => {
     store.settingsOpen = false;
     window._restoreAfterSettings?.();
   };
-
-  // Restore persisted settings
-  const savedTitlesOnly = await window.api?.getSetting('searchTitlesOnly');
-  if (savedTitlesOnly) store.searchTitlesOnly = true;
 
   // Restore theme before anything paints a colour
   applyTheme(localStorage.getItem('theme'));

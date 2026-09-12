@@ -107,12 +107,16 @@ const board = computed(() => {
     if (store.boardProjectFilter && project.projectPath !== store.boardProjectFilter) continue;
     // Exactly what the sidebar list is showing — same filter module, same
     // flags. The board is the list in another shape, not a second dataset.
+    // A search that named this project selects all of it: the query picked the
+    // project, and cutting it down to the sessions whose titles carry the same
+    // string would hide most of what was asked for.
+    const projectMatched = !!store.searchMatchProjectPaths?.has(project.projectPath);
     const sessions = filterSessions(project.sessions, {
       showArchived: store.showArchived,
       showStarredOnly: store.showStarredOnly,
       showRunningOnly: store.showRunningOnly,
       showTodayOnly: store.showTodayOnly,
-      searchMatchIds: store.searchMatchIds,
+      searchMatchIds: projectMatched ? null : store.searchMatchIds,
       activePtyIds: store.activePtyIds,
       // The board sorts sessions by what their turn is doing. A plain shell
       // has no turn, so it would sit in IDLE forever saying nothing.

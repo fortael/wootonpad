@@ -60,7 +60,9 @@ export const store = reactive({
   loadingStatus: '',
   accountSwitching: false,
   searchQuery: '',
-  searchTitlesOnly: false,
+  // ⌘K palette — SpotlightApp.vue. Toggled from the shell (the + beside the
+  // search field, the ⌘K chip) as well as by the shortcut itself.
+  spotlightOpen: false,
 
   // The plan's 5-hour and 7-day meters, as last reported by a `rate_limit_event`
   // — see rate-limits.js. Per account rather than per session, which is why it

@@ -120,9 +120,14 @@
           </div>
 
           <div class="sbx-sidepanel__commit">
-            <div v-if="!detail?.upstream" class="sbx-sidepanel__gitmsg">No upstream branch — nothing to push to.</div>
+            <!-- Says what the push will do rather than refusing it: a branch
+                 with no upstream gets one — see git-push-target.js. -->
+            <div v-if="push.willSetUpstream && push.canPush" class="sbx-sidepanel__gitmsg">
+              Will set upstream to {{ push.label }}.
+            </div>
+            <div v-else-if="push.reason && !push.canPush" class="sbx-sidepanel__gitmsg">{{ push.reason }}</div>
             <div class="sbx-sidepanel__commitrow">
-              <span class="sbx-sidepanel__genlabel" :title="detail?.upstream || ''">{{ detail?.upstream || '—' }}</span>
+              <span class="sbx-sidepanel__genlabel" :title="push.label">{{ push.label }}</span>
               <span class="sbx-sidepanel__spacer"></span>
               <!-- Two-step rather than a modal: pushing publishes to a remote,
                    so it should not be one stray click, and a 380px column is
@@ -130,7 +135,7 @@
               <button
                 v-if="!confirmPush"
                 type="button" class="pv-action-btn"
-                :disabled="gitBusy || !detail?.upstream || !unpushedCommits.length"
+                :disabled="gitBusy || !push.canPush"
                 @click="confirmPush = true"
               >Push{{ unpushedCommits.length ? ` (${unpushedCommits.length})` : '' }}</button>
               <template v-else>
@@ -243,6 +248,7 @@ import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { store } from '../store.js';
 import SbIcon from './SbIcon.vue';
 import { TABS, setSidePanelTab } from '../side-panel-tabs.js';
+import { pushTarget } from '../git-push-target.js';
 
 const WIDTH_KEY = 'sessionSidePanelWidth';
 const MIN_WIDTH = 280;
@@ -286,6 +292,8 @@ const changedFiles = computed(() => detail.value?.changedFiles || []);
 const containers = computed(() => detail.value?.containers || []);
 const commits = computed(() => detail.value?.commits || []);
 const unpushedCommits = computed(() => detail.value?.unpushedCommits || []);
+// One source for the button's state and the line of text beside it.
+const push = computed(() => pushTarget(detail.value));
 // `commits` is the last 15 regardless of push state, so drop the ones already
 // listed above as unpushed instead of showing them twice.
 const pushedCommits = computed(() => {

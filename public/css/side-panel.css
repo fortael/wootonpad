@@ -6,7 +6,7 @@
    the session's projectPath, which may be a worktree with a branch of its
    own — which is why this is not the Projects tab.
 
-   Layout: absolutely positioned inside #terminal-area (below the 46px
+   Layout: absolutely positioned inside #terminal-area (below the
    session header) rather than a flex sibling of #terminals, because
    file-panel.js reparents #terminals into its own #terminal-split at
    startup. #terminal-split gets a matching right margin instead, so the
@@ -50,7 +50,7 @@
    something laid over the session rather than as the screen being cut in two. */
 .sbx-sidepanel {
   position: absolute;
-  top: calc(46px + var(--sbx-sidepanel-gap));   /* .sbx-sesshead + gutter */
+  top: calc(var(--sbx-sesshead-h) + var(--sbx-sidepanel-gap));   /* .sbx-sesshead + gutter */
   right: var(--sbx-sidepanel-gap);
   bottom: var(--sbx-sidepanel-gap);
   z-index: 5;
@@ -292,7 +292,7 @@
      the two boxes side by side and only a gutter apart, a one-pixel step
      between them reads as a broken line rather than as two things. Same top,
      same height as .sbx-sidepanel__head — they share a baseline. */
-  top: calc(46px + var(--sbx-sidepanel-gap) + 1px);
+  top: calc(var(--sbx-sesshead-h) + var(--sbx-sidepanel-gap) + 1px);
   right: var(--sbx-sidepanel-gap);
   height: var(--hit-md);
   z-index: 6;                                   /* above .sbx-sidepanel */

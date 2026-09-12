@@ -4596,13 +4596,16 @@ body.hide-avatars .grid-card-avatar {
 
 /* ── Project Viewer Panel ── */
 
+/* The same surface the board and every other main-area panel sits on. It was
+   --surface-app, the shell colour, which made the project page read as a hole
+   in the window rather than as one more page in it. */
 #project-viewer {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  background: var(--surface-app);
+  background: var(--surface-panel);
 }
 
 /* .pv-root fills #project-viewer and sets up the flex column chain */
