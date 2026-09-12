@@ -159,6 +159,10 @@ contextBridge.exposeInMainWorld('api', {
   // How many sessions want something, for the dock badge — and which ones are
   // blocked, so a newly blocked one can bounce the icon. See main.js.
   reportAttention: (summary) => ipcRenderer.send('attention-summary', summary),
+  // A whole prompt for an SDK session. `content` is a string, or the Messages
+  // API content blocks a prompt with a pasted image needs — see
+  // composer-attachments.js. `sendInput` above stays the PTY's channel.
+  sdkSendPrompt: (sessionId, content) => ipcRenderer.invoke('sdk-send-prompt', sessionId, content),
   sdkInterrupt: (sessionId) => ipcRenderer.invoke('sdk-interrupt', sessionId),
   sdkSetPermissionMode: (sessionId, mode) => ipcRenderer.invoke('sdk-set-permission-mode', sessionId, mode),
   sdkCommands: (sessionId) => ipcRenderer.invoke('sdk-commands', sessionId),

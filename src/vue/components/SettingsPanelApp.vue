@@ -2,178 +2,238 @@
   <div class="settings-panel">
     <div class="settings-panel-header">
       <span class="settings-panel-title">{{ title }}</span>
+      <!-- Project settings only override what a session runs as, so their one
+           tab is the whole panel and a bar with a single button in it is noise. -->
+      <nav v-if="tabs.length > 1" class="settings-tabs" role="tablist">
+        <button
+          v-for="t in tabs"
+          :key="t.id"
+          type="button"
+          class="settings-tab"
+          :class="{ 'is-active': tab === t.id }"
+          role="tab"
+          :aria-selected="tab === t.id"
+          @click="tab = t.id"
+        >{{ t.label }}</button>
+      </nav>
     </div>
 
     <div class="settings-panel-body">
       <div v-if="loading" class="settings-loading">Loading…</div>
       <div v-else class="settings-form">
 
-        <!-- ── Claude CLI Options ───────────────────────────────── -->
-        <div class="settings-section">
-          <div class="settings-section-title">Claude CLI Options</div>
+        <!-- ══ Agent ══════════════════════════════════════════════ -->
+        <template v-if="tab === 'agent'">
 
-          <div class="settings-field">
-            <div class="settings-field-info">
-              <div class="settings-field-header">
-                <span class="settings-label">Permission Mode</span>
-                <label v-if="isProject" class="settings-use-global">
-                  <input type="checkbox" :checked="useGlobal.permissionMode" @change="toggleGlobal('permissionMode', $event.target.checked)" />
-                  Use global default
-                </label>
-              </div>
-              <div class="settings-description">Permission mode passed to the <code>claude</code> command</div>
-            </div>
-            <div class="settings-field-control">
-              <select class="settings-select" v-model="form.permissionMode" :disabled="isProject && useGlobal.permissionMode">
-                <option value="">Default (none)</option>
-                <option value="auto">Auto</option>
-                <option value="acceptEdits">Accept Edits</option>
-                <option value="plan">Plan Mode</option>
-                <option value="dontAsk">Don't Ask</option>
-                <option value="bypassPermissions">Bypass</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Aliases rather than wire ids: `sonnet` keeps meaning the current
-               Sonnet, where `claude-sonnet-5` would quietly pin an old one. -->
-          <div class="settings-field">
-            <div class="settings-field-info">
-              <div class="settings-field-header">
-                <span class="settings-label">Model</span>
-                <label v-if="isProject" class="settings-use-global">
-                  <input type="checkbox" :checked="useGlobal.model" @change="toggleGlobal('model', $event.target.checked)" />
-                  Use global default
-                </label>
-              </div>
-              <div class="settings-description">Model new chat sessions start on</div>
-            </div>
-            <div class="settings-field-control">
-              <select class="settings-select" v-model="form.model" :disabled="isProject && useGlobal.model">
-                <option value="">Default (recommended)</option>
-                <option value="opus">Opus</option>
-                <option value="sonnet">Sonnet</option>
-                <option value="haiku">Haiku</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="settings-field">
-            <div class="settings-field-info">
-              <div class="settings-field-header">
-                <span class="settings-label">Effort</span>
-                <label v-if="isProject" class="settings-use-global">
-                  <input type="checkbox" :checked="useGlobal.effort" @change="toggleGlobal('effort', $event.target.checked)" />
-                  Use global default
-                </label>
-              </div>
-              <div class="settings-description">How hard the model thinks before answering</div>
-            </div>
-            <div class="settings-field-control">
-              <select class="settings-select" v-model="form.effort" :disabled="isProject && useGlobal.effort">
-                <option value="">Default</option>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-                <option value="xhigh">Extra high</option>
-                <option value="max">Max</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="settings-field">
-            <div class="settings-field-info">
-              <div class="settings-field-header">
-                <span class="settings-label">Worktree</span>
-                <label v-if="isProject" class="settings-use-global">
-                  <input type="checkbox" :checked="useGlobal.worktree" @change="toggleGlobal('worktree', $event.target.checked)" />
-                  Use global default
-                </label>
-              </div>
-              <div class="settings-description">Enable worktree for new sessions</div>
-            </div>
-            <div class="settings-field-control">
-              <SbSwitch v-model="form.worktree" :disabled="isProject && useGlobal.worktree" />
-            </div>
-          </div>
-
-          <div class="settings-field">
-            <div class="settings-field-info">
-              <div class="settings-field-header">
-                <span class="settings-label">Worktree Name</span>
-                <label v-if="isProject" class="settings-use-global">
-                  <input type="checkbox" :checked="useGlobal.worktreeName" @change="toggleGlobal('worktreeName', $event.target.checked)" />
-                  Use global default
-                </label>
-              </div>
-              <div class="settings-description">Custom name for worktree branches</div>
-            </div>
-            <div class="settings-field-control">
-              <input type="text" class="settings-input" v-model="form.worktreeName"
-                placeholder="auto" :disabled="isProject && useGlobal.worktreeName" style="width:140px" />
-            </div>
-          </div>
-
-          <div class="settings-field">
-            <div class="settings-field-info">
-              <div class="settings-field-header">
-                <span class="settings-label">Chrome</span>
-                <label v-if="isProject" class="settings-use-global">
-                  <input type="checkbox" :checked="useGlobal.chrome" @change="toggleGlobal('chrome', $event.target.checked)" />
-                  Use global default
-                </label>
-              </div>
-              <div class="settings-description">Enable Chrome browser automation</div>
-            </div>
-            <div class="settings-field-control">
-              <SbSwitch v-model="form.chrome" :disabled="isProject && useGlobal.chrome" />
-            </div>
-          </div>
-
-          <div class="settings-field settings-field-wide">
-            <div class="settings-field-info">
-              <div class="settings-field-header">
-                <span class="settings-label">Additional Directories</span>
-                <label v-if="isProject" class="settings-use-global">
-                  <input type="checkbox" :checked="useGlobal.addDirs" @change="toggleGlobal('addDirs', $event.target.checked)" />
-                  Use global default
-                </label>
-              </div>
-              <div class="settings-description">Extra directories to include in Claude sessions</div>
-            </div>
-            <div class="settings-field-control">
-              <input type="text" class="settings-input" v-model="form.addDirs"
-                placeholder="/path/to/dir1, /path/to/dir2" :disabled="isProject && useGlobal.addDirs" />
-            </div>
-          </div>
-        </div>
-
-        <!-- ── Session Launch ──────────────────────────────────── -->
-        <div class="settings-section">
-          <div class="settings-section-title">Session Launch</div>
-
-          <div class="settings-field settings-field-wide">
-            <div class="settings-field-info">
-              <div class="settings-field-header">
-                <span class="settings-label">Pre-launch Command</span>
-                <label v-if="isProject" class="settings-use-global">
-                  <input type="checkbox" :checked="useGlobal.preLaunchCmd" @change="toggleGlobal('preLaunchCmd', $event.target.checked)" />
-                  Use global default
-                </label>
-              </div>
-              <div class="settings-description">Prepended to the claude command (e.g. "aws-vault exec profile --")</div>
-            </div>
-            <div class="settings-field-control">
-              <input type="text" class="settings-input" v-model="form.preLaunchCmd"
-                placeholder="e.g. aws-vault exec profile --" :disabled="isProject && useGlobal.preLaunchCmd" />
-            </div>
-          </div>
-        </div>
-
-        <!-- ── Application (global only) ──────────────────────── -->
-        <template v-if="!isProject">
+          <!-- ── What a session starts on ─────────────────────────── -->
           <div class="settings-section">
-            <div class="settings-section-title">Application</div>
+            <div class="settings-section-title">Session defaults</div>
+            <div class="settings-section-note">
+              What every new session in {{ isProject ? 'this project' : 'WootonPad' }} starts on.
+              Running sessions keep what they were started with.
+            </div>
+
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <div class="settings-field-header">
+                  <span class="settings-label">Permission Mode</span>
+                  <label v-if="isProject" class="settings-use-global">
+                    <input type="checkbox" :checked="useGlobal.permissionMode" @change="toggleGlobal('permissionMode', $event.target.checked)" />
+                    Use global default
+                  </label>
+                </div>
+                <div class="settings-description">{{ permissionModeDesc }}</div>
+              </div>
+              <div class="settings-field-control">
+                <select class="settings-select" v-model="form.permissionMode" :disabled="isProject && useGlobal.permissionMode">
+                  <option v-for="m in PERMISSION_MODES" :key="m.value" :value="m.value">{{ m.label }}</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- Aliases rather than wire ids: `sonnet` keeps meaning the current
+                 Sonnet, where `claude-sonnet-5` would quietly pin an old one. -->
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <div class="settings-field-header">
+                  <span class="settings-label">Model</span>
+                  <label v-if="isProject" class="settings-use-global">
+                    <input type="checkbox" :checked="useGlobal.model" @change="toggleGlobal('model', $event.target.checked)" />
+                    Use global default
+                  </label>
+                </div>
+                <div class="settings-description">Model new chat sessions start on</div>
+              </div>
+              <div class="settings-field-control">
+                <select class="settings-select" v-model="form.model" :disabled="isProject && useGlobal.model">
+                  <option value="">Default (recommended)</option>
+                  <option value="opus">Opus</option>
+                  <option value="sonnet">Sonnet</option>
+                  <option value="haiku">Haiku</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <div class="settings-field-header">
+                  <span class="settings-label">Effort</span>
+                  <label v-if="isProject" class="settings-use-global">
+                    <input type="checkbox" :checked="useGlobal.effort" @change="toggleGlobal('effort', $event.target.checked)" />
+                    Use global default
+                  </label>
+                </div>
+                <div class="settings-description">How hard the model thinks before answering</div>
+              </div>
+              <div class="settings-field-control">
+                <select class="settings-select" v-model="form.effort" :disabled="isProject && useGlobal.effort">
+                  <option value="">Default</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="xhigh">Extra high</option>
+                  <option value="max">Max</option>
+                </select>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- ── Where a session works ────────────────────────────── -->
+          <div class="settings-section">
+            <div class="settings-section-title">Workspace</div>
+
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <div class="settings-field-header">
+                  <span class="settings-label">Worktree</span>
+                  <label v-if="isProject" class="settings-use-global">
+                    <input type="checkbox" :checked="useGlobal.worktree" @change="toggleGlobal('worktree', $event.target.checked)" />
+                    Use global default
+                  </label>
+                </div>
+                <div class="settings-description">Enable worktree for new sessions</div>
+              </div>
+              <div class="settings-field-control">
+                <SbSwitch v-model="form.worktree" :disabled="isProject && useGlobal.worktree" />
+              </div>
+            </div>
+
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <div class="settings-field-header">
+                  <span class="settings-label">Worktree Name</span>
+                  <label v-if="isProject" class="settings-use-global">
+                    <input type="checkbox" :checked="useGlobal.worktreeName" @change="toggleGlobal('worktreeName', $event.target.checked)" />
+                    Use global default
+                  </label>
+                </div>
+                <div class="settings-description">Custom name for worktree branches</div>
+              </div>
+              <div class="settings-field-control">
+                <input type="text" class="settings-input" v-model="form.worktreeName"
+                  placeholder="auto" :disabled="isProject && useGlobal.worktreeName" style="width:140px" />
+              </div>
+            </div>
+
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <div class="settings-field-header">
+                  <span class="settings-label">Chrome</span>
+                  <label v-if="isProject" class="settings-use-global">
+                    <input type="checkbox" :checked="useGlobal.chrome" @change="toggleGlobal('chrome', $event.target.checked)" />
+                    Use global default
+                  </label>
+                </div>
+                <div class="settings-description">Enable Chrome browser automation</div>
+              </div>
+              <div class="settings-field-control">
+                <SbSwitch v-model="form.chrome" :disabled="isProject && useGlobal.chrome" />
+              </div>
+            </div>
+
+            <div class="settings-field settings-field-wide">
+              <div class="settings-field-info">
+                <div class="settings-field-header">
+                  <span class="settings-label">Additional Directories</span>
+                  <label v-if="isProject" class="settings-use-global">
+                    <input type="checkbox" :checked="useGlobal.addDirs" @change="toggleGlobal('addDirs', $event.target.checked)" />
+                    Use global default
+                  </label>
+                </div>
+                <div class="settings-description">Extra directories to include in Claude sessions</div>
+              </div>
+              <div class="settings-field-control">
+                <input type="text" class="settings-input" v-model="form.addDirs"
+                  placeholder="/path/to/dir1, /path/to/dir2" :disabled="isProject && useGlobal.addDirs" />
+              </div>
+            </div>
+          </div>
+
+          <!-- ── How a session is launched ────────────────────────── -->
+          <div class="settings-section">
+            <div class="settings-section-title">Launch</div>
+
+            <div class="settings-field settings-field-wide">
+              <div class="settings-field-info">
+                <div class="settings-field-header">
+                  <span class="settings-label">Pre-launch Command</span>
+                  <label v-if="isProject" class="settings-use-global">
+                    <input type="checkbox" :checked="useGlobal.preLaunchCmd" @change="toggleGlobal('preLaunchCmd', $event.target.checked)" />
+                    Use global default
+                  </label>
+                </div>
+                <div class="settings-description">Prepended to the claude command (e.g. "aws-vault exec profile --")</div>
+              </div>
+              <div class="settings-field-control">
+                <input type="text" class="settings-input" v-model="form.preLaunchCmd"
+                  placeholder="e.g. aws-vault exec profile --" :disabled="isProject && useGlobal.preLaunchCmd" />
+              </div>
+            </div>
+
+            <!-- The rest of launching is one answer for the whole app: which
+                 shell, which transport, which IDE. None of it is per-project. -->
+            <template v-if="!isProject">
+              <div class="settings-field">
+                <div class="settings-field-info">
+                  <span class="settings-label">Shell Profile</span>
+                  <div class="settings-description">Shell used for terminal and Claude sessions. Changes take effect for new sessions only.</div>
+                </div>
+                <div class="settings-field-control">
+                  <select class="settings-select" v-model="form.shellProfile">
+                    <option value="auto">Auto (detect)</option>
+                    <option v-for="p in shellProfiles" :key="p.id" :value="p.id">{{ p.name }}</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="settings-field">
+                <div class="settings-field-info">
+                  <span class="settings-label">Chat view (experimental)</span>
+                  <div class="settings-description">Render sessions as a chat instead of a terminal. Same Claude, same account, same transcript on disk — it drives the CLI through the Agent SDK rather than a terminal. New sessions only; existing ones keep their terminal.</div>
+                </div>
+                <div class="settings-field-control">
+                  <SbSwitch v-model="form.sdkMode" />
+                </div>
+              </div>
+
+              <div class="settings-field">
+                <div class="settings-field-info">
+                  <span class="settings-label">IDE Emulation</span>
+                  <div class="settings-description">Emulate an IDE so Claude can open files and diffs in a side panel. Disable to use your own IDE instead. Changes take effect for new sessions only.</div>
+                </div>
+                <div class="settings-field-control">
+                  <SbSwitch v-model="form.mcpEmulation" />
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
+
+        <!-- ══ Appearance (global only) ═══════════════════════════ -->
+        <template v-if="tab === 'appearance' && !isProject">
+          <div class="settings-section">
+            <div class="settings-section-title">Terminal</div>
 
             <div class="settings-field">
               <div class="settings-field-info">
@@ -238,6 +298,12 @@
               </div>
             </div>
 
+          </div>
+
+          <!-- ── The app's own chrome ───────────────────────────── -->
+          <div class="settings-section">
+            <div class="settings-section-title">Interface</div>
+
             <div class="settings-field settings-field-wide">
               <div class="settings-field-info">
                 <span class="settings-label">App Font</span>
@@ -281,16 +347,28 @@
 
             <div class="settings-field">
               <div class="settings-field-info">
-                <span class="settings-label">Shell Profile</span>
-                <div class="settings-description">Shell used for terminal and Claude sessions. Changes take effect for new sessions only.</div>
+                <span class="settings-label">Reduce motion</span>
+                <div class="settings-description">Stop board cards from flying between columns when a session changes state. Already off if your system asks for reduced motion.</div>
               </div>
               <div class="settings-field-control">
-                <select class="settings-select" v-model="form.shellProfile">
-                  <option value="auto">Auto (detect)</option>
-                  <option v-for="p in shellProfiles" :key="p.id" :value="p.id">{{ p.name }}</option>
-                </select>
+                <SbSwitch v-model="form.reduceMotion" />
               </div>
             </div>
+
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <span class="settings-label">Show Avatars</span>
+                <div class="settings-description">Show project initials avatars on session groups and grid cards</div>
+              </div>
+              <div class="settings-field-control">
+                <SbSwitch v-model="form.showAvatars" />
+              </div>
+            </div>
+          </div>
+
+          <!-- ── How much of the list is shown ──────────────────── -->
+          <div class="settings-section">
+            <div class="settings-section-title">Session list</div>
 
             <div class="settings-field">
               <div class="settings-field-info">
@@ -313,51 +391,13 @@
                   v-model.number="form.sessionMaxAgeDays" min="1" max="365" />
               </div>
             </div>
-
-            <div class="settings-field">
-              <div class="settings-field-info">
-                <span class="settings-label">Reduce motion</span>
-                <div class="settings-description">Stop board cards from flying between columns when a session changes state. Already off if your system asks for reduced motion.</div>
-              </div>
-              <div class="settings-field-control">
-                <SbSwitch v-model="form.reduceMotion" />
-              </div>
-            </div>
-
-            <div class="settings-field">
-              <div class="settings-field-info">
-                <span class="settings-label">Chat view (experimental)</span>
-                <div class="settings-description">Render sessions as a chat instead of a terminal. Same Claude, same account, same transcript on disk — it drives the CLI through the Agent SDK rather than a terminal. New sessions only; existing ones keep their terminal.</div>
-              </div>
-              <div class="settings-field-control">
-                <SbSwitch v-model="form.sdkMode" />
-              </div>
-            </div>
-
-            <div class="settings-field">
-              <div class="settings-field-info">
-                <span class="settings-label">IDE Emulation</span>
-                <div class="settings-description">Emulate an IDE so Claude can open files and diffs in a side panel. Disable to use your own IDE instead. Changes take effect for new sessions only.</div>
-              </div>
-              <div class="settings-field-control">
-                <SbSwitch v-model="form.mcpEmulation" />
-              </div>
-            </div>
-
-            <div class="settings-field">
-              <div class="settings-field-info">
-                <span class="settings-label">Show Avatars</span>
-                <div class="settings-description">Show project initials avatars on session groups and grid cards</div>
-              </div>
-              <div class="settings-field-control">
-                <SbSwitch v-model="form.showAvatars" />
-              </div>
-            </div>
           </div>
+        </template>
 
-          <!-- ── Git ───────────────────────────────────────────── -->
+        <!-- ══ Git (global only) ══════════════════════════════════ -->
+        <template v-if="tab === 'git' && !isProject">
           <div class="settings-section">
-            <div class="settings-section-title">Git</div>
+            <div class="settings-section-title">Commit messages</div>
             <div class="settings-field settings-field--column">
               <div class="settings-field-info">
                 <span class="settings-label">Commit Message Prompt</span>
@@ -395,40 +435,37 @@
             </div>
           </div>
 
-          <!-- ── Updates ────────────────────────────────────────── -->
-          <div class="settings-section">
-            <div class="settings-section-title">Updates</div>
-            <div class="settings-field">
-              <div class="settings-field-info">
-                <span class="settings-label">Version</span>
-                <div class="settings-description">
-                  <span v-if="appVersion">v{{ appVersion }}</span>
-                  <span v-if="updateStatus" class="settings-update-status"> — {{ updateStatus }}</span>
-                  <a
-                    v-if="newVersion"
-                    class="settings-update-link"
-                    href="#"
-                    @click.prevent="openReleasesPage"
-                  >Download v{{ newVersion }} ↗</a>
-                </div>
-              </div>
-              <div class="settings-field-control">
-                <SbButton variant="secondary" size="sm" @click="checkUpdates">Check for Updates</SbButton>
-              </div>
-            </div>
-          </div>
         </template>
 
-        <!-- ── Action buttons ─────────────────────────────────── -->
-        <div class="settings-btn-row">
-          <SbButton variant="secondary" size="sm" @click="close">Cancel</SbButton>
-          <SbButton :variant="'primary'" size="sm" @click="save" :disabled="saveState === 'saved'">
-            {{ saveState === 'saved' ? '✓ Saved' : 'Save Settings' }}
-          </SbButton>
-          <SbButton v-if="isProject" variant="danger" size="sm" @click="removeProject">Hide Project</SbButton>
-          <span v-if="ideNotice" class="settings-notice">{{ ideNotice }}</span>
-        </div>
+      </div>
+    </div>
 
+    <!-- ── Footer ───────────────────────────────────────────────
+         Saving is the same action on every tab, so it belongs to the panel
+         rather than to any one of them — and out of the scroller, it stays
+         reachable from the middle of a long tab. The version sits beside it
+         because it belongs to no tab either. -->
+    <div v-if="!loading" class="settings-footer">
+      <div class="settings-version">
+        <template v-if="!isProject">
+          <span v-if="appVersion">v{{ appVersion }}</span>
+          <span v-if="updateStatus" class="settings-update-status">{{ updateStatus }}</span>
+          <a
+            v-if="newVersion"
+            class="settings-update-link"
+            href="#"
+            @click.prevent="openReleasesPage"
+          >Download v{{ newVersion }} ↗</a>
+          <button v-else class="settings-update-check" type="button" @click="checkUpdates">Check for updates</button>
+        </template>
+      </div>
+      <span v-if="ideNotice" class="settings-notice">{{ ideNotice }}</span>
+      <div class="settings-btn-row">
+        <SbButton v-if="isProject" variant="danger" size="sm" @click="removeProject">Hide Project</SbButton>
+        <SbButton variant="secondary" size="sm" @click="close">Cancel</SbButton>
+        <SbButton :variant="'primary'" size="sm" @click="save" :disabled="saveState === 'saved'">
+          {{ saveState === 'saved' ? '✓ Saved' : 'Save Settings' }}
+        </SbButton>
       </div>
     </div>
   </div>
@@ -451,6 +488,41 @@ const title = computed(() => {
     : 'Global';
   return (isProject.value ? 'Project Settings — ' : 'Global Settings — ') + shortName;
 });
+
+// ── Tabs ──────────────────────────────────────────────────────────
+//
+// Split by what a setting governs, not by which layer stores it: what the
+// agent is allowed to do and how it starts, what happens around git, and how
+// the app looks. Everything a project may override is agent work, so the other
+// two tabs are global-only and a project sees one tab.
+const TABS = [
+  { id: 'agent', label: 'Agent', globalOnly: false },
+  { id: 'git', label: 'Git', globalOnly: true },
+  { id: 'appearance', label: 'Appearance', globalOnly: true },
+];
+const tabs = computed(() => TABS.filter(t => !t.globalOnly || !isProject.value));
+const tab = ref('agent');
+
+// `''` is "pass no flag", which leaves the CLI on its own default — prompting
+// for anything that is not already allowed. Naming that is worth more than
+// calling it "none": it is the mode most sessions actually run in.
+const PERMISSION_MODES = [
+  { value: '', label: 'Ask every time (default)' },
+  { value: 'auto', label: 'Auto — classifier decides' },
+  { value: 'acceptEdits', label: 'Accept edits' },
+  { value: 'plan', label: 'Plan' },
+  { value: 'dontAsk', label: "Don't ask — deny instead" },
+  { value: 'bypassPermissions', label: 'Bypass all checks' },
+];
+
+const PERMISSION_MODE_DESCS = {
+  '': 'Claude stops and asks before anything that is not already allowed.',
+  auto: 'A model classifier approves or denies each prompt; only what it will not decide reaches you.',
+  acceptEdits: 'File edits go through without asking. Everything else still prompts.',
+  plan: 'Claude plans and does not run anything until the plan is accepted.',
+  dontAsk: 'Nothing prompts — anything not pre-approved is denied outright.',
+  bypassPermissions: 'Every check is off. Claude runs whatever it decides to run.',
+};
 
 // ── Local state ───────────────────────────────────────────────────
 const loading = ref(true);
@@ -502,6 +574,9 @@ const form = reactive({
   commitMessagePrompt: '',
   gitlabToken: '',
 });
+
+const permissionModeDesc = computed(() =>
+  PERMISSION_MODE_DESCS[form.permissionMode] || PERMISSION_MODE_DESCS['']);
 
 // Mirrors UI_METRIC_DEFAULTS in public/ui-metrics.js.
 const METRIC_DEFAULTS = window.UI_METRIC_DEFAULTS || {

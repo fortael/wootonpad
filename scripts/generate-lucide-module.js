@@ -26,6 +26,8 @@ const ICONS = [
   'pin', 'pin-off', 'git-fork', 'trash-2', 'message-square', 'square-stop', 'pencil',
   // Agent files — scheduled tasks
   'play',
+  // SDK chat composer — attachments
+  'paperclip', 'file',
 ];
 
 const SRC = path.join(__dirname, '..', 'node_modules', 'lucide-static', 'icons');

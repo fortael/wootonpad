@@ -1,11 +1,20 @@
 <template>
-  <div class="sbx-sdk" :class="{ 'is-asking': !!request }">
+  <!-- A file dropped anywhere on the chat is meant for the next prompt; the
+       composer is a thin strip at the bottom and aiming at it is work. -->
+  <div
+    class="sbx-sdk"
+    :class="{ 'is-asking': !!request, 'is-dropping': dropActive }"
+    @dragenter="onDragEnter"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
+  >
     <!-- The shape of a long session is mostly where its context was thrown
          away, and that is the one thing a scrollbar cannot show: the records
          above a compact are not loaded and have no height to scroll through.
          So the rail measures the file, not the viewport. -->
     <div v-if="compactMarks.length" class="sbx-timeline">
-      <div class="sbx-timeline__window" :style="loadedBand"></div>
+      <div class="sbx-timeline__thumb" :style="viewBand"></div>
       <button
         v-for="mark in compactMarks"
         :key="mark.index"
@@ -57,7 +66,49 @@
         </button>
       </div>
 
+      <!-- What will ride along with the next prompt. Images go as image blocks;
+           everything else goes as the `@path` mention shown on the chip. -->
+      <div v-if="attachments.length" class="sbx-sdk__chips">
+        <div
+          v-for="item in attachments"
+          :key="item.id"
+          class="sbx-chip"
+          :title="item.mention || item.path || item.name"
+        >
+          <img v-if="item.kind === 'image'" class="sbx-chip__thumb" :src="item.url" alt="" />
+          <SbIcon v-else name="file" :size="13" class="sbx-chip__icon" />
+          <span class="sbx-chip__name">{{ item.name }}</span>
+          <span v-if="item.bytes" class="sbx-chip__size">{{ shortBytes(item.bytes) }}</span>
+          <button
+            type="button"
+            class="sbx-chip__drop"
+            :aria-label="`Remove ${item.name}`"
+            @click="removeAttachment(item.id)"
+          >
+            <SbIcon name="x" :size="11" />
+          </button>
+        </div>
+      </div>
+
       <div class="sbx-sdk__field">
+        <!-- The keyboard path is paste and drop; this is for the times the file
+             is neither on the clipboard nor draggable from where it lives. -->
+        <button
+          type="button"
+          class="sbx-sdk__attach"
+          data-tooltip="Attach a file"
+          aria-label="Attach a file"
+          @click="pickFiles"
+        >
+          <SbIcon name="paperclip" :size="13" />
+        </button>
+        <input
+          ref="fileInputRef"
+          type="file"
+          multiple
+          class="sbx-sdk__filepick"
+          @change="onFilePicked"
+        />
         <textarea
           ref="inputRef"
           v-model="draft"
@@ -66,6 +117,7 @@
           :placeholder="busy ? 'Claude is working — your message will go next' : 'Message Claude…'"
           @keydown="onKey"
           @input="autoGrow"
+          @paste="onPaste"
         ></textarea>
         <!-- Enter sends; nothing else needs saying. The glyph is an
              affordance, not an instruction, and it is the only thing in the
@@ -95,7 +147,7 @@
           class="sbx-sdk__select" :value="permissionMode" :disabled="busy"
           :title="busy ? LOCKED_HINT : ''" @change="onPermissionMode"
         >
-          <option v-for="m in PERMISSION_MODES" :key="m.value" :value="m.value">{{ m.label }}</option>
+          <option v-for="m in modeOptions" :key="m.value" :value="m.value">{{ m.label }}</option>
         </select>
 
         <span class="sbx-sdk__spacer"></span>
@@ -162,8 +214,14 @@ import {
   renderViewItems, renderJsonlEntry, renderJsonlText, mergeLocalCommandEntries,
   refreshWhen, toolContent, mergeToolGroups, groupOfEntry, markToolDuration,
   renderToolResult, collapseToolBlock, refreshDayMarkers, refreshStamps, dayKey,
-  mergeSlashOutput,
+  mergeSlashOutput, renderUserPrompt,
 } from '../message-render.js';
+import {
+  isImageType, mentionFor, baseName, shortBytes,
+  promptText, promptContent, MAX_IMAGE_BYTES,
+} from '../composer-attachments.js';
+import { prepareImage } from '../composer-image.js';
+import { railBand, viewSpanOf } from '../transcript-rail.js';
 import { isExternalPathToken, relativeTime } from '../chat-text.js';
 import { openSidePanelFile } from '../side-panel-tabs.js';
 
@@ -180,13 +238,22 @@ const unknownCount = ref(0);
 const request = ref(null);
 
 // The CLI's own permission modes, in the order they escalate. `bypassPermissions`
-// is deliberately absent: turning off every check is not a dropdown item.
+// and `dontAsk` are deliberately absent: neither is something to reach for from
+// a dropdown mid-conversation.
 const PERMISSION_MODES = [
   { value: 'auto', label: 'Auto' },
   { value: 'default', label: 'Manual' },
   { value: 'acceptEdits', label: 'Accept edits' },
   { value: 'plan', label: 'Plan' },
 ];
+
+// …but a session already running on one of them must not read as Manual, so
+// the mode in force is always an option — it just stops being offered once the
+// session is off it.
+const OTHER_MODES = {
+  dontAsk: "Don't ask",
+  bypassPermissions: 'Bypass',
+};
 const LOCKED_HINT = 'Wait for the turn to finish — this cannot change mid-answer';
 const permissionMode = ref('default');
 const model = ref('');
@@ -217,6 +284,13 @@ const modelLabel = (m) => labels.value.get(m.value) || m.displayName;
 
 const selectedModel = computed(() =>
   models.value.find(m => m.value === model.value) || models.value[0] || null);
+
+const modeOptions = computed(() => {
+  const extra = OTHER_MODES[permissionMode.value];
+  return extra
+    ? [...PERMISSION_MODES, { value: permissionMode.value, label: extra }]
+    : PERMISSION_MODES;
+});
 
 // Effort is per model — Haiku offers none at all, and the picker should not
 // promise a setting the model will ignore.
@@ -254,10 +328,21 @@ let toolNodes = new Map();
 /** Is the view parked at the bottom, i.e. should new output be chased? */
 let pinned = true;
 
-function readPinned() {
+/**
+ * The viewport as fractions of the painted transcript — top edge and bottom
+ * edge. The rail's thumb is placed off this; see transcript-rail.js.
+ *
+ * Reactive where `pinned` is not, because it drives something on screen. It is
+ * still only written from the scroll handler, which is the same free read: the
+ * three numbers are taken together, after layout has already happened.
+ */
+const viewSpan = ref({ start: 0, end: 1 });
+
+function readScroll() {
   const el = bodyRef.value;
   if (!el) return;
   pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+  viewSpan.value = viewSpanOf(el);
 }
 
 function stickBottom() {
@@ -687,18 +772,161 @@ function echoOf(text) {
   return { kind: 'text', role: 'user', text };
 }
 
-function send() {
-  const text = draft.value.trim();
-  if (!text || !sessionId.value) return;
+/**
+ * The prompt as it will look in the transcript once the CLI has written it.
+ *
+ * With an image it is one entry — blocks above the sentence — because that is
+ * the record the `.jsonl` will hold, and the echo is replaced by nothing: it
+ * has to be right the first time or the same message reads two ways before and
+ * after the chat is reopened.
+ */
+function echoFragment(text, list, at) {
+  const images = list.filter(item => item.kind === 'image');
+  if (images.length) return renderUserPrompt({ text, images, at });
+  return renderViewItems([echoOf(text)], null, { at });
+}
+
+async function send() {
+  const list = attachments.value;
+  const text = promptText(draft.value, list);
+  if ((!text && !list.length) || !sessionId.value) return;
+  const content = promptContent(draft.value, list);
+
   // Echoed locally: the CLI does not send the prompt back, and a message that
   // vanishes on submit reads as a dropped one.
-  append(renderViewItems([echoOf(text)], null, { at: Date.now() }));
-  window.api.sendInput(sessionId.value, text);
+  append(echoFragment(text, list, Date.now()));
   draft.value = '';
+  attachments.value = [];
   busy.value = true;
   turnGraceUntil = Date.now() + TURN_GRACE_MS;
   startTurnWatchdog();
   nextTick(() => { autoGrow(); inputRef.value?.focus(); });
+
+  const res = await window.api.sdkSendPrompt(sessionId.value, content);
+  // The echo is already on screen, so a refusal has to say so out loud rather
+  // than leave a message sitting there that nothing will ever answer.
+  if (res?.ok) return;
+  noteTurnActivity();
+  busy.value = false;
+  append(renderViewItems([{
+    kind: 'notice', level: 'error',
+    text: `That prompt was not accepted: ${res?.error || 'the session is gone'}.`,
+  }], null, { at: Date.now() }));
+}
+
+// ── Attachments ───────────────────────────────────────────────────
+//
+// What the CLI's own composer accepts: an image on the clipboard, and a file.
+// They leave by different doors — see composer-attachments.js — and both are
+// held as chips until the prompt is sent, so a paste can be taken back.
+
+/** @type {import('vue').Ref<Array<object>>} images and files for the next prompt */
+const attachments = ref([]);
+const fileInputRef = ref(null);
+const dropActive = ref(false);
+let attachmentSeq = 0;
+
+function removeAttachment(id) {
+  attachments.value = attachments.value.filter(item => item.id !== id);
+  nextTick(() => inputRef.value?.focus());
+}
+
+/** Why a file could not be attached, in the transcript rather than a swallowed log. */
+function refuseAttachment(text) {
+  append(renderViewItems([{ kind: 'notice', level: 'warn', text }], null, { at: Date.now() }));
+}
+
+async function attachFiles(files) {
+  for (const file of files) {
+    if (!file) continue;
+
+    if (isImageType(file.type)) {
+      const image = await prepareImage(file).catch(() => null);
+      if (!image) {
+        refuseAttachment(`${file.name || 'That image'} is still over ${shortBytes(MAX_IMAGE_BYTES)} after resizing — it cannot be sent.`);
+        continue;
+      }
+      attachments.value = [...attachments.value, {
+        id: `a${++attachmentSeq}`,
+        kind: 'image',
+        name: file.name || 'pasted image',
+        ...image,
+      }];
+      continue;
+    }
+
+    // Not an image, so it goes as a reference — which needs somewhere to point.
+    // A blob pasted out of a web page has no path and nothing to fall back on:
+    // the API takes images, not arbitrary bytes.
+    const path = window.api.getPathForFile?.(file) || '';
+    if (!path) {
+      refuseAttachment(`${file.name || 'That file'} is not a file on disk — save it somewhere first, then attach it.`);
+      continue;
+    }
+    const mention = mentionFor(path, store.headerSession?.projectPath || '');
+    if (attachments.value.some(item => item.path === path)) continue;
+    attachments.value = [...attachments.value, {
+      id: `a${++attachmentSeq}`,
+      kind: 'file',
+      name: baseName(path),
+      path,
+      mention,
+      bytes: file.size,
+    }];
+  }
+  nextTick(() => { autoGrow(); inputRef.value?.focus(); });
+}
+
+function onPaste(event) {
+  const files = [...(event.clipboardData?.files || [])];
+  if (!files.length) return;           // ordinary text paste, nothing to do
+  event.preventDefault();
+  attachFiles(files);
+}
+
+function pickFiles() {
+  fileInputRef.value?.click();
+}
+
+function onFilePicked(event) {
+  const files = [...(event.target.files || [])];
+  // Cleared so picking the same file twice in a row still fires `change`.
+  event.target.value = '';
+  if (files.length) attachFiles(files);
+}
+
+// Dragging text inside the composer is a selection, not an attachment; only a
+// drag carrying files gets the highlight and the drop.
+const carriesFiles = (event) => [...(event.dataTransfer?.types || [])].includes('Files');
+
+// `dragleave` fires on every child the pointer crosses, so the highlight is
+// held by a depth count rather than by the last event to arrive.
+let dragDepth = 0;
+
+function onDragEnter(event) {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  dragDepth++;
+  dropActive.value = true;
+}
+
+function onDragOver(event) {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'copy';
+}
+
+function onDragLeave() {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) dropActive.value = false;
+}
+
+function onDrop(event) {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  dragDepth = 0;
+  dropActive.value = false;
+  attachFiles([...(event.dataTransfer.files || [])]);
 }
 
 // One row until there is more to show. Reset to auto first so the box can
@@ -810,19 +1038,57 @@ async function onEffort(event) {
 // Read back out of the session's own transcript rather than stored separately
 // — the CLI already records all three (see session-controls.js). Applied after
 // the session is up, so the picker and the live session agree.
+//
+// A session with nothing to read back — a new one, which is every session at
+// its first turn — falls through to the settings it was launched with. Those
+// are the project's, then the global ones behind them, resolved by main.js;
+// see resolveDefaultSessionOptions in public/dialogs.js for the other half.
+
+/** What main.js started this session on: `{ permissionMode, effort }`. */
+async function launchDefaults() {
+  const projectPath = store.headerSession?.projectPath || '';
+  if (!projectPath) return {};
+  try {
+    const effective = await window.api.getEffectiveSettings(projectPath) || {};
+    return {
+      permissionMode: effective.dangerouslySkipPermissions
+        ? 'bypassPermissions'
+        : (effective.permissionMode || null),
+      effort: effective.effort || null,
+    };
+  } catch {
+    return {};
+  }
+}
+
+/** A mode the picker can show — anything else is not worth guessing at. */
+const isKnownMode = (mode) =>
+  !!mode && (PERMISSION_MODES.some(m => m.value === mode) || mode in OTHER_MODES);
 
 async function applyStoredControls(entries) {
   const id = sessionId.value;
   const found = controlsFromTranscript(entries);
   if (!id) return;
 
-  if (found.permissionMode && PERMISSION_MODES.some(m => m.value === found.permissionMode)) {
+  const defaults = await launchDefaults();
+  if (sessionId.value !== id) return;             // switched away mid-read
+
+  // The transcript is asked for, because it can disagree with the settings: it
+  // records what the session was last actually running, which may be a mode
+  // changed by hand three turns ago. The launch defaults are only shown — the
+  // session is already on them, and a control request before its first turn
+  // opens would fail and leave the picker back on its own hardcoded guess.
+  if (isKnownMode(found.permissionMode)) {
     const res = await window.api.sdkSetPermissionMode(id, found.permissionMode);
     if (res?.ok && sessionId.value === id) permissionMode.value = found.permissionMode;
+  } else if (isKnownMode(defaults.permissionMode)) {
+    permissionMode.value = defaults.permissionMode;
   }
   if (found.effort) {
     const res = await window.api.sdkSetEffort(id, found.effort);
     if (res?.ok && sessionId.value === id) effort.value = found.effort;
+  } else if (defaults.effort) {
+    effort.value = defaults.effort;
   }
   // The model is matched by wire id against the picker's rows, the same way a
   // live `system/init` is — the transcript names the model, not the alias row.
@@ -1230,10 +1496,17 @@ const HISTORY_PAGE = 50;
 
 /** Every compact boundary in the file — see readCompactBoundaries. */
 const compacts = ref([]);
-/** Records in the file, and the slice of them currently painted. */
+/** Records in the file. */
 const historyTotal = ref(0);
-const loadedFrom = ref(0);
-const loadedTo = ref(0);
+/**
+ * The runs of records currently painted, oldest first.
+ *
+ * Usually one — the tail of the file. Stepping over a compact adds a second,
+ * with everything the compact dropped in between, and the two scroll as one
+ * column: that gap is why the thumb is placed by walking these rather than by
+ * interpolating between the oldest and newest record on screen.
+ */
+const paintedRuns = ref([]);
 
 const compactMarks = computed(() => {
   const total = historyTotal.value;
@@ -1251,14 +1524,37 @@ const compactMarks = computed(() => {
   }));
 });
 
-/** The band of the file currently on screen. */
-const loadedBand = computed(() => {
-  const total = historyTotal.value;
-  if (!total) return { display: 'none' };
-  const top = (loadedFrom.value / total) * 100;
-  const height = Math.max(2, ((loadedTo.value - loadedFrom.value) / total) * 100);
-  return { top: `${top}%`, height: `${Math.min(height, 100 - top)}%` };
+/**
+ * Where the reader is in the session — the thumb, in the rail's own file
+ * coordinates so it reads against the notches rather than beside them.
+ *
+ * It moves both ways. The band used to show how much of the file was painted,
+ * which grew as you scrolled up into history and then never moved again: it
+ * answered "how much have I loaded", and the question a rail beside a
+ * conversation is asked is "where am I".
+ */
+const viewBand = computed(() => {
+  const band = railBand(paintedRuns.value, historyTotal.value, viewSpan.value);
+  if (!band) return { display: 'none' };
+  return { top: `${band.top}%`, height: `${band.height}%` };
 });
+
+/**
+ * Fold new records at the end of the file into the newest painted run.
+ *
+ * Live messages are appended to the transcript and to the file at the same
+ * time, and nothing is ever paged downward — so the painted tail always reaches
+ * the end. Without this the thumb stopped a little short of the bottom in a
+ * session that was still talking.
+ */
+function growToTotal(total) {
+  if (!total) return;
+  historyTotal.value = total;
+  const runs = paintedRuns.value;
+  const last = runs[runs.length - 1];
+  if (!last || last.to >= total) return;
+  paintedRuns.value = [...runs.slice(0, -1), { from: last.from, to: total }];
+}
 
 async function loadCompacts() {
   const id = sessionId.value;
@@ -1266,7 +1562,7 @@ async function loadCompacts() {
   const res = await window.api.sessionCompacts?.(id).catch(() => null);
   if (!res?.ok || sessionId.value !== id) return;
   compacts.value = res.compacts || [];
-  if (res.total) historyTotal.value = res.total;
+  growToTotal(res.total);
 }
 
 /** Record index of the oldest entry on screen — where the next page ends. */
@@ -1414,6 +1710,16 @@ function renderWindow(rawEntries) {
 async function loadHistory() {
   const id = sessionId.value;
   if (!id) { loadingHistory.value = false; return; }
+  // The controls are set from whatever the read turns up, and a read that
+  // turns up nothing — a new session, whose .jsonl does not exist yet — still
+  // has to set them from the launch settings. Tracked, so the paths that
+  // return early below still go through applyStoredControls once.
+  let controlsApplied = false;
+  const applyControls = (entries) => {
+    if (controlsApplied || sessionId.value !== id) return;
+    controlsApplied = true;
+    applyStoredControls(entries);
+  };
   try {
     const result = await window.api.readSessionTranscript(id, { limit: HISTORY_PAGE });
     if (sessionId.value !== id) return;          // switched away mid-read
@@ -1423,11 +1729,10 @@ async function loadHistory() {
     historyHasMore = !!result.hasMore;
     historyCompact = result.compact || null;
     historyTotal.value = result.total || 0;
-    loadedFrom.value = result.from || 0;
-    loadedTo.value = result.to || 0;
+    paintedRuns.value = result.to > result.from ? [{ from: result.from, to: result.to }] : [];
 
     // The same entries carry what the session was last running as.
-    applyStoredControls(result.entries || []);
+    applyControls(result.entries || []);
 
     const body = bodyRef.value;
     if (!body) return;
@@ -1437,11 +1742,12 @@ async function loadHistory() {
     shownDay = refreshDayMarkers(body);
     refreshStamps(body);
     body.scrollTop = body.scrollHeight;
-    pinned = true;
+    readScroll();
   } catch {
     /* A session with no transcript yet is the normal case for a new one. */
   } finally {
     loadingHistory.value = false;
+    applyControls([]);
   }
 }
 
@@ -1468,11 +1774,12 @@ async function loadEarlier(before) {
     historyHasMore = !!result.hasMore;
     historyCompact = result.compact || null;
     if (result.total) historyTotal.value = result.total;
-    // The band spans everything painted, oldest record to newest. Stepping over
-    // a compact makes that two disjoint segments; one band over both is still
-    // the honest answer to "how much of this file am I looking at".
-    loadedFrom.value = result.from || 0;
-    loadedTo.value = Math.max(loadedTo.value, result.to || 0);
+    // Kept as its own run. It touches the one below it when the page was an
+    // ordinary scroll upward — railBand merges those — and does not when it was
+    // a step over a compact, which is the case the thumb has to walk.
+    if (result.to > result.from) {
+      paintedRuns.value = [{ from: result.from, to: result.to }, ...paintedRuns.value];
+    }
 
     const heightBefore = body.scrollHeight;
     const scrollBefore = body.scrollTop;
@@ -1495,7 +1802,7 @@ async function loadEarlier(before) {
     refreshStamps(body);
 
     body.scrollTop = scrollBefore + (body.scrollHeight - heightBefore);
-    readPinned();
+    readScroll();
   } catch {
     /* A read that fails leaves the affordance in place to try again. */
   } finally {
@@ -1547,7 +1854,7 @@ onMounted(() => {
     }),
   );
 
-  bodyRef.value?.addEventListener('scroll', readPinned, { passive: true });
+  bodyRef.value?.addEventListener('scroll', readScroll, { passive: true });
   bodyRef.value?.addEventListener('click', onBodyClick);
 
   // "2 minutes ago" has to become "3 minutes ago" on its own. One clock for the
@@ -1578,7 +1885,7 @@ onBeforeUnmount(() => {
   topObserver?.disconnect();
   topObserver = null;
   topEl = null;
-  bodyRef.value?.removeEventListener('scroll', readPinned);
+  bodyRef.value?.removeEventListener('scroll', readScroll);
   bodyRef.value?.removeEventListener('click', onBodyClick);
   toolResults = new Map();
   toolNodes = new Map();

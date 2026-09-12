@@ -28,6 +28,12 @@
                stay a separate element: textContent on .session-meta would wipe
                the ring beside it. -->
           <span class="session-meta-text">{{ timeStr }}{{ msgSuffix }}</span>
+          <!-- What this session changed, the same numbers the board's cards
+               show. A separate element for the same reason as the ring. -->
+          <span v-if="churn" class="session-churn">
+            <span class="session-churn__added">+{{ churn.added }}</span>
+            <span class="session-churn__removed">&minus;{{ churn.removed }}</span>
+          </span>
         </div>
       </div>
 
@@ -48,6 +54,7 @@ import SbIcon from './SbIcon.vue';
 import UsageRing from './UsageRing.vue';
 import SessionMenu from './SessionMenu.vue';
 import { contextPercent, formatContextLabel } from '../context-window.js';
+import { sessionChurn } from '../session-churn.js';
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -80,6 +87,9 @@ const timeStr = computed(() => {
 const msgSuffix = computed(() =>
   props.session.messageCount ? ` · ${props.session.messageCount} msgs` : ''
 );
+
+// Shared with the board's cards — see session-churn.js.
+const churn = computed(() => sessionChurn(props.session));
 
 const itemClasses = computed(() => ({
   active: props.isActive,

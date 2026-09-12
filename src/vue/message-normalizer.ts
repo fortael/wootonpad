@@ -30,7 +30,10 @@ export type ViewItem =
   | { kind: 'thinking'; text: string }
   | { kind: 'tool_use'; id: string; name: string; input: unknown }
   | { kind: 'tool_result'; toolUseId: string; content: unknown; isError: boolean }
-  | { kind: 'image'; mediaType: string; data: string }
+  // Who sent it matters: a screenshot Claude took and a screenshot the user
+  // pasted are the same block in the same union, and they belong on opposite
+  // sides of the transcript.
+  | { kind: 'image'; role: 'assistant' | 'user'; mediaType: string; data: string }
   | { kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string }
   // What a slash command printed. Live it arrives bare — the `<local-command-stdout>`
   // envelope is only ever written to the transcript — so it has to be told
@@ -114,6 +117,7 @@ function normalizeBlocks(content: unknown, role: 'assistant' | 'user'): ViewItem
         if (source && typeof source.data === 'string') {
           items.push({
             kind: 'image',
+            role,
             mediaType: String(source.media_type ?? 'image/png'),
             data: source.data,
           });
@@ -148,10 +152,20 @@ const UNDECLARED_SILENT = new Set([
   'task_summary',
 ]);
 
-function normalizeUndeclared(message: { subtype?: unknown }): ViewItem[] {
-  return typeof message.subtype === 'string' && UNDECLARED_SILENT.has(message.subtype)
-    ? silent(`undeclared:${message.subtype}`)
-    : unknown(message);
+function normalizeUndeclared(message: { subtype?: unknown; error?: unknown }): ViewItem[] {
+  if (typeof message.subtype !== 'string') return unknown(message);
+  if (UNDECLARED_SILENT.has(message.subtype)) return silent(`undeclared:${message.subtype}`);
+
+  // `system:error` is how the session says it could not start or could not go
+  // on — a CLI binary that will not launch, a worker that died. It is not in
+  // the shipped types either, and as an "unknown message" card it was the one
+  // thing in the transcript that mattered most, rendered as the thing that
+  // looks most like a glitch.
+  if (message.subtype === 'error' && typeof message.error === 'string' && message.error.trim()) {
+    return notice('error', message.error.trim());
+  }
+
+  return unknown(message);
 }
 
 type SystemMessage = Extract<SDKMessage, { type: 'system' }>;

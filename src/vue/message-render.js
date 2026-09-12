@@ -473,9 +473,16 @@ function toolContent(toolEl) {
 /** The group an entry consists of, if a group is all it consists of. */
 function groupOfEntry(entry) {
   if (!entry || !entry.classList?.contains('jsonl-entry')) return null;
-  if (entry.children.length !== 1) return null;
-  const only = entry.firstElementChild;
-  return only?.classList.contains('jsonl-toolgroup') ? only : null;
+  const first = entry.firstElementChild;
+  if (!first?.classList.contains('jsonl-toolgroup')) return null;
+  // A stamp is allowed to follow it and nothing else is. refreshStamps appends
+  // one to every group the moment it is drawn, so a check for a single child
+  // said "not a group" to every group that had been on screen for a frame —
+  // which is why a turn's calls merged when read off disk and never live.
+  for (let el = first.nextElementSibling; el; el = el.nextElementSibling) {
+    if (!el.classList.contains('jsonl-when')) return null;
+  }
+  return first;
 }
 
 /** The group at the end of `container`, if the last entry is nothing else. */
@@ -964,6 +971,34 @@ function extractResultText(data) {
   return JSON.stringify(data, null, 2);
 }
 
+/**
+ * An image in the transcript, at whatever size the row can spare, opening full
+ * screen on click.
+ *
+ * One helper for all four sources — a screenshot a tool returned, one Claude
+ * sent, one the user pasted, and the `[Image: source:]` line an older CLI
+ * wrote — because they are the same object to the reader, and the click was
+ * previously re-implemented per source.
+ *
+ * @param {string} src   a `data:` or `file:` URL
+ * @param {string} [extra] one more class, for the callers that style it
+ */
+function makeChatImage(src, extra) {
+  const img = document.createElement('img');
+  img.className = 'jsonl-tool-screenshot jsonl-clickable-img' + (extra ? ` ${extra}` : '');
+  img.src = src;
+  img.onclick = () => {
+    const overlay = document.createElement('div');
+    overlay.className = 'jsonl-screenshot-fullscreen';
+    const full = document.createElement('img');
+    full.src = src;
+    overlay.appendChild(full);
+    overlay.onclick = () => overlay.remove();
+    document.body.appendChild(overlay);
+  };
+  return img;
+}
+
 function renderToolResult(resultData, container) {
   const images = extractImages(resultData);
   const textParts = extractResultText(resultData);
@@ -971,21 +1006,45 @@ function renderToolResult(resultData, container) {
     container.appendChild(makeInlineContent('jsonl-tool-result', textParts));
   }
   for (const img of images) {
-    const imgEl = document.createElement('img');
-    imgEl.className = 'jsonl-tool-screenshot';
-    imgEl.src = img.src;
+    const imgEl = makeChatImage(img.src);
     if (img.alt) imgEl.alt = img.alt;
-    imgEl.onclick = () => {
-      const overlay = document.createElement('div');
-      overlay.className = 'jsonl-screenshot-fullscreen';
-      const fullImg = document.createElement('img');
-      fullImg.src = img.src;
-      overlay.appendChild(fullImg);
-      overlay.onclick = () => overlay.remove();
-      document.body.appendChild(overlay);
-    };
     container.appendChild(imgEl);
   }
+}
+
+/**
+ * The prompt just sent, echoed into the transcript.
+ *
+ * One entry, images above the sentence — the shape `renderJsonlEntry` builds
+ * for the same message once the CLI has written it to disk. Without this the
+ * echo was one bubble per block, so a prompt with a screenshot in it looked
+ * like two messages until the chat was reopened and then like one.
+ *
+ * @param {{ text: string, images?: Array<{ mediaType: string, data: string }>, at?: number }} prompt
+ */
+function renderUserPrompt(prompt) {
+  const frag = document.createDocumentFragment();
+  const el = document.createElement('div');
+  el.className = 'jsonl-entry jsonl-user';
+
+  for (const image of prompt.images || []) {
+    el.appendChild(makeChatImage(`data:${image.mediaType};base64,${image.data}`, 'jsonl-msgimage'));
+  }
+  const text = String(prompt.text || '').trim();
+  if (text) {
+    const body = document.createElement('div');
+    body.className = 'jsonl-text';
+    body.innerHTML = renderJsonlText(text);
+    decorateMentions(body);
+    el.appendChild(body);
+  }
+
+  appendWhen(el, prompt.at);
+  // Every entry records when it was, whether or not it shows it — the day
+  // separators are placed off this.
+  if (prompt.at != null) el.dataset.ts = String(prompt.at);
+  frag.appendChild(el);
+  return frag;
 }
 
 export {
@@ -1003,7 +1062,9 @@ export {
   mergeLocalCommandBlocks,
   extractImages,
   extractResultText,
+  makeChatImage,
   renderToolResult,
+  renderUserPrompt,
   getEntryText,
   mergeLocalCommandEntries,
   makeThinking,
@@ -1104,10 +1165,34 @@ function renderMemory(item) {
   return el;
 }
 
+/**
+ * An aside from the session about itself.
+ *
+ * `info` and `warn` stay one quiet line — they are asides. An error is not: a
+ * CLI that would not launch or a turn that could not run is the most important
+ * thing in the transcript, and it was being drawn smaller than the sentence
+ * above it. So that one gets a box and an icon, and says what it is.
+ */
 function renderNotice(item) {
   const el = document.createElement('div');
   el.className = 'jsonl-entry jsonl-meta-entry jsonl-notice jsonl-notice--' + item.level;
-  el.textContent = item.text;
+  if (item.level !== 'error') {
+    el.textContent = item.text;
+    return el;
+  }
+
+  const head = document.createElement('div');
+  head.className = 'jsonl-notice__head';
+  head.appendChild(makeIcon('triangle-alert', 13));
+  const label = document.createElement('span');
+  label.textContent = 'Session error';
+  head.appendChild(label);
+
+  const body = document.createElement('div');
+  body.className = 'jsonl-notice__body';
+  body.textContent = item.text;
+
+  el.append(head, body);
   return el;
 }
 
@@ -1204,11 +1289,11 @@ function renderViewItems(items, toolResults, opts) {
       }
       case 'image': {
         const el = document.createElement('div');
-        el.className = 'jsonl-entry jsonl-assistant';
-        const img = document.createElement('img');
-        img.className = 'jsonl-tool-screenshot jsonl-clickable-img';
-        img.src = `data:${item.mediaType};base64,${item.data}`;
-        el.appendChild(img);
+        // A pasted screenshot belongs on the user's side of the transcript; one
+        // Claude sent belongs on its own.
+        el.className = 'jsonl-entry ' + (item.role === 'user' ? 'jsonl-user' : 'jsonl-assistant');
+        el.appendChild(makeChatImage(`data:${item.mediaType};base64,${item.data}`, 'jsonl-msgimage'));
+        appendWhen(el, at);
         frag.appendChild(el);
         break;
       }
@@ -1391,10 +1476,7 @@ function renderJsonlEntry(entry, toolResultMap, opts) {
       }
       const imgMatch = block.text.trim().match(/^\[Image:\s*source:\s*([^\]]+)\]$/);
       if (imgMatch) {
-        const imgEl = document.createElement('img');
-        imgEl.className = 'jsonl-tool-screenshot jsonl-clickable-img';
-        imgEl.src = 'file://' + imgMatch[1].trim();
-        div.appendChild(imgEl);
+        div.appendChild(makeChatImage('file://' + imgMatch[1].trim(), 'jsonl-msgimage'));
         continue;
       }
       const textEl = document.createElement('div');
@@ -1433,6 +1515,12 @@ function renderJsonlEntry(entry, toolResultMap, opts) {
       const ended = block.id && opts?.toolTimes ? opts.toolTimes.get(block.id) : null;
       if (ended && ts) markToolDuration(toolEl, new Date(ended).getTime() - new Date(ts).getTime());
       intoGroup(opts?.foldTools ? collapseToolBlock(toolEl) : toolEl);
+    } else if (block.type === 'image' && block.source?.data) {
+      // A screenshot the user pasted into the prompt. It sits in the same
+      // record as the sentence it came with — see the CLI's own transcript —
+      // so it renders inside this entry rather than as one of its own.
+      const mediaType = block.source.media_type || 'image/png';
+      div.appendChild(makeChatImage(`data:${mediaType};base64,${block.source.data}`, 'jsonl-msgimage'));
     } else if (block.type === 'tool_result') {
       if (block.tool_use_id && toolResultMap && !toolResultMap.has(block.tool_use_id)) continue;
       const resultContent = block.content || block.output || '';
@@ -1445,9 +1533,10 @@ function renderJsonlEntry(entry, toolResultMap, opts) {
     const ms = new Date(ts).getTime();
     // Every entry records when it was, for the day separators; only prose shows
     // it — the turn a row of tool calls belongs to is already stamped, and
-    // repeating it on every call is noise.
+    // repeating it on every call is noise. An image with no sentence is still a
+    // message someone sent, so it is stamped too.
     if (Number.isFinite(ms)) div.dataset.ts = String(ms);
-    if (div.querySelector('.jsonl-text')) appendWhen(div, ts);
+    if (div.querySelector('.jsonl-text, .jsonl-msgimage')) appendWhen(div, ts);
   }
   return div;
 }

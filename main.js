@@ -3441,6 +3441,16 @@ ipcMain.on('terminal-input', (_event, sessionId, data) => {
   }
 });
 
+// --- IPC: sdk-send-prompt ---
+// A whole prompt for an SDK session, as text or as Messages API content blocks.
+// `terminal-input` cannot carry the second shape: it is the PTY's keystroke
+// channel, and a session that is not SDK-backed would hand the array straight
+// to `pty.write`. Request-response rather than fire-and-forget, because a
+// prompt carrying an attachment has ways to be refused that typing does not.
+ipcMain.handle('sdk-send-prompt', (_event, sessionId, content) => {
+  return sdkSession.sendSdkInput(sessionId, content);
+});
+
 // --- IPC: sdk-interrupt ---
 // The Escape key of an SDK session: stops the turn, keeps the session.
 ipcMain.handle('sdk-interrupt', async (_event, sessionId) => {

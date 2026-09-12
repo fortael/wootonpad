@@ -38,6 +38,7 @@ import UsageRing from './UsageRing.vue';
 import SessionMenu from './SessionMenu.vue';
 import { contextPercent, formatContextLabel } from '../context-window.js';
 import { freshnessOpacity } from '../freshness.js';
+import { sessionChurn } from '../session-churn.js';
 import { tick } from '../time-tick.js';
 
 const props = defineProps({
@@ -74,11 +75,8 @@ const meta = computed(() => {
   return (window.formatDate ? window.formatDate(time.value) : '') + msgs + files;
 });
 
-const churn = computed(() => {
-  const { linesAdded, linesRemoved } = props.session;
-  if (!linesAdded && !linesRemoved) return null;
-  return { added: linesAdded || 0, removed: linesRemoved || 0 };
-});
+// Shared with the sidebar's rows — see session-churn.js.
+const churn = computed(() => sessionChurn(props.session));
 
 const dim = computed(() =>
   props.highlightFresh ? { opacity: freshnessOpacity(time.value) } : null

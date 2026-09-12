@@ -108,14 +108,32 @@ function createInputQueue() {
   };
 }
 
-/** Wrap plain text as the SDKUserMessage shape the SDK expects. */
-function userMessage(text) {
+/**
+ * Wrap a prompt as the SDKUserMessage shape the SDK expects.
+ *
+ * `content` is a MessageParam's content: a plain string, or the Messages API
+ * block array a prompt with an attachment needs — `image` blocks and then the
+ * text. Both are forwarded verbatim; the CLI writes whichever arrives into the
+ * transcript, which is why a pasted screenshot reads back out of the `.jsonl`
+ * the same way one pasted into the CLI's own composer does.
+ */
+function userMessage(content) {
   return {
     type: 'user',
-    message: { role: 'user', content: text },
+    message: { role: 'user', content },
     parent_tool_use_id: null,
     session_id: '',
   };
+}
+
+/** Is this something the CLI can be asked to answer? */
+function isPromptContent(content) {
+  if (typeof content === 'string') return content.length > 0;
+  // An array is content blocks. Every one must at least name its type — an
+  // entry the API cannot read fails the whole turn, not just the block.
+  return Array.isArray(content)
+    && content.length > 0
+    && content.every(block => block && typeof block === 'object' && typeof block.type === 'string');
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────
@@ -203,7 +221,12 @@ async function startSdkSession(sessionId, opts) {
     options.resume = sessionId;
   }
 
-  if (opts.permissionMode) options.permissionMode = opts.permissionMode;
+  if (opts.permissionMode) {
+    options.permissionMode = opts.permissionMode;
+    // The SDK refuses `bypassPermissions` unless the host says it meant it —
+    // and the only way to get here on that mode is the setting that says so.
+    if (opts.permissionMode === 'bypassPermissions') options.allowDangerouslySkipPermissions = true;
+  }
   if (opts.model) options.model = opts.model;
   // Effort has no query() option — it lives in the session-scoped flag layer,
   // which only takes a control request, and a control request needs a session
@@ -341,12 +364,17 @@ function route(entry, message, opts) {
   opts.onMessage?.(entry.realSessionId, message);
 }
 
-/** Queue a prompt. Accepted while a turn is running — it lands after it. */
-function sendSdkInput(sessionId, text) {
+/**
+ * Queue a prompt. Accepted while a turn is running — it lands after it.
+ *
+ * @param {string} sessionId
+ * @param {string | Array<object>} content  text, or Messages API content blocks
+ */
+function sendSdkInput(sessionId, content) {
   const entry = find(sessionId);
   if (!entry || entry.exited) return { ok: false, error: 'No such session' };
-  if (typeof text !== 'string' || !text) return { ok: false, error: 'Empty input' };
-  entry.inputs.push(userMessage(text));
+  if (!isPromptContent(content)) return { ok: false, error: 'Empty input' };
+  entry.inputs.push(userMessage(content));
   return { ok: true };
 }
 
@@ -479,4 +507,5 @@ module.exports = {
   // exported for tests
   createInputQueue,
   userMessage,
+  isPromptContent,
 };
