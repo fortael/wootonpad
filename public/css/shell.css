@@ -351,6 +351,17 @@
   padding: var(--space-2) 0 var(--space-4);
 }
 
+/* A tab whose content is .sbx-blockpanel owns its own gutter and bounds its
+   own blocks, so the panel around it must neither pad nor scroll — two
+   scrollers nested inside one another means the inner one never gets a height
+   to scroll within. */
+.sbx-sidebar-panel--blocks {
+  overflow: hidden;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 /* The first group already sits below the panel's own gutter; its default
    top margin would double it and it lands differently per tab. */
 .sbx-sidebar-panel .project-group:first-child {

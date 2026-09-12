@@ -1,0 +1,145 @@
+/* The sidebar block — the one card every tab's sidebar is built from.
+ *
+ * Loaded before the per-tab sheets, so a tab can add a modifier without having
+ * to out-specify the base.
+ *
+ * There used to be two of these, written twice: the board's sidebar had
+ * .sbx-boardside__block and the projects tab had .projects-block, token for
+ * token the same box. Plans, accounts and the session list had none at all and
+ * laid their rows straight onto the panel, so moving between tabs the sidebar
+ * kept changing what kind of surface it was. One definition now, and a tab that
+ * needs something different says so with a modifier rather than a second copy.
+ *
+ * A block is a bordered, raised surface with an optional header and a body that
+ * scrolls inside its own bounds. The panel around it, not the page, owns the
+ * gutter — the sidebar itself never scrolls. */
+
+/* ── The panel the blocks sit in ──────────────────────────────────── */
+
+.sbx-blockpanel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  overflow: hidden;
+  padding: var(--space-3) var(--space-3) var(--space-4);
+}
+
+/* ── The block ────────────────────────────────────────────────────── */
+
+.sbx-block {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-panel-raised);
+  border: var(--border-width-hairline) solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+/* The block that is the tab's reason to exist takes the free space. */
+.sbx-block--fill { flex: 1 1 auto; }
+
+/* A block sized by its content. `flex-shrink: 0` is load-bearing next to a
+   `--fill` sibling: that one claims everything going, so anything shrinkable
+   beside it is squeezed down to its header and its fold stops opening. */
+.sbx-block--fit { flex: 0 0 auto; }
+
+/* ── Header ───────────────────────────────────────────────────────── */
+
+.sbx-block__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  min-height: var(--hit-sm);
+  padding: 0 var(--space-2) 0 var(--space-3);
+  border-bottom: var(--border-width-hairline) solid var(--border-subtle);
+}
+
+/* A header with nothing under it should not draw the line that separates it
+   from what is under it. */
+.sbx-block__head[aria-expanded='false'] {
+  border-bottom-color: transparent;
+}
+
+/* The bar doubles as the fold control. Buttons sitting on it stop their own
+   clicks, so only the bar itself toggles. */
+.sbx-block__head--toggle {
+  cursor: pointer;
+  user-select: none;
+}
+
+@media (hover: hover) {
+  .sbx-block__head--toggle:hover {
+    background: var(--surface-card-hover);
+  }
+}
+
+.sbx-block__head--toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+.sbx-block__title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sbx-block__count {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--text-disabled);
+  padding-right: var(--space-1);
+}
+
+.sbx-block__chevron {
+  flex: none;
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.sbx-block__chevron.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+/* ── Body ─────────────────────────────────────────────────────────── */
+
+.sbx-block__body {
+  min-height: 0;
+  padding: var(--space-1) 0;
+}
+
+.sbx-block__body--scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+/* style.css thins the scrollbar on the sidebar's own panels; the scrolling
+   element is the block body now, so the same skin has to follow it here. */
+.sbx-block__body--scroll::-webkit-scrollbar { width: 5px; }
+.sbx-block__body--scroll::-webkit-scrollbar-track { background: transparent; }
+.sbx-block__body--scroll::-webkit-scrollbar-thumb {
+  background: var(--border-default);
+  border-radius: var(--radius-xs);
+}
+.sbx-block__body--scroll::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+
+/* ── Footer ───────────────────────────────────────────────────────── */
+
+/* Pinned under the scroller rather than inside it: the way to add something
+   should not be a thing you scroll thirty rows to reach. */
+.sbx-block__foot {
+  flex: none;
+  border-top: var(--border-width-hairline) solid var(--border-subtle);
+}

@@ -711,15 +711,6 @@ body { display: flex; flex-direction: column; }
 
 #account-btn:hover, .account-btn-vue:hover { background: var(--surface-card-hover); }
 
-.account-btn-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--indigo-400);
-  box-shadow: 0 0 5px color-mix(in srgb, var(--indigo-400) 50%, transparent);
-  flex-shrink: 0;
-}
-
 #account-btn-name, .account-btn-name {
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
@@ -952,11 +943,20 @@ body { display: flex; flex-direction: column; }
   background: var(--surface-card);
   border: 1px solid var(--border-default);
   color: var(--text-secondary);
-  opacity: 0;
 }
 
-.account-item:hover .account-open-btn,
-.account-item.active .account-open-btn { opacity: 1; }
+/* Out of the layout, not merely invisible.
+   These were `opacity: 0` inside a `flex-shrink: 0` cluster, so two buttons
+   nobody could see still took 160–210px of a 340px row and the account name
+   was ellipsised down to "Per…" at rest. Hidden means hidden; hover and
+   keyboard focus bring them back. */
+/* The active account is no exception. It used to keep its buttons on show,
+   which cost it the same width — and it is the row that needs them least,
+   since "Use" is already hidden on it and the green highlight says which one
+   it is without any help from a button. */
+.account-item:not(:hover):not(:focus-within) .account-open-btn {
+  display: none;
+}
 
 .account-open-btn:hover {
   background: var(--surface-card-hover);
@@ -1280,9 +1280,16 @@ body { display: flex; flex-direction: column; }
 }
 
 /* ---- Scrollable content ---- */
+/* No longer the scroller. The sessions list is a .sbx-block inside a
+   .sbx-blockpanel now (css/sidebar-blocks.css) and scrolls its own body, the
+   same as every other sidebar tab. An id rule, so it has to be changed here —
+   a class cannot outrank it per-property. */
 #sidebar-content {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ---- Project groups ---- */
@@ -2388,6 +2395,12 @@ body { display: flex; flex-direction: column; }
   padding: var(--space-4) var(--space-5) var(--space-4) var(--space-4);
   overflow-y: scroll;
   align-content: start;
+  /* #terminals above carries margin-right: -20px to hide xterm's own scrollbar
+     gutter, which is right for a single terminal — #terminals is only a host
+     then. In grid mode it is itself the scroller, and that shift puts its
+     scrollbar 20px past the right edge: under the side panel when one is open,
+     off the window when not. See css/side-panel.css for the panel's half. */
+  margin-right: 0;
 }
 
 #terminals.grid-layout::-webkit-scrollbar { width: 8px; }

@@ -29,12 +29,14 @@
   margin-right: calc(var(--sbx-sidepanel-w) + var(--sbx-sidepanel-gap) * 2);
 }
 
-/* #terminals carries a -20px margin of its own to hide xterm's scrollbar
-   gutter, so when file-panel.js has not built the split yet the shift is
-   offset by it. */
-#terminal-area.has-side-panel > #terminals {
-  margin-right: calc(var(--sbx-sidepanel-w) + var(--sbx-sidepanel-gap) * 2 - 20px);
-}
+/* #terminals gets no rule of its own here. file-panel.js reparents it into
+   #terminal-split at startup, so it is never a child of #terminal-area and a
+   `>` rule aimed at it never matches — the gutter above is what actually
+   shifts it. (There was one, written before the split existed, carrying a
+   -20px correction for xterm's scrollbar gutter. It had not applied to
+   anything in a long time, and it is the rule you would reach for on finding
+   the grid's scrollbar under this panel; that one lives on
+   `#terminals.grid-layout` in style.css.) */
 
 /* Same treatment for the grid-mode header strip, so it lines up with the
    grid it labels. */

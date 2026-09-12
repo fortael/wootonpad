@@ -34,12 +34,11 @@
       </template>
     </FilterTabs>
 
-    <div class="projects-scroll">
-    <!-- Same block the board's sidebar uses: a bordered surface holding the
-         list, rather than rows laid straight onto the panel. The archived
-         block below is the same box, folded shut. -->
-    <section class="projects-block projects-block--live">
-      <div class="projects-block__body projects-block__body--scroll">
+    <!-- The shared sidebar block — css/sidebar-blocks.css. Same box every other
+         tab's sidebar uses; the archived one below is it again, folded shut. -->
+    <div class="sbx-blockpanel projects-scroll">
+    <section class="sbx-block sbx-block--fill">
+      <div class="sbx-block__body sbx-block__body--scroll">
       <div class="project-group">
       <div class="project-sessions">
         <div v-if="liveProjects.length === 0" class="projects-empty-hint">
@@ -128,7 +127,7 @@
       </div>
       <!-- Outside the scroller: the way to add a project should not be
            something you have to scroll thirty rows to reach. -->
-      <div class="projects-add-row">
+      <div class="sbx-block__foot projects-add-row">
         <button class="projects-add-btn" @click="callbacks.addProject?.()">
           <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
             <line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/>
@@ -141,9 +140,9 @@
     <!-- Archived: folded shut, and nothing in here is polled. Opening one is
          what fetches its git and containers, and that is the point — see
          project-polling.js. -->
-    <section v-if="archivedProjects.length" class="projects-block projects-block--archived">
+    <section v-if="archivedProjects.length" class="sbx-block sbx-block--fit projects-block--archived">
       <header
-        class="projects-block__head"
+        class="sbx-block__head sbx-block__head--toggle"
         role="button"
         tabindex="0"
         :aria-expanded="!archivedCollapsed"
@@ -155,13 +154,13 @@
           name="chevron-down"
           :size="12"
           tone="muted"
-          class="projects-block__chevron"
+          class="sbx-block__chevron"
           :class="{ 'is-collapsed': archivedCollapsed }"
         />
-        <span class="projects-block__title">Archived</span>
-        <span class="projects-block__count">{{ archivedProjects.length }}</span>
+        <span class="sbx-block__title">Archived</span>
+        <span class="sbx-block__count">{{ archivedProjects.length }}</span>
       </header>
-      <div v-show="!archivedCollapsed" class="projects-block__body projects-block__body--scroll">
+      <div v-show="!archivedCollapsed" class="sbx-block__body sbx-block__body--scroll">
         <div
           v-for="project in archivedProjects"
           :key="project.projectPath"

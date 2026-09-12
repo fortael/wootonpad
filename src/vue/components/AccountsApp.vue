@@ -1,10 +1,15 @@
 <template>
-  <div>
-    <div class="project-group">
-      <div class="project-header">
-        <span class="project-name">Accounts</span>
-      </div>
-      <div class="project-sessions">
+  <!-- The shared sidebar block — css/sidebar-blocks.css. The two .project-group
+       headers here used to pretend Accounts and Add account were projects; they
+       are the block's own title now, the same one every other tab uses. -->
+  <div class="sbx-blockpanel">
+    <section class="sbx-block sbx-block--fill">
+      <header class="sbx-block__head">
+        <SbIcon name="users" :size="13" tone="muted" />
+        <span class="sbx-block__title">Accounts</span>
+        <span class="sbx-block__count">{{ accounts.length }}</span>
+      </header>
+      <div class="sbx-block__body sbx-block__body--scroll">
         <div
           v-for="acc in accounts"
           :key="acc.id"
@@ -74,14 +79,28 @@
           </div>
         </div>
       </div>
-    </div>
+    </section>
 
-    <div class="project-group">
-      <div class="project-header" :class="{ collapsed: !addOpen }" @click="addOpen = !addOpen">
-        <span class="arrow">&#9660;</span>
-        <span class="project-name">Add account</span>
-      </div>
-      <div class="project-sessions accounts-add-section">
+    <section class="sbx-block sbx-block--fit" :class="{ 'is-collapsed': !addOpen }">
+      <header
+        class="sbx-block__head sbx-block__head--toggle"
+        role="button"
+        tabindex="0"
+        :aria-expanded="addOpen"
+        @click="addOpen = !addOpen"
+        @keydown.enter.prevent="addOpen = !addOpen"
+        @keydown.space.prevent="addOpen = !addOpen"
+      >
+        <SbIcon
+          name="chevron-down"
+          :size="12"
+          tone="muted"
+          class="sbx-block__chevron"
+          :class="{ 'is-collapsed': !addOpen }"
+        />
+        <span class="sbx-block__title">Add account</span>
+      </header>
+      <div v-show="addOpen" class="sbx-block__body sbx-block__body--scroll accounts-add-section">
         <p class="accounts-add-desc">Each account uses its own Claude credentials and session history. Add a second account to switch between personal and work Claude Pro plans, or any two separate logins.</p>
         <div class="accounts-add-form">
           <input
@@ -114,13 +133,14 @@
           </div>
         </div>
       </div>
-    </div>
+    </section>
   </div>
 </template>
 
 <script setup>
 import { ref, nextTick } from 'vue';
 import { store } from '../store.js';
+import SbIcon from './SbIcon.vue';
 
 const props = defineProps({
   callbacks: { type: Object, required: true },

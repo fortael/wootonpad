@@ -3,7 +3,7 @@
 // with an in-place card overlay (header/footer) and switch #terminals to grid layout.
 //
 // Depends on globals from app.js: openSessions, activeSessionId, sessionMap, activePtyIds,
-// sortedOrder, sidebarContent, terminalsEl, gridViewActive, gridViewer, gridViewerCount,
+// sortedOrder, sidebarContent, terminalsEl, gridViewActive, gridViewer,
 // placeholder, terminalHeader, planViewer, memoryViewer, terminalArea, cachedProjects, isMac
 // Vue-managed panels (stats, jsonl, settings) are hidden via window.vueStore
 // Depends on: cleanDisplayName, formatDate (utils.js), fitAndScroll, showSession (terminal-manager.js)
@@ -12,6 +12,24 @@ let gridCards = new Map(); // sessionId → card wrapper element
 /** sessionId → the mounted chat card, for the sessions that have one. */
 let gridChats = new Map();
 let gridFocusedSessionId = null;
+
+/**
+ * The count in the grid's header bar.
+ *
+ * One function because three callers used to spell the same sentence out for
+ * themselves, and when the Vue migration turned `gridViewerCount` from a DOM
+ * element into a store field it converted two of them. The third kept writing
+ * `.textContent` on a global that no longer existed, and threw every time a
+ * session was first shown in the grid — which aborted the rest of showSession
+ * and openSession with it.
+ *
+ * `showGridView` passes its own count because it is mid-build: the cards are
+ * wrapped but `gridCards` is not what it is about to become.
+ */
+function setGridViewerCount(count = gridCards.size) {
+  if (!window.vueStore) return;
+  window.vueStore.gridViewerCount = count + ' session' + (count !== 1 ? 's' : '');
+}
 
 /** Is this session drawn as a chat rather than a terminal? */
 function isSdkSession(sessionId) {
@@ -208,9 +226,9 @@ function focusGridCard(sessionId) {
   if (entry) entry.terminal.focus();
 }
 
-function showGridView() {
+function showGridView({ remember = true } = {}) {
   gridViewActive = true;
-  localStorage.setItem('gridViewActive', '1');
+  if (remember) localStorage.setItem('gridViewActive', '1');
   placeholder.style.display = 'none';
   terminalHeader.style.display = 'none';
 
@@ -272,7 +290,7 @@ function showGridView() {
   }
 
   // Show grid header bar with session count
-  if (window.vueStore) window.vueStore.gridViewerCount = sessionIds.length + ' session' + (sessionIds.length !== 1 ? 's' : '');
+  setGridViewerCount(sessionIds.length);
 
   // Fit all terminals after layout resolves. A chat card has none to fit —
   // fitting the unused one behind it would only cost a resize round trip.
@@ -305,16 +323,52 @@ function initGridObservers() {
   new MutationObserver(updateGridColumns).observe(terminalsEl, { childList: true });
 }
 
-function hideGridView() {
+function hideGridView({ remember = true } = {}) {
   gridViewActive = false;
-  localStorage.setItem('gridViewActive', '0');
+  if (remember) localStorage.setItem('gridViewActive', '0');
   unwrapGridCards();
   terminalsEl.classList.remove('grid-layout');
   terminalsEl.style.gridTemplateColumns = '';
   if (window.vueStore) window.vueStore.gridViewActive = false;
 }
 
+// --- Grid suspension across tabs ------------------------------------------
+//
+// The grid is a mode of the sessions tab, not of the application. The board
+// draws its own view, and its preview pane shows the one session whose card
+// you clicked — so laying the grid of every open session into it answers a
+// question nobody asked, and for a chat session it put a read-only card where
+// the conversation should be.
+//
+// Leaving the tab therefore takes the grid down and coming back puts it up
+// again, without touching the stored preference that says whether it belongs
+// there at all. `gridViewActive` stays the honest answer to "is the grid on
+// screen" — which is what SessionSdkApp's own visibility reads.
+let gridSuspended = false;
+
+function suspendGridView() {
+  if (!gridViewActive) return;
+  gridSuspended = true;
+  hideGridView({ remember: false });
+}
+
+function resumeGridView() {
+  if (!gridSuspended) return;
+  gridSuspended = false;
+  showGridView({ remember: false });
+}
+
 function toggleGridView() {
+  // An explicit toggle is a new decision; it outranks whatever the last tab
+  // switch left suspended.
+  gridSuspended = false;
+  // The shortcut is global but the grid only exists on the sessions tab, so
+  // asking for it from the board is asking to go there. Without this the grid
+  // could be switched on underneath a tab that draws its own main area, which
+  // is the state the suspension above exists to prevent.
+  if (window.vueStore && window.vueStore.activeTab !== 'sessions') {
+    window.vueApp?.setTab?.('sessions');
+  }
   if (gridViewActive) {
     const restoreId = gridFocusedSessionId || activeSessionId;
     hideGridView();

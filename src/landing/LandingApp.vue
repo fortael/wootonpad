@@ -141,21 +141,19 @@
                   </template>
                 </FilterTabs>
 
-                <div id="sidebar-content" class="sbx-sidebar-panel" v-show="sessionListVisible">
+                <div id="sidebar-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="sessionListVisible">
                   <SidebarApp :callbacks="sidebarCallbacks" />
                 </div>
-                <div id="plans-content" class="sbx-sidebar-panel" v-show="store.activeTab === 'plans'">
+                <div id="plans-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'plans'">
                   <PlansApp ref="plansRef" :callbacks="planCallbacks" />
                 </div>
-                <div id="accounts-content" class="sbx-sidebar-panel" v-show="store.activeTab === 'accounts'">
+                <div id="accounts-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'accounts'">
                   <AccountsApp ref="accountsRef" :callbacks="accountsCallbacks" />
                 </div>
-                <div id="projects-content" class="sbx-sidebar-panel" v-show="store.activeTab === 'projects'">
+                <div id="projects-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'projects'">
                   <ProjectsApp ref="projectsRef" :callbacks="projectsCallbacks" />
                 </div>
-                <!-- Not a .sbx-sidebar-panel: this one owns two bounded scroll
-                     boxes rather than being a single scrolling column. -->
-                <div id="board-sidebar-content" class="sbx-boardside-panel" v-show="store.activeTab === 'board'">
+                <div id="board-sidebar-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'board'">
                   <BoardSidebarApp :callbacks="boardSidebarCallbacks" />
                 </div>
               </div>

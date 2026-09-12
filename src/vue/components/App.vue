@@ -99,24 +99,22 @@
     </FilterTabs>
 
     <!-- Sidebar content panels (v-show keeps DOM alive for vanilla JS queries) -->
-    <div id="sidebar-content" class="sbx-sidebar-panel" v-show="sessionListVisible && !store.accountSwitching">
+    <div id="sidebar-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="sessionListVisible && !store.accountSwitching">
       <SidebarApp :callbacks="sidebarCallbacks" />
     </div>
     <div v-if="store.accountSwitching && sessionListVisible" id="account-switch-overlay" class="account-switch-preloader">
       <div class="acct-spinner"></div><span>Switching account…</span>
     </div>
-    <div id="plans-content" class="sbx-sidebar-panel" v-show="store.activeTab === 'plans'">
+    <div id="plans-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'plans'">
       <PlansApp ref="plansRef" :callbacks="planCallbacks" />
     </div>
-    <div id="accounts-content" class="sbx-sidebar-panel" v-show="store.activeTab === 'accounts'">
+    <div id="accounts-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'accounts'">
       <AccountsApp ref="accountsRef" :callbacks="accountsCallbacks" />
     </div>
-    <div id="projects-content" class="sbx-sidebar-panel" v-show="store.activeTab === 'projects'">
+    <div id="projects-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'projects'">
       <ProjectsApp ref="projectsRef" :callbacks="projectsCallbacks" />
     </div>
-    <!-- Not a .sbx-sidebar-panel: this one owns two bounded scroll boxes of
-         its own instead of being a single scrolling column. -->
-    <div id="board-sidebar-content" class="sbx-boardside-panel" v-show="store.activeTab === 'board'">
+    <div id="board-sidebar-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'board'">
       <BoardSidebarApp :callbacks="boardSidebarCallbacks" />
     </div>
   </div>
@@ -240,6 +238,7 @@ import SessionSidePanelApp from './SessionSidePanelApp.vue';
 import SessionPanelRail from './SessionPanelRail.vue';
 import SessionSdkApp from './SessionSdkApp.vue';
 import { loadSidePanelTab } from '../side-panel-tabs.js';
+import { isPlainTerminal } from '../session-filter.js';
 import { OPEN_ORDER, mostUrgent, worstColumn, wantsAttention, stateFromStore } from '../session-column.js';
 import { parseRateLimitEvent } from '../rate-limits.js';
 import PlansApp from './PlansApp.vue';
@@ -592,8 +591,17 @@ function onViewMode(mode) {
 // and xterm keeps its own cols/rows, so every transition ends in a refit.
 // The board's bottom split gets it too: one pane at a time is narrow enough to
 // share that space, and the shell in particular is worth having there.
+//
+// Never over a plain terminal. Changes, containers and a scratch shell are
+// things you want beside a session doing work in a project; a terminal already
+// is a shell in that project, and the rail offering to open a second one next
+// to it is the panel answering a question its own subject already answered.
+// `store.sidePanelTab` is left alone, so the panel comes back by itself on the
+// next real session.
+const headerIsTerminal = computed(() => isPlainTerminal(store.headerSession));
+
 const sidePanelVisible = computed(() =>
-  !!store.sidePanelTab && !!store.headerSession
+  !!store.sidePanelTab && !!store.headerSession && !headerIsTerminal.value
 );
 
 // An SDK-backed session has no xterm to show. Keyed by session id in the

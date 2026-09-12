@@ -27,6 +27,7 @@ import '../../public/style.css';
 import '../../public/css/controls.css';
 import '../../public/css/shell.css';
 import '../../public/css/sidebar-redesign.css';
+import '../../public/css/sidebar-blocks.css';
 import '../../public/css/session-view.css';
 import '../../public/css/accounts-view.css';
 import '../../public/css/projects-view.css';

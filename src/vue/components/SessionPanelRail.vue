@@ -4,9 +4,11 @@
        controls have to reach both views. Sitting inside #terminal-area also
        means the coming SDK-backed session view inherits them for free: it
        replaces what is under the rail, not the rail itself. -->
-  <div class="sbx-panelrail" :class="{ 'is-open': !!store.sidePanelTab }">
+  <!-- `is-open` shifts the rail clear of the panel. A terminal never has one
+       open beside it, however the store's remembered tab happens to be set. -->
+  <div class="sbx-panelrail" :class="{ 'is-open': !!store.sidePanelTab && visibleTabs.length > 0 }">
     <button
-      v-for="tab in TABS"
+      v-for="tab in visibleTabs"
       :key="tab.id"
       type="button"
       class="sbx-panelrail__btn"
@@ -20,7 +22,7 @@
       <span v-if="badgeFor(tab.id)" class="sbx-panelrail__badge">{{ badgeFor(tab.id) }}</span>
     </button>
 
-    <span class="sbx-panelrail__sep" role="separator"></span>
+    <span v-if="visibleTabs.length" class="sbx-panelrail__sep" role="separator"></span>
 
     <!-- Stop kills the process. Close only puts the view away — two different
          things, so they do not share a look. -->
@@ -51,9 +53,18 @@ import { ref, computed, watch, onMounted } from 'vue';
 import { store } from '../store.js';
 import SbIcon from './SbIcon.vue';
 import { TABS, setSidePanelTab } from '../side-panel-tabs.js';
+import { isPlainTerminal } from '../session-filter.js';
 
 const projectPath = computed(() => store.headerSession?.projectPath || '');
 const sessionId = computed(() => store.headerSession?.sessionId || '');
+
+// Stop and Close stay for everything — a terminal is still a process you may
+// want to end and a view you may want to put away. The three panel tabs do
+// not: changes, containers and a scratch shell are what you want *beside* a
+// session working in a project, and a terminal already is a shell in that
+// project. Offering it a second one is the rail answering a question its own
+// subject has answered.
+const visibleTabs = computed(() => (isPlainTerminal(store.headerSession) ? [] : TABS));
 
 // Whatever `get-project-detail` last wrote for this project, straight out of
 // SQLite. A plain row read: no git, no docker, no `projects-changed` broadcast
@@ -64,7 +75,8 @@ const cached = ref(null);
 
 async function loadCounts() {
   const p = projectPath.value;
-  if (!p) { cached.value = null; return; }
+  // Nothing draws these for a terminal, so nothing should fetch them either.
+  if (!p || isPlainTerminal(store.headerSession)) { cached.value = null; return; }
   const row = await window.api.getProjectGitCache(p).catch(() => null);
   if (projectPath.value === p) cached.value = row;
 }

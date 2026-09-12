@@ -357,103 +357,23 @@ body.hide-avatars .sbx-board__avatar { display: none; }
    and the project list that scopes the board. Neither scrolls the sidebar —
    they each scroll inside their own bounds, so the projects are always
    reachable no matter how long a summary run gets. */
-.sbx-boardside-panel {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  overflow: hidden;
-  padding: var(--space-3) var(--space-3) var(--space-4);
-}
+/* The panel and the gutter are .sbx-sidebar-panel--blocks and .sbx-blockpanel
+   in css/shell.css and css/sidebar-blocks.css — the same pair every other
+   sidebar tab uses. Nothing board-specific is left to declare here. */
 
-.sbx-boardside {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
+/* The block itself is .sbx-block in css/sidebar-blocks.css — same box the
+   projects tab and the session list use. Only what is the board's own is here.
 
-.sbx-boardside__block {
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface-panel-raised);
-  border: var(--border-width-hairline) solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-}
-
-/* The summary is bounded rather than sized: it collapses to its content when
-   empty and stops growing at 45% of the sidebar, which is the point where the
-   project list would stop being usable. */
+   The summary is bounded rather than sized: it takes the height of its content
+   and stops at 45% of the sidebar, which is where the project list below would
+   stop being usable. */
 .sbx-boardside__block--summary {
-  flex: 0 1 auto;
   max-height: 45%;
-}
-
-.sbx-boardside__block--projects {
-  flex: 1 1 auto;
-}
-
-.sbx-boardside__head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-shrink: 0;
-  min-height: var(--hit-sm);
-  padding: 0 var(--space-2) 0 var(--space-3);
-  border-bottom: var(--border-width-hairline) solid var(--border-subtle);
-}
-
-.sbx-boardside__title {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sbx-boardside__count {
-  flex: none;
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  color: var(--text-disabled);
-  padding-right: var(--space-1);
-}
-
-/* The title bar doubles as the fold control. The buttons sitting on it stop
-   their own clicks, so only the bar itself toggles. */
-.sbx-boardside__head--toggle {
-  cursor: pointer;
-  user-select: none;
-}
-
-@media (hover: hover) {
-  .sbx-boardside__head--toggle:hover {
-    background: var(--surface-card-hover);
-  }
-}
-
-.sbx-boardside__chevron {
-  flex: none;
-  transition: transform var(--duration-fast) var(--ease-standard);
-}
-
-.sbx-boardside__chevron.is-collapsed {
-  transform: rotate(-90deg);
 }
 
 /* Collapsed, the block is just its bar — it must not keep claiming 45% of the
    sidebar's height for a body that is not rendered. */
 .sbx-boardside__block--summary.is-collapsed {
-  flex: 0 0 auto;
   max-height: none;
 }
 
@@ -514,10 +434,9 @@ body.hide-avatars .sbx-board__avatar { display: none; }
   50%      { opacity: 0.55; }
 }
 
+/* Bounds and scrolling come from .sbx-block__body--scroll; these are the
+   board's own contents laid out inside them. */
 .sbx-boardside__body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
   padding: var(--space-2);
   display: flex;
   flex-direction: column;

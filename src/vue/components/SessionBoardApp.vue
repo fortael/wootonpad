@@ -114,6 +114,9 @@ const board = computed(() => {
       showTodayOnly: store.showTodayOnly,
       searchMatchIds: store.searchMatchIds,
       activePtyIds: store.activePtyIds,
+      // The board sorts sessions by what their turn is doing. A plain shell
+      // has no turn, so it would sit in IDLE forever saying nothing.
+      showTerminals: false,
     });
     const buckets = new Map();
     for (const session of sessions) {

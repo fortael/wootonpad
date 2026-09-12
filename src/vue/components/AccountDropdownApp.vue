@@ -1,6 +1,9 @@
 <template>
+  <!-- No status dot. It was always the same colour whatever the account was
+       doing, so it carried nothing the name beside it did not already say.
+       The dropdown's own dot stays: there it marks which account is active,
+       which is a real distinction between rows. -->
   <button class="account-btn-vue" data-tooltip="Switch account" @click.stop="toggle">
-    <span class="account-btn-dot"></span>
     <span class="account-btn-name">{{ activeName }}</span>
     <span class="account-btn-chips">
       <span v-for="chip in activeChips" :key="chip.key" class="account-chip">

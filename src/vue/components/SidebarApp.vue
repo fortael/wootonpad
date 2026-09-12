@@ -1,5 +1,11 @@
 <template>
-  <div>
+  <!-- One block holding the whole list, matching the projects tab: the project
+       headers inside stay what they are, section headings within the list
+       rather than blocks of their own. Ten bordered cards down a narrow rail
+       reads as ten unrelated panels, which is not what a project group is. -->
+  <div class="sbx-blockpanel">
+    <section class="sbx-block sbx-block--fill">
+      <div class="sbx-block__body sbx-block__body--scroll">
     <ProjectGroup
       v-for="project in visibleProjects"
       :key="project.projectPath"
@@ -23,6 +29,8 @@
       @archive-sessions="onArchiveSessions"
       @remove-project="onRemoveProject"
     />
+      </div>
+    </section>
   </div>
 </template>
 

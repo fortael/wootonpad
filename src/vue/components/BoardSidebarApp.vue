@@ -1,16 +1,16 @@
 <template>
-  <div class="sbx-boardside">
+  <div class="sbx-blockpanel sbx-boardside">
     <!-- ── Summary ──────────────────────────────────────────────────
          What every session on the board just finished, in one place, so the
          board can be read without opening anything. -->
     <section
-      class="sbx-boardside__block sbx-boardside__block--summary"
+      class="sbx-block sbx-block--fit sbx-boardside__block--summary"
       :class="{ 'is-collapsed': collapsed }"
     >
       <!-- The whole title bar is the toggle; the buttons on it stop the click
            so pressing Summarize never also folds the answer away. -->
       <header
-        class="sbx-boardside__head sbx-boardside__head--toggle"
+        class="sbx-block__head sbx-block__head--toggle"
         role="button"
         :aria-expanded="!collapsed"
         @click="collapsed = !collapsed"
@@ -19,11 +19,11 @@
           name="chevron-down"
           :size="12"
           tone="muted"
-          class="sbx-boardside__chevron"
+          class="sbx-block__chevron"
           :class="{ 'is-collapsed': collapsed }"
         />
         <SbIcon name="sparkles" :size="13" tone="muted" />
-        <span class="sbx-boardside__title">Summary</span>
+        <span class="sbx-block__title">Summary</span>
         <button
           v-if="pending"
           type="button"
@@ -43,7 +43,7 @@
         >{{ pending ? 'Summarizing…' : 'Summarize' }}</button>
       </header>
 
-      <div v-show="!collapsed" class="sbx-boardside__body sbx-boardside__body--summary">
+      <div v-show="!collapsed" class="sbx-block__body sbx-block__body--scroll sbx-boardside__body sbx-boardside__body--summary">
         <p v-if="pending" class="sbx-boardside__note">
           Reading {{ summarizable.length }} session{{ summarizable.length === 1 ? '' : 's' }} — this runs one headless claude call and can take a while.
         </p>
@@ -79,14 +79,14 @@
          The Projects tab's row stripped to what scoping a board needs:
          no containers, no git. Counts are the board's own counts, taken
          before the project filter so switching between them is possible. -->
-    <section class="sbx-boardside__block sbx-boardside__block--projects">
-      <header class="sbx-boardside__head">
+    <section class="sbx-block sbx-block--fill">
+      <header class="sbx-block__head">
         <SbIcon name="folder" :size="13" tone="muted" />
-        <span class="sbx-boardside__title">Projects</span>
-        <span class="sbx-boardside__count">{{ rows.length }}</span>
+        <span class="sbx-block__title">Projects</span>
+        <span class="sbx-block__count">{{ rows.length }}</span>
       </header>
 
-      <div class="sbx-boardside__body">
+      <div class="sbx-block__body sbx-block__body--scroll sbx-boardside__body">
         <button
           type="button"
           class="sbx-boardside__proj"
@@ -160,6 +160,9 @@ const boardFilters = computed(() => ({
   showTodayOnly: store.showTodayOnly,
   searchMatchIds: store.searchMatchIds,
   activePtyIds: store.activePtyIds,
+  // Matching the board itself — these counts have to be the number of cards
+  // picking that project would show, terminals included in neither.
+  showTerminals: false,
 }));
 
 const rows = computed(() => {

@@ -2,10 +2,10 @@
 // Key bindings, write buffering, xterm instance lifecycle, drag-and-drop.
 //
 // Depends on globals: openSessions, activeSessionId, TERMINAL_THEME, terminalsEl,
-// gridViewActive, gridCards, gridViewerCount, placeholder, terminalHeader,
+// gridViewActive, gridCards, placeholder, terminalHeader,
 // sessionMap, activePtyIds (app.js)
 // Depends on: toggleGridView, isSessionNavKey, handleSessionNavKey, focusGridCard,
-// wrapInGridCard, showGridView (grid-view.js)
+// wrapInGridCard, showGridView, setGridViewerCount (grid-view.js)
 // Depends on: shellEscape (utils.js)
 
 // Current terminal typography — read from settings on startup, changed via
@@ -357,6 +357,14 @@ function showSession(sessionId) {
   setActiveSession(sessionId);
   clearNotifications(sessionId);
 
+  // Whatever was covering the main area has to go, in both views. This used to
+  // live in the single-terminal branch only, so showing a session while the
+  // grid was on left #terminal-area exactly as the previous tab had it — and
+  // the board tab sets `display: none` on it inline. That is why previewing a
+  // card on the board gave an empty pane whenever grid mode happened to be on,
+  // and grid mode survives a restart in localStorage.
+  hidePlanViewer();
+
   if (gridViewActive) {
     // Ensure grid layout is set up (e.g. on first session after startup restore)
     if (!terminalsEl.classList.contains('grid-layout')) {
@@ -370,13 +378,12 @@ function showSession(sessionId) {
       wrapInGridCard(sessionId);
       fitAndScroll(entry);
       requestAnimationFrame(() => focusGridCard(sessionId));
-      gridViewerCount.textContent = gridCards.size + ' session' + (gridCards.size !== 1 ? 's' : '');
+      setGridViewerCount();
     }
   } else {
     // Single terminal view
     document.querySelectorAll('.terminal-container').forEach(el => el.classList.remove('visible'));
     placeholder.style.display = 'none';
-    hidePlanViewer();
     if (session) showTerminalHeader(session);
     if (entry) {
       entry.element.classList.add('visible');

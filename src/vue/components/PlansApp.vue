@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div class="sbx-blockpanel">
     <!-- Plans follow the active account, so name the directory that was
          actually searched instead of the default ~/.claude one. -->
     <div v-if="plans.length === 0" class="plans-empty">
@@ -13,11 +13,16 @@
       >{{ copied ? 'Copied' : plansDir.dir }}</button>
     </div>
 
-    <div v-else class="project-group">
-      <div class="project-header">
-        <span class="project-name">Plans</span>
-      </div>
-      <div class="project-sessions">
+    <!-- The shared sidebar block — css/sidebar-blocks.css. The header that used
+         to be a .project-header pretending Plans was a project is now the
+         block's own title, the same one the board and the projects tab use. -->
+    <section v-else class="sbx-block sbx-block--fill">
+      <header class="sbx-block__head">
+        <SbIcon name="notebook-pen" :size="13" tone="muted" />
+        <span class="sbx-block__title">Plans</span>
+        <span class="sbx-block__count">{{ plans.length }}</span>
+      </header>
+      <div class="sbx-block__body sbx-block__body--scroll">
         <ListItem
           v-for="plan in plans"
           :key="plan.filename"
@@ -33,13 +38,14 @@
           </template>
         </ListItem>
       </div>
-    </div>
+    </section>
   </div>
 </template>
 
 <script setup>
 import { ref, watch } from 'vue';
 import ListItem from './ListItem.vue';
+import SbIcon from './SbIcon.vue';
 
 const props = defineProps({
   callbacks: { type: Object, required: true },

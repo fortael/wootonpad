@@ -305,7 +305,7 @@ window.api.onProcessExited((sessionId, exitCode) => {
     destroySession(sessionId);
   }
   if (gridViewActive) {
-    if (window.vueStore) window.vueStore.gridViewerCount = gridCards.size + ' session' + (gridCards.size !== 1 ? 's' : '');
+    setGridViewerCount();
   } else if (activeSessionId === sessionId) {
     setActiveSession(null);
     terminalHeader.style.display = 'none';
@@ -655,7 +655,7 @@ async function loadProjects({ resort = false } = {}) {
   // Reconcile pending sessions: remove ones that now have real data
   let hasReinjected = false;
   for (const [sid, pending] of [...pendingSessions]) {
-    const realExists = allProjects.some(p => p.sessions.some(s => s.sessionId === sid));
+    const realExists = cachedAllProjects.some(p => p.sessions.some(s => s.sessionId === sid));
     if (realExists) {
       pendingSessions.delete(sid);
     } else {
@@ -1355,6 +1355,12 @@ window.__sb = {
     // with nothing open only un-hides the placeholder), so retire the board
     // here rather than trusting each one to do it.
     if (tabName !== 'board' && window.vueStore) window.vueStore.showBoard = false;
+
+    // The grid belongs to the sessions tab. Every other tab draws its own main
+    // area — the board especially, whose preview pane shows one session — so
+    // the grid comes down on the way out and goes back up on the way in. The
+    // stored preference is untouched by either.
+    if (tabName === 'sessions') resumeGridView(); else suspendGridView();
 
     if (tabName === 'sessions') {
       saveUiState({ panel: 'terminal', sidebarTab: tabName });
