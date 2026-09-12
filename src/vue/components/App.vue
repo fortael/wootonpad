@@ -728,6 +728,8 @@ onMounted(async () => {
     },
     close: () => projectViewerRef.value?.close(),
     setTab: (tab) => projectViewerRef.value?.setTab(tab),
+    // The hand-off from the session side panel's read-only view of a file.
+    openFile: (relPath) => projectViewerRef.value?.openFile(relPath),
   };
   window.vueApp = { setTab };
   window.vueJsonlViewer = { open: (s) => jsonlRef.value?.open(s) };

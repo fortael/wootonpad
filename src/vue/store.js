@@ -111,6 +111,10 @@ export const store = reactive({
   // its buttons without issuing a second call — get-project-detail broadcasts
   // `projects-changed`, which re-renders the whole sidebar, so it is not free.
   sidePanelDetail: null,
+  // An absolute path the panel is showing read-only, over whatever pane is
+  // open. Set by clicking an `@file` mention in the chat — the answer to "what
+  // is in that file" belongs beside the conversation, not in place of it.
+  sidePanelFile: null,
 
   // Project avatars: projectPath → data: URL string
   avatarDataUrls: {},

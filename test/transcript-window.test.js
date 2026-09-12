@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { readTranscriptWindow, forgetTranscript } = require('../transcript-window');
+const { readTranscriptWindow, readCompactBoundaries, forgetTranscript } = require('../transcript-window');
 
 let dirCount = 0;
 function makeTranscript(records, { trailingNewline = true, blanks = false } = {}) {
@@ -215,4 +215,50 @@ test('an empty transcript reads as an empty window', () => {
   } finally {
     cleanup(dir, file);
   }
+});
+
+// ── The compact rail ──────────────────────────────────────────────
+//
+// The rail down the left of the chat is drawn from every boundary in the file,
+// not just the one flooring the current window — see readCompactBoundaries.
+
+test('every compact boundary is reported, in file order, with its position', () => {
+  const records = [
+    ...Array.from({ length: 10 }, (_, i) => msg(i)),
+    boundary({ timestamp: '2026-09-10T10:00:00.000Z', trigger: 'manual' }),
+    ...Array.from({ length: 10 }, (_, i) => msg(i)),
+    boundary({ timestamp: '2026-09-11T10:00:00.000Z', trigger: 'auto' }),
+    ...Array.from({ length: 5 }, (_, i) => msg(i)),
+  ];
+  const { dir, file } = makeTranscript(records);
+  try {
+    const found = readCompactBoundaries(file);
+    assert.equal(found.total, 27);
+    assert.deepEqual(found.compacts.map(c => c.index), [10, 21]);
+    assert.deepEqual(found.compacts.map(c => c.trigger), ['manual', 'auto']);
+    assert.equal(found.compacts[0].preTokens, 936783);
+    assert.equal(found.compacts[1].postTokens, 11112);
+  } finally { cleanup(dir, file); }
+});
+
+test('a transcript that was never compacted reports none', () => {
+  const { dir, file } = makeTranscript(Array.from({ length: 5 }, (_, i) => msg(i)));
+  try {
+    const found = readCompactBoundaries(file);
+    assert.equal(found.total, 5);
+    assert.deepEqual(found.compacts, []);
+  } finally { cleanup(dir, file); }
+});
+
+// The window read and the rail share one cached line index, so the record
+// numbers they hand the renderer have to be the same numbers.
+test('a boundary index matches the one the window floors on', () => {
+  const records = [...Array.from({ length: 8 }, (_, i) => msg(i)), boundary(),
+    ...Array.from({ length: 8 }, (_, i) => msg(i))];
+  const { dir, file } = makeTranscript(records);
+  try {
+    const win = readTranscriptWindow(file, { limit: 50 });
+    const found = readCompactBoundaries(file);
+    assert.equal(win.compact.index, found.compacts[0].index);
+  } finally { cleanup(dir, file); }
 });

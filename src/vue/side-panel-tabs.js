@@ -23,6 +23,20 @@ export function loadSidePanelTab() {
   return null;
 }
 
+/**
+ * Show a file in the panel, read-only, over whatever pane is open.
+ *
+ * Opens the panel if it is closed — the pane behind is arbitrary at that point,
+ * and closing the file lands on it, which is the same place the diff overlay
+ * lands. `path` is absolute; the chat resolves a mention against the session's
+ * own project before calling this.
+ */
+export function openSidePanelFile(path) {
+  if (!path) return;
+  store.sidePanelFile = path;
+  if (!store.sidePanelTab) setSidePanelTab(TABS[0].id);
+}
+
 /** @param {string|null} id */
 export function setSidePanelTab(id) {
   const next = id && IDS.has(id) ? id : null;

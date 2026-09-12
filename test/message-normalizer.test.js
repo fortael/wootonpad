@@ -79,6 +79,33 @@ test('every other stream frame is a delta with no text', () => {
   }
 });
 
+// What a turn has cost so far, for the working row. The delta is kept
+// alongside it — it is what says the turn is still alive.
+test('message_start reports the prompt the request went out with', () => {
+  assert.deepEqual(normalize({
+    type: 'stream_event',
+    session_id: 's',
+    event: {
+      type: 'message_start',
+      message: { usage: { input_tokens: 12, cache_read_input_tokens: 400, output_tokens: 1 } },
+    },
+  }), [
+    { kind: 'usage', phase: 'start', inputTokens: 412, outputTokens: 1 },
+    { kind: 'delta', target: 'other', text: '' },
+  ]);
+});
+
+test('message_delta reports the answer so far', () => {
+  assert.deepEqual(normalize({
+    type: 'stream_event',
+    session_id: 's',
+    event: { type: 'message_delta', usage: { output_tokens: 87 } },
+  }), [
+    { kind: 'usage', phase: 'delta', inputTokens: 0, outputTokens: 87 },
+    { kind: 'delta', target: 'other', text: '' },
+  ]);
+});
+
 test('session bookkeeping is silent, with the reason recorded', () => {
   const items = normalize({ type: 'system', subtype: 'init', session_id: 's' });
   assert.deepEqual(items, [{ kind: 'silent', reason: 'init' }]);
@@ -135,4 +162,59 @@ test('labels read the way the logs and the card both need', () => {
   assert.equal(messageLabel({ type: 'system', subtype: 'init' }), 'system:init');
   assert.equal(messageLabel({ type: 'assistant' }), 'assistant');
   assert.equal(messageLabel(null), 'malformed');
+});
+
+// ── Recalled memory ───────────────────────────────────────────────
+//
+// The one thing that shapes an answer without appearing in the conversation.
+// The CLI emits it so a renderer can show it; silencing it meant the reply
+// simply knew something, with nothing on screen saying where from.
+
+test('recalled memories become one item carrying every entry', () => {
+  const items = normalize({
+    type: 'system', subtype: 'memory_recall', mode: 'select', session_id: 's', uuid: 'u',
+    memories: [
+      { path: '/home/me/.claude/memory/prefers-tabs.md', scope: 'personal' },
+      { path: 'https://example.test/org.md', scope: 'organization', content: 'Ship on Fridays.' },
+    ],
+  });
+  assert.deepEqual(items, [{
+    kind: 'memory',
+    mode: 'select',
+    memories: [
+      { path: '/home/me/.claude/memory/prefers-tabs.md', scope: 'personal', content: '' },
+      { path: 'https://example.test/org.md', scope: 'organization', content: 'Ship on Fridays.' },
+    ],
+  }]);
+});
+
+// A file-backed entry has no body — the renderer lazy-loads from the path — so
+// an absent `content` must not become the string "undefined".
+test('a memory with no body carries an empty one, not undefined', () => {
+  const [item] = normalize({
+    type: 'system', subtype: 'memory_recall', mode: 'select', session_id: 's', uuid: 'u',
+    memories: [{ path: '/a.md', scope: 'personal' }],
+  });
+  assert.equal(item.memories[0].content, '');
+});
+
+test('a recall that surfaced nothing stays silent', () => {
+  assert.deepEqual(
+    normalize({ type: 'system', subtype: 'memory_recall', mode: 'select', memories: [], session_id: 's', uuid: 'u' }),
+    [{ kind: 'silent', reason: 'memory_recall' }]);
+});
+
+// A slash command's output is not Claude talking. Live it arrives bare — the
+// `<local-command-stdout>` envelope is only ever written to the transcript —
+// so the type is the only thing that can tell the two apart.
+test('local command output is its own kind, not assistant prose', () => {
+  assert.deepEqual(
+    normalize({ type: 'system', subtype: 'local_command_output', content: '  0% used\n', session_id: 's' }),
+    [{ kind: 'command_output', text: '0% used', isError: false }]);
+});
+
+test('a command that printed nothing is silent', () => {
+  assert.deepEqual(
+    normalize({ type: 'system', subtype: 'local_command_output', content: '   ', session_id: 's' }),
+    [{ kind: 'silent', reason: 'local_command_output' }]);
 });

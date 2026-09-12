@@ -5098,6 +5098,15 @@ body.hide-avatars .grid-card-avatar {
   container-type: inline-size;
 }
 
+/* This is the only scroller on the tab, and a flex column shrinks its children
+   to fit before it will overflow. The panels inside clip (rounded corners), so
+   a six-commit list under a long history was squeezed down to three rows with
+   the rest cut off and nothing to scroll. Children keep their own height; the
+   body is what scrolls. */
+.pv-tab-body > * {
+  flex-shrink: 0;
+}
+
 /* ── Git toolbar ────────────────────────────────────────────────── */
 .pv-git-toolbar {
   display: flex;

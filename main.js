@@ -25,7 +25,7 @@ const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolveP
 const { startHookServer, stopHookServer } = require('./hook-server');
 const { buildHookSettings } = require('./hook-settings');
 const { SessionStatusTracker } = require('./session-status');
-const { readTranscriptWindow, forgetTranscript } = require('./transcript-window');
+const { readTranscriptWindow, readCompactBoundaries, forgetTranscript } = require('./transcript-window');
 const { createDockAttention } = require('./dock-attention');
 const {
   detectCompose, composeCheckDue, pollPlan, activeProjectPaths,
@@ -1738,6 +1738,58 @@ ipcMain.handle('get-file-tree', (_event, projectPath) => {
   catch (e) { return { ok: false, error: e.message }; }
 });
 
+/**
+ * One directory's worth of `@` completions, for a token that leaves the project.
+ *
+ * `get-file-tree` answers everything inside the project and answers it from
+ * memory; it cannot answer `@../other-checkout/src/` — and the CLI's own
+ * composer can, which is where a sibling repository gets referenced from. So
+ * anything starting with `../`, `~/` or `/` is read a directory at a time,
+ * which is also the only way to walk one.
+ *
+ * `token` is what follows the `@`, and the returned `value` is the whole token
+ * it should become — the renderer substitutes it, it does not join it.
+ */
+ipcMain.handle('list-path-completions', (_event, projectPath, token) => {
+  const SKIP = new Set(['.git', 'node_modules', '.DS_Store']);
+  const LIMIT = 60;
+  const text = String(token || '');
+  const cut = text.lastIndexOf('/');
+  const dir = cut === -1 ? '' : text.slice(0, cut + 1);
+  const base = cut === -1 ? text : text.slice(cut + 1);
+
+  // `~` is the host's home. On a WSL account the distribution's own home is a
+  // different directory, and there is no cheap way to ask for it from here —
+  // a `~/` token on such a project simply finds nothing, which is the same
+  // answer it would get for a path that does not exist.
+  let target;
+  if (dir.startsWith('~/') || dir === '~') target = path.join(os.homedir(), dir.slice(1));
+  else if (dir.startsWith('/')) target = dir;
+  else target = projectJoin(projectPath, dir || '.');
+
+  let entries;
+  try { entries = fs.readdirSync(hostPath(target), { withFileTypes: true }); }
+  catch (e) { return { ok: false, error: e.message, entries: [] }; }
+
+  const needle = base.toLowerCase();
+  const matched = entries
+    .filter(e => !SKIP.has(e.name))
+    // Dotfiles only once the dot has been typed, the way a shell does it.
+    .filter(e => base.startsWith('.') || !e.name.startsWith('.'))
+    .filter(e => e.name.toLowerCase().startsWith(needle))
+    .sort((a, b) => {
+      if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    })
+    .slice(0, LIMIT)
+    .map((e) => {
+      const isDir = e.isDirectory();
+      return { name: e.name, isDir, value: dir + e.name + (isDir ? '/' : '') };
+    });
+
+  return { ok: true, entries: matched };
+});
+
 ipcMain.handle('get-file-diff', (_event, projectPath, filePath) => {
   const { execFileSync } = require('child_process');
   let oldContent = '';
@@ -2745,6 +2797,22 @@ ipcMain.handle('read-session-transcript', (_event, sessionId, opts) => {
     });
   } catch (err) {
     return { error: err.message };
+  }
+});
+
+// --- IPC: session-compacts ---
+// Where this session's context was thrown away, for the chat's timeline rail.
+// Reuses the same cached line index the windowed read builds, so it costs one
+// stat on a warm file and parses only the boundary records themselves.
+ipcMain.handle('session-compacts', (_event, sessionId) => {
+  const folder = getCachedFolder(sessionId);
+  if (!folder) return { ok: false, total: 0, compacts: [] };
+  const jsonlPath = path.join(activeProjectsDir(), folder, sessionId + '.jsonl');
+  try {
+    return { ok: true, ...readCompactBoundaries(jsonlPath) };
+  } catch {
+    // A session with no transcript yet is the normal case for a new one.
+    return { ok: false, total: 0, compacts: [] };
   }
 });
 

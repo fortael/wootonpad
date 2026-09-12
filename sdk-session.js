@@ -393,9 +393,17 @@ const setSdkModel = (sessionId, model) => sdkControl(sessionId, q => q.setModel(
 const setSdkEffort = (sessionId, effortLevel) =>
   sdkControl(sessionId, q => q.applyFlagSettings({ effortLevel }));
 
-/** What the CLI's own /context would show, for the ring in the control bar. */
+/**
+ * What the CLI's own /context would show, for the ring in the control bar and
+ * the breakdown behind it.
+ *
+ * 'full' rather than 'summary': the summary is the ring's three numbers, and
+ * the rest — which MCP servers, which memory files, which skills are spending
+ * the window — is the whole question anyone hovering the ring is asking. It is
+ * one local control request per finished turn, not per hover.
+ */
 const getSdkContextUsage = (sessionId) =>
-  sdkControl(sessionId, q => q.getContextUsage({ detail: 'summary' }));
+  sdkControl(sessionId, q => q.getContextUsage({ detail: 'full' }));
 
 /** Change the permission mode of a live session. */
 async function setSdkPermissionMode(sessionId, mode) {

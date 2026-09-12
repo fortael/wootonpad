@@ -1692,6 +1692,18 @@ window.__sb = {
   },
 
   openProject: (project) => openProjectViewer(project),
+
+  // The session side panel shows a file read-only; this is where it hands one
+  // over to be edited. The Projects tab already owns the tree, the save button
+  // and the modified marker, so the panel does not grow a second editor.
+  openProjectFile: (projectPath, relPath) => {
+    const proj = cachedAllProjects.find(p => p.projectPath === projectPath)
+      || { projectPath, name: projectPath.split('/').filter(Boolean).pop() };
+    window.vueApp?.setTab('projects');
+    openProjectViewer(proj);
+    // After open(), which resets viewedPath — the tree is read off that.
+    setTimeout(() => window.vueProjectViewer?.openFile(relPath), 50);
+  },
   onPvTabChange: (tab) => saveUiState({ pvTab: tab }),
 
   // "Highlight fresh", from either of the two buttons that flip it. Guarded

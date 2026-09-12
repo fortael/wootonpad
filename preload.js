@@ -47,6 +47,7 @@ contextBridge.exposeInMainWorld('api', {
   // One window of a transcript, newest first. `before` pages upward; a window
   // never spans a `/compact` boundary — see transcript-window.js.
   readSessionTranscript: (sessionId, opts) => ipcRenderer.invoke('read-session-transcript', sessionId, opts),
+  sessionCompacts: (sessionId) => ipcRenderer.invoke('session-compacts', sessionId),
 
   // Settings
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
@@ -111,6 +112,7 @@ contextBridge.exposeInMainWorld('api', {
   getGitUserInfo: (projectPath) => ipcRenderer.invoke('get-git-user-info', projectPath),
   deleteWorktree: (projectPath, worktreePath) => ipcRenderer.invoke('delete-worktree', projectPath, worktreePath),
   getFileTree: (projectPath) => ipcRenderer.invoke('get-file-tree', projectPath),
+  listPathCompletions: (projectPath, token) => ipcRenderer.invoke('list-path-completions', projectPath, token),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
 
   // Send (fire-and-forget)

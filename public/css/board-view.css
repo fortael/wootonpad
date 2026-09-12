@@ -134,6 +134,12 @@
   gap: var(--space-4);
 }
 
+/* A flex column shrinks its children before it will overflow, so a full column
+   squashed its groups instead of scrolling them. Same rule as .pv-tab-body. */
+.sbx-board__colbody > * {
+  flex-shrink: 0;
+}
+
 .sbx-board__empty {
   border: var(--border-width-hairline) dashed var(--border-subtle);
   border-radius: var(--radius-sm);

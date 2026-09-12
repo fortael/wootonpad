@@ -12,9 +12,49 @@
     ></div>
 
     <div class="sbx-sidepanel__body">
+      <!-- A file someone clicked in the conversation. Same overlay shape as the
+           diff, and for the same reason: the answer to "what is in that file"
+           belongs beside the session, not in place of it. -->
+      <header v-if="viewedFile" class="sbx-sidepanel__head">
+        <button
+          type="button"
+          class="sbx-sidepanel__backbtn"
+          data-tooltip="Close file"
+          aria-label="Close file"
+          @click="closeFile"
+        >
+          <SbIcon name="chevron-down" :size="13" class="sbx-sidepanel__backchev" />
+          Back
+        </button>
+        <span class="sbx-sidepanel__difffile" :title="viewedFile">{{ baseOf(viewedFile) }}</span>
+        <span class="sbx-sidepanel__spacer"></span>
+        <!-- Read-only here on purpose: this is a reference while you read the
+             conversation. Editing is a different task, and the Projects tab is
+             where the tree, the save button and the rest of it already live. -->
+        <button
+          v-if="editableRelPath"
+          type="button"
+          class="sbx-sidepanel__iconbtn"
+          data-tooltip="Open for editing in Projects"
+          aria-label="Open for editing in Projects"
+          @click="editInProjects"
+        >
+          <SbIcon name="notebook-pen" :size="12" />
+        </button>
+        <button
+          type="button"
+          class="sbx-sidepanel__iconbtn"
+          data-tooltip="Close panel"
+          aria-label="Close panel"
+          @click="close"
+        >
+          <SbIcon name="x" :size="13" />
+        </button>
+      </header>
+
       <!-- The diff takes the header over rather than stacking a second bar:
            at this width every row of chrome is a row the diff does not get. -->
-      <header v-if="activeDiff" class="sbx-sidepanel__head">
+      <header v-else-if="activeDiff" class="sbx-sidepanel__head">
         <button
           type="button"
           class="sbx-sidepanel__backbtn"
@@ -72,8 +112,14 @@
         </button>
       </header>
 
+      <!-- ── File overlay ────────────────────────────────────────────── -->
+      <div v-if="viewedFile" class="sbx-sidepanel__pane sbx-sidepanel__pane--diff">
+        <div v-if="fileError" class="pv-empty">{{ fileError }}</div>
+        <div v-show="!fileError" ref="fileHostRef" class="sbx-sidepanel__diffhost"></div>
+      </div>
+
       <!-- ── Diff overlay ────────────────────────────────────────────── -->
-      <div v-if="activeDiff" class="sbx-sidepanel__pane sbx-sidepanel__pane--diff">
+      <div v-else-if="activeDiff" class="sbx-sidepanel__pane sbx-sidepanel__pane--diff">
         <div ref="diffHostRef" class="sbx-sidepanel__diffhost"></div>
       </div>
 
@@ -236,7 +282,13 @@
       <!-- v-show, not v-if: the xterm instance is bound to this host element,
            and unmounting it on every tab switch would tear the PTY down and
            lose the user's scrollback and their shell state. -->
-      <div v-show="tab === 'shell'" class="sbx-sidepanel__pane sbx-sidepanel__pane--shell">
+      <!-- An overlay covers the pane behind it, and the shell is the one pane
+           that is not part of the v-if chain — without this it would show
+           through a diff or a file. -->
+      <div
+        v-show="tab === 'shell' && !activeDiff && !viewedFile"
+        class="sbx-sidepanel__pane sbx-sidepanel__pane--shell"
+      >
         <div ref="shellHostRef" class="sbx-sidepanel__shellhost" @mousedown="focusShell"></div>
       </div>
     </div>
@@ -458,6 +510,85 @@ async function openDiff(filePath) {
 
 function closeDiff() { activeDiff.value = null; }
 
+// ── File overlay ──────────────────────────────────────────────────
+//
+// A file someone clicked in the conversation. Read-only: this is a reference
+// while you read, and the Projects tab already owns editing — it has the tree,
+// the save button and the modified marker. The button in the header hands the
+// file over to it rather than growing a second editor here.
+
+const viewedFile = computed(() => store.sidePanelFile);
+const fileError = ref('');
+const fileHostRef = ref(null);
+let fileView = null;
+
+function destroyFileView() {
+  if (!fileView) return;
+  try { fileView.destroy?.(); } catch {}
+  fileView = null;
+}
+
+function closeFile() { store.sidePanelFile = null; }
+
+/** The path relative to this session's project, when the file is inside it. */
+const editableRelPath = computed(() => {
+  const file = viewedFile.value;
+  const root = projectPath.value.replace(/\/$/, '');
+  if (!file || !root || !file.startsWith(`${root}/`)) return '';
+  return file.slice(root.length + 1);
+});
+
+function editInProjects() {
+  const rel = editableRelPath.value;
+  if (!rel) return;
+  window.__sb?.openProjectFile?.(projectPath.value, rel);
+}
+
+/**
+ * The host element, once it exists.
+ *
+ * CodeMirror measures its character box on creation, so it must be built into
+ * an element that is really in the document. On a fresh mount — which is what
+ * opening a file from a closed panel does — the ref can still be empty on the
+ * tick after the read comes back, and building into nothing left the panel
+ * showing its header over an empty pane.
+ */
+async function fileHost() {
+  for (let i = 0; i < 3; i++) {
+    await nextTick();
+    if (fileHostRef.value) return fileHostRef.value;
+  }
+  return null;
+}
+
+// `immediate`, because clicking a file in a *closed* panel sets the path and
+// then opens the panel: this component mounts with the value already in place,
+// and a lazy watcher has nothing left to fire on. That was the intermittent
+// blank pane — it only ever worked when the panel happened to be open already.
+watch(viewedFile, async (file) => {
+  destroyFileView();
+  fileError.value = '';
+  if (!file) return;
+  // Two overlays would stack; the newer one wins.
+  activeDiff.value = null;
+  const res = await window.api.readFileForPanel(file).catch(() => null);
+  if (store.sidePanelFile !== file) return;          // clicked past it already
+  if (!res?.ok) { fileError.value = res?.error || 'Could not read that file'; return; }
+  const el = await fileHost();
+  if (!el || store.sidePanelFile !== file) return;
+  el.innerHTML = '';
+  // The same read-only CodeMirror the Projects tab and the MCP panel use, so
+  // the syntax highlighting cannot differ between the three places.
+  fileView = window.createReadOnlyViewer?.(el, res.content, file);
+}, { immediate: true });
+
+// A file belongs to the project it was opened from; switching sessions to
+// another project leaves a path that means nothing here.
+watch(projectPath, () => { store.sidePanelFile = null; });
+
+// Opening a diff closes the file, the same way opening a file closes the diff.
+watch(activeDiff, (diff) => { if (diff) store.sidePanelFile = null; });
+
 function stepDiff(delta) {
   const next = changedFiles.value[diffIndex.value + delta];
   if (next) openDiff(next.file);
@@ -612,7 +743,9 @@ onBeforeUnmount(() => {
     try { typeof diffView.destroy === 'function' ? diffView.destroy() : diffView.a?.destroy(); } catch {}
     diffView = null;
   }
+  destroyFileView();
   window.destroyPanelTerminal?.();
   store.sidePanelDetail = null;
+  store.sidePanelFile = null;
 });
 </script>

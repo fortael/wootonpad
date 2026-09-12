@@ -1149,5 +1149,18 @@ defineExpose({
   },
   setTab(tab) { activeTab.value = tab; },
   setViewedPath,
+  /**
+   * Open one file, editable — the hand-off from the session side panel's
+   * read-only view of the same file.
+   *
+   * The tree is not waited for: it is the list beside the editor, not the way
+   * to the file, and switching the tab already starts loading it.
+   *
+   * @param {string} relPath path relative to the project root
+   */
+  async openFile(relPath) {
+    activeTab.value = 'files';
+    await openFileFromTree(relPath);
+  },
 });
 </script>

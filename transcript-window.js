@@ -182,9 +182,39 @@ function readTranscriptWindow(filePath, opts = {}) {
   };
 }
 
+/**
+ * Every compact boundary in the file, in order, with where it sits.
+ *
+ * The index already knows which records they are — it has to, to floor a
+ * window — so this parses only those lines: a transcript has single digits of
+ * them at most, whatever its size. It is what the chat's timeline rail is drawn
+ * from: the shape of a long session is mostly where its context was thrown
+ * away, and that is the one thing the scroll position cannot show.
+ *
+ * @returns {{ total: number, compacts: Array<{
+ *   index: number, timestamp: string|null, trigger: string|null,
+ *   preTokens: number, postTokens: number,
+ * }> }}
+ */
+function readCompactBoundaries(filePath) {
+  const index = loadIndex(filePath);
+  const compacts = index.boundaries.map((at) => {
+    const record = parseRecord(index, at) || {};
+    const meta = record.compactMetadata || {};
+    return {
+      index: at,
+      timestamp: record.timestamp || null,
+      trigger: meta.trigger || null,
+      preTokens: meta.preTokens || 0,
+      postTokens: meta.postTokens || 0,
+    };
+  });
+  return { total: index.starts.length, compacts };
+}
+
 /** Drop a file's cached index — used when a session is deleted or re-keyed. */
 function forgetTranscript(filePath) {
   indexCache.delete(filePath);
 }
 
-module.exports = { readTranscriptWindow, forgetTranscript };
+module.exports = { readTranscriptWindow, readCompactBoundaries, forgetTranscript };

@@ -69,6 +69,12 @@
   gap: var(--space-6);
 }
 
+/* See .pv-tab-body: the scroller must not squeeze its sections to avoid
+   overflowing — that is what the scrollbar is for. */
+.acct-viewer__body > * {
+  flex-shrink: 0;
+}
+
 .acct-viewer__body::-webkit-scrollbar { width: 5px; }
 .acct-viewer__body::-webkit-scrollbar-track { background: transparent; }
 .acct-viewer__body::-webkit-scrollbar-thumb {

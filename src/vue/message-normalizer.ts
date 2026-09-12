@@ -32,6 +32,23 @@ export type ViewItem =
   | { kind: 'tool_result'; toolUseId: string; content: unknown; isError: boolean }
   | { kind: 'image'; mediaType: string; data: string }
   | { kind: 'notice'; level: 'info' | 'warn' | 'error'; text: string }
+  // What a slash command printed. Live it arrives bare — the `<local-command-stdout>`
+  // envelope is only ever written to the transcript — so it has to be told
+  // apart here or it renders as Claude having said it.
+  | { kind: 'command_output'; text: string; isError: boolean }
+  // What the memory supervisor pulled into the turn. The CLI emits this so a
+  // renderer can show "Recalled from memory" inline, which is the only way to
+  // see that an answer was shaped by something other than the conversation.
+  | {
+    kind: 'memory';
+    mode: 'select' | 'synthesize';
+    memories: Array<{ path: string; scope: string; content: string }>;
+  }
+  // `start` reports what a request went out with, `delta` the answer so far —
+  // cumulative within that request, not an increment. A turn makes one request
+  // per tool round trip, so only the reader knows which to add and which to
+  // replace; see noteUsage in SessionSdkApp.vue.
+  | { kind: 'usage'; phase: 'start' | 'delta'; inputTokens: number; outputTokens: number }
   | { kind: 'turn_end'; ok: boolean; text: string }
   | { kind: 'delta'; target: 'text' | 'thinking' | 'other'; text: string }
   | { kind: 'silent'; reason: string }
@@ -184,15 +201,24 @@ function normalizeSystem(message: SystemMessage): ViewItem[] {
     case 'elicitation_complete':
       return silent('elicitation_complete');
 
-    case 'memory_recall':
-      return silent('memory_recall');
+    case 'memory_recall': {
+      // A 'select' entry has an on-disk path and no body — the renderer is
+      // meant to lazy-load it, which here means the path is a chip you click.
+      // 'synthesize' and organization entries carry theirs, having no file.
+      const memories = (message.memories || [])
+        .filter(m => m && typeof m.path === 'string')
+        .map(m => ({ path: m.path, scope: String(m.scope || ''), content: String(m.content || '') }));
+      return memories.length
+        ? [{ kind: 'memory', mode: message.mode, memories }]
+        : silent('memory_recall');
+    }
 
     case 'plugin_install':
       return notice('info', 'Plugin installed');
 
     case 'local_command_output':
       return message.content.trim()
-        ? [{ kind: 'text', role: 'assistant', text: message.content }]
+        ? [{ kind: 'command_output', text: message.content.trim(), isError: false }]
         : silent('local_command_output');
 
     case 'informational':
@@ -228,31 +254,85 @@ function normalizeSystem(message: SystemMessage): ViewItem[] {
 // Anything not recognised is still reported as a delta with no text, which is
 // what keeps the "working" indicator alive during a long thinking block.
 
-type DeltaFrame = {
+type StreamFrame = {
   type?: string;
   delta?: { type?: string; text?: string; thinking?: string };
+  message?: { usage?: Record<string, unknown> };
+  usage?: Record<string, unknown>;
 };
 
-function normalizeStreamEvent(event: unknown): ViewItem {
-  const frame = event as DeltaFrame | undefined;
+function num(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * What the turn has cost so far, if this frame says.
+ *
+ * `message_start` carries the prompt the request went out with — cached reads
+ * included, because they were still read — and `message_delta` carries the
+ * answer as it is written. The working row adds them up so a turn can be priced
+ * while it is still running rather than only in the receipt at the end.
+ */
+function usageOf(frame: StreamFrame | undefined): ViewItem | null {
+  const phase = frame?.type === 'message_start' ? 'start'
+    : frame?.type === 'message_delta' ? 'delta'
+      : null;
+  if (!phase) return null;
+  const usage = phase === 'start' ? frame?.message?.usage : frame?.usage;
+  if (!usage) return null;
+  return {
+    kind: 'usage',
+    phase,
+    // Cached reads count: they were still read, and they are still billed.
+    inputTokens: num(usage.input_tokens)
+      + num(usage.cache_read_input_tokens)
+      + num(usage.cache_creation_input_tokens),
+    outputTokens: num(usage.output_tokens),
+  };
+}
+
+function normalizeStreamEvent(event: unknown): ViewItem[] {
+  const frame = event as StreamFrame | undefined;
   if (frame?.type === 'content_block_delta') {
     const delta = frame.delta;
     if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
-      return { kind: 'delta', target: 'text', text: delta.text };
+      return [{ kind: 'delta', target: 'text', text: delta.text }];
     }
     if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
-      return { kind: 'delta', target: 'thinking', text: delta.thinking };
+      return [{ kind: 'delta', target: 'thinking', text: delta.thinking }];
     }
   }
-  return { kind: 'delta', target: 'other', text: '' };
+  // The delta is kept either way: it is what says the turn is still alive.
+  const usage = usageOf(frame);
+  const alive: ViewItem = { kind: 'delta', target: 'other', text: '' };
+  return usage ? [usage, alive] : [alive];
 }
 
 // ── Messages ──────────────────────────────────────────────────────
 
+/**
+ * The model id the CLI stamps on assistant messages it wrote itself.
+ *
+ * A local slash command's output is delivered as an assistant message — there
+ * is no `local_command_output` on this path and no `<local-command-stdout>`
+ * envelope, both of which are transcript-only. This id is the only thing
+ * separating "the CLI printed this" from "Claude said this", and without it
+ * `/usage` rendered as Claude reciting your usage. The SDK's own types name it:
+ * see the `/context` note on SDKAssistantMessage.
+ */
+const SYNTHETIC_MODEL = '<synthetic>';
+
 export function normalize(message: SDKMessage): ViewItem[] {
   switch (message.type) {
-    case 'assistant':
-      return normalizeBlocks(message.message?.content, 'assistant');
+    case 'assistant': {
+      const items = normalizeBlocks(message.message?.content, 'assistant');
+      if (message.message?.model !== SYNTHETIC_MODEL) return items;
+      // Only the prose is re-labelled; anything else the CLI attaches stays
+      // whatever it is.
+      return items.map(item => (item.kind === 'text'
+        ? { kind: 'command_output', text: item.text.trim(), isError: false }
+        : item));
+    }
 
     case 'user':
       return normalizeBlocks(message.message?.content, 'user');
@@ -264,7 +344,7 @@ export function normalize(message: SDKMessage): ViewItem[] {
     // to a paragraph already on screen rather than adding a transcript item;
     // the finished `assistant` message arrives afterwards and replaces it.
     case 'stream_event':
-      return [normalizeStreamEvent(message.event)];
+      return normalizeStreamEvent(message.event);
 
     case 'result':
       return [{
