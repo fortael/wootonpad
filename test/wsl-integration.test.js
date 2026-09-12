@@ -79,6 +79,9 @@ const stubs = {
     getSetting: (k) => settings.get(k),
     setSetting: (k, v) => settings.set(k, v),
     deleteSetting: (k) => settings.delete(k),
+    // add-project asks whether the folder it just indexed produced anything,
+    // and answers a bare no-op with a TypeError. Nothing is cached in here.
+    getCachedByFolder: () => [],
     searchFtsRecreated: false,
   }),
   ws: { WebSocketServer: function () { return permissive(); } },

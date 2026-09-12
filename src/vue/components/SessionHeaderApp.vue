@@ -107,7 +107,7 @@ const statusClass = computed(() => ({
 const statusLabel = computed(() => {
   if (isAttention.value) return 'Needs attention';
   if (isBusy.value) return 'Working…';
-  if (isRunning.value) return 'Running';
+  if (isRunning.value) return 'Active';
   return 'Stopped';
 });
 

@@ -524,7 +524,7 @@ const TABS = [
 
 const FILTER_TABS = [
   { id: 'recent', label: 'Recent' },
-  { id: 'running', label: 'Running' },
+  { id: 'active', label: 'Active' },
   { id: 'pinned', label: 'Pinned' },
   { id: 'today', label: 'Today' },
   { id: 'archived', label: 'Archived' },

@@ -588,7 +588,7 @@ function updateTerminalHeader() {
   if (!activeSessionId) return;
   const running = activePtyIds.has(activeSessionId);
   terminalHeaderStatus.className = running ? 'running' : 'stopped';
-  terminalHeaderStatus.textContent = running ? 'Running' : 'Stopped';
+  terminalHeaderStatus.textContent = running ? 'Active' : 'Stopped';
   terminalStopBtn.style.display = running ? '' : 'none';
   updatePtyTitle();
 }

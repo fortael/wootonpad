@@ -13,7 +13,7 @@ const { encodeProjectPath } = require('./encode-project-path');
 let PROJECTS_DIR, accountId, activeSessions, getMainWindow, log;
 let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
-let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName, getAllProjectGitCounts;
+let setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName, getAllProjectGitCounts;
 
 function init(ctx) {
   // Switching accounts points this module at another projects directory, and
@@ -33,6 +33,7 @@ function init(ctx) {
   deleteSearchSession = ctx.db.deleteSearchSession;
   upsertSearchEntries = ctx.db.upsertSearchEntries;
   setFolderMeta = ctx.db.setFolderMeta;
+  getFolderMeta = ctx.db.getFolderMeta;
   getAllFolderMeta = ctx.db.getAllFolderMeta;
   getAllMeta = ctx.db.getAllMeta;
   getAllCached = ctx.db.getAllCached;
@@ -87,7 +88,12 @@ function refreshFolder(folder) {
 
   const projectPath = deriveProjectPath(folderPath, folder);
   if (!projectPath) {
-    setFolderMeta(folder, null, getFolderIndexMtimeMs(folderPath));
+    // Keep whatever mapping is already recorded rather than writing null over
+    // it: add-project stores the path it was handed, and a folder that cannot
+    // name itself — no transcripts, or only the stub the CLI leaves behind —
+    // would otherwise lose it and take the project out of the sidebar.
+    const known = getFolderMeta?.(folder)?.projectPath || null;
+    setFolderMeta(folder, known, getFolderIndexMtimeMs(folderPath));
     return;
   }
 

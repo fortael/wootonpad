@@ -415,7 +415,7 @@ function toggleTheme() {
 // One entry per project that currently has a live session, worst status first
 // so the projects wanting an answer sit at the front of the rail.
 const REASONS = {
-  waiting: 'needs input', done: 'response ready', running: 'working', idle: 'running',
+  waiting: 'needs input', done: 'response ready', running: 'working', idle: 'active',
 };
 
 const attentionProjects = computed(() => {
@@ -429,7 +429,7 @@ const attentionProjects = computed(() => {
       projectPath: p.projectPath,
       name: p.projectPath.split('/').filter(Boolean).pop() || p.projectPath,
       status,
-      // Everything in this list is live, so 'idle' still reads as running —
+      // Everything in this list is live, so 'idle' still reads as active —
       // saying otherwise would contradict the session header.
       reason: REASONS[status],
       count: live.length,
@@ -558,7 +558,7 @@ function setTab(tabId) {
 // picking a tab is the same as setting exactly one of the store's filter flags.
 const FILTER_TABS = [
   { id: 'recent', label: 'Recent' },
-  { id: 'running', label: 'Running' },
+  { id: 'active', label: 'Active' },
   { id: 'pinned', label: 'Pinned' },
   { id: 'today', label: 'Today' },
   { id: 'archived', label: 'Archived' },
@@ -566,7 +566,7 @@ const FILTER_TABS = [
 
 function onFilterTab(id) {
   store.sessionFilterTab = id;
-  store.showRunningOnly = id === 'running';
+  store.showRunningOnly = id === 'active';
   store.showStarredOnly = id === 'pinned';
   store.showTodayOnly = id === 'today';
   store.showArchived = id === 'archived';
@@ -779,14 +779,17 @@ onMounted(async () => {
 
   // Restore filter preferences from localStorage. Older builds persisted four
   // independent flags; fold whichever was on into the matching tab.
-  const savedTab = localStorage.getItem('sessionFilterTab')
-    || (localStorage.getItem('showRunningOnly') === '1' && 'running')
+  // 'running' is what this tab was called before; a stored id from an older
+  // build must not silently fall back to Recent.
+  const storedTab = localStorage.getItem('sessionFilterTab');
+  const savedTab = (storedTab === 'running' ? 'active' : storedTab)
+    || (localStorage.getItem('showRunningOnly') === '1' && 'active')
     || (localStorage.getItem('showStarredOnly') === '1' && 'pinned')
     || (localStorage.getItem('showTodayOnly') === '1' && 'today')
     || (localStorage.getItem('showArchived') === '1' && 'archived')
     || 'recent';
   store.sessionFilterTab = FILTER_TABS.some(t => t.id === savedTab) ? savedTab : 'recent';
-  store.showRunningOnly = store.sessionFilterTab === 'running';
+  store.showRunningOnly = store.sessionFilterTab === 'active';
   store.showStarredOnly = store.sessionFilterTab === 'pinned';
   store.showTodayOnly = store.sessionFilterTab === 'today';
   store.showArchived = store.sessionFilterTab === 'archived';

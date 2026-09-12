@@ -810,7 +810,7 @@ function initSessionCache() {
     db: {
       deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession,
       deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
-      setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName, getAllProjectGitCounts,
+      setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName, getAllProjectGitCounts,
     },
   });
 }
@@ -863,17 +863,20 @@ ipcMain.handle('add-project', (_event, rawProjectPath) => {
       fs.mkdirSync(folderPath, { recursive: true });
     }
 
-    // Seed a minimal .jsonl so deriveProjectPath can read the cwd
-    if (!fs.readdirSync(folderPath).some(f => f.endsWith('.jsonl'))) {
-      const seedId = require('crypto').randomUUID();
-      const seedFile = path.join(folderPath, seedId + '.jsonl');
-      const now = new Date().toISOString();
-      const line = JSON.stringify({ type: 'user', cwd: projectPath, sessionId: seedId, uuid: require('crypto').randomUUID(), timestamp: now, message: { role: 'user', content: 'New project' } });
-      fs.writeFileSync(seedFile, line + '\n');
-    }
+    // The folder name is the project path with every non-alphanumeric
+    // character flattened to a dash, so reading it back is guesswork —
+    // derive-project-path.js resolves it against the disk, but here we simply
+    // know the answer. Recording it means the project resolves from its first
+    // render, before anything has been written inside it.
+    setFolderMeta(folder, projectPath, 0);
 
-    // Immediately index the new folder so it's in cache before frontend renders
+    // Deliberately no starter transcript. A project is a place work happens,
+    // not a transcript: it has to be able to exist with none, and seeding a
+    // fake "New project" session to make it visible was the app lying to
+    // itself. buildProjectsFromCache() lists empty project directories on
+    // their own.
     refreshFolder(folder);
+
     notifyRendererProjectsChanged();
     // Kick off du -sk once on add; subsequent refreshes use the long random TTL
     cacheProjectSize(projectPath);
