@@ -8,7 +8,11 @@ const { decodeFolderName, deriveProjectPath } = require('../derive-project-path.
 // A real tree, because resolving the name is done against the disk: the
 // encoding flattens '/', '.', '_' and '-' to the same dash, so only the
 // directories that exist can say which was which.
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wp-derive-'));
+// realpath, because the fallback test below encodes this path and then resolves
+// it back against the disk: os.tmpdir() on a Windows runner is the 8.3 short
+// form (C:\Users\RUNNER~1\...), and no directory is really called RUNNER~1, so
+// the walk would have nothing to match.
+const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'wp-derive-')));
 const mk = (...segments) => {
   const dir = path.join(root, ...segments);
   fs.mkdirSync(dir, { recursive: true });

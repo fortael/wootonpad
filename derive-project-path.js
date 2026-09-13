@@ -50,7 +50,7 @@ function resolveWorktreePath(cwd) {
  * takes the first that leads to a complete match, and returns null when none
  * does — a guess would be worse than the caller's own fallback.
  */
-function decodeFolderName(name, root = '/') {
+function decodeFolderName(name, root) {
   const walk = (dir, rest, depth) => {
     if (!rest) return dir;
     if (depth > MAX_DEPTH) return null;
@@ -81,9 +81,17 @@ function decodeFolderName(name, root = '/') {
     }
     return null;
   };
-  // A leading dash is the root slash the encoder ate.
-  const trimmed = String(name || '').replace(/^-+/, '');
-  return trimmed ? walk(root, trimmed, 0) : null;
+  // A leading dash is the root slash the encoder ate. A native Windows path has
+  // no leading slash to eat — it starts at a drive, and `C:\` encodes to `C--`,
+  // so the walk has to begin at that drive instead of at `/`. A POSIX name
+  // always starts with a dash, so the two cannot be confused. An explicit root
+  // wins over both: the caller has already said where the walk starts.
+  const raw = String(name || '');
+  const drive = root === undefined && raw.match(/^([A-Za-z])--(.+)$/);
+  if (drive) return walk(`${drive[1]}:\\`, drive[2], 0);
+
+  const trimmed = raw.replace(/^-+/, '');
+  return trimmed ? walk(root === undefined ? '/' : root, trimmed, 0) : null;
 }
 
 /**

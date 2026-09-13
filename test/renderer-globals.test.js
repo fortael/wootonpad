@@ -52,9 +52,15 @@ test('no renderer script reads a name that does not exist', () => {
   const { execFileSync } = require('node:child_process');
   const root = path.join(__dirname, '..');
 
+  // The compiler is run through node against its own entry point rather than
+  // through npx: on Windows `npx` is a .cmd, which execFileSync cannot spawn
+  // without a shell (ENOENT), and the shell would then have to be trusted with
+  // quoting. typescript is a dev dependency, so the path is always there.
+  const tsc = path.join(root, 'node_modules', 'typescript', 'bin', 'tsc');
+
   let out = '';
   try {
-    out = execFileSync('npx', ['tsc', '-p', 'tsconfig.renderer.json'], {
+    out = execFileSync(process.execPath, [tsc, '-p', 'tsconfig.renderer.json'], {
       cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
     });
   } catch (err) {
