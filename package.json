@@ -1,9 +1,9 @@
 {
   "name": "wootonpad",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "description": "A desktop app for browsing, searching, and managing CLI coding sessions",
-  "author": "Zakhar Morozov <fortael@yahoo.com",
+  "author": "Zakhar Morozov <tinkly.quill-8p@icloud.com>",
   "main": "main.js",
   "scripts": {
     "start": "npm run bundle:codemirror && npm run bundle:vue && electron .",
