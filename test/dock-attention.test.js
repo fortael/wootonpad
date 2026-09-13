@@ -32,11 +32,27 @@ test('the badge is the two columns added together', () => {
   assert.equal(lastBadge(calls), 5);
 });
 
-test('the badge is set on every report, including back to zero', () => {
+test('the badge follows the count down to zero', () => {
   const { dock, calls } = harness();
   dock.update({ waiting: ['a'], done: 0 });
   dock.update({ waiting: [], done: 0 });
   assert.deepEqual(calls.badge, [1, 0]);
+});
+
+// The renderer reports whenever any session changes state, and most of those
+// changes leave this count alone.
+test('a report that does not move the count does not touch the icon', () => {
+  const { dock, calls } = harness();
+  dock.update({ waiting: ['a'], done: 0 });
+  dock.update({ waiting: ['a'], done: 0 });
+  dock.update({ waiting: ['b'], done: 0 });   // different session, same count
+  assert.deepEqual(calls.badge, [1]);
+});
+
+test('the first report always sets the icon, even to zero', () => {
+  const { dock, calls } = harness();
+  dock.update({ waiting: [], done: 0 });
+  assert.deepEqual(calls.badge, [0]);
 });
 
 test('duplicate ids are counted once', () => {

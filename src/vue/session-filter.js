@@ -16,6 +16,19 @@ function sameDay(iso, now = new Date()) {
     && d.getDate() === now.getDate();
 }
 
+/**
+ * A plain shell, not a Claude session.
+ *
+ * It has a project and a PTY and nothing else: no transcript, no turns, no
+ * lifecycle to be at a point in. Everything that reasons about work — the
+ * board's columns, the session side panel and the rail that opens it — has
+ * nothing to say about one, so it belongs in the list where it was launched
+ * and nowhere else.
+ */
+export function isPlainTerminal(session) {
+  return session?.type === 'terminal';
+}
+
 export function filterSessions(sessions, {
   showArchived = false,
   showStarredOnly = false,
@@ -23,8 +36,13 @@ export function filterSessions(sessions, {
   showTodayOnly = false,
   searchMatchIds = null,
   activePtyIds = null,
+  showTerminals = true,
 } = {}) {
   let out = sessions || [];
+  // Deliberately ahead of the search filter: a terminal has no transcript to
+  // match, so a hit on one would be a hit on its title alone — and the board,
+  // which is the caller that passes false, is no place to land on it.
+  if (!showTerminals) out = out.filter(s => !isPlainTerminal(s));
   // A search result is already an explicit choice; archived hits stay in it.
   if (!showArchived && !searchMatchIds) out = out.filter(s => !s.archived);
   if (showStarredOnly) out = out.filter(s => s.starred);

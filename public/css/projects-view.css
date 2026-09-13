@@ -44,17 +44,69 @@
   flex-direction: column;
 }
 
-.projects-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  /* Matches .sbx-sidebar-panel's own gutter, which #projects-content gave up
-     above so the tab row could sit flush under the command bar. */
-  padding: var(--space-2) 0 var(--space-4);
-}
-
+/* The blocks inside are bounded and each scrolls its own body, so this is the
+   gutter they sit in rather than a scroller — despite the name, which app.js
+   and the light theme both still reach for. The box itself comes from
+   .sbx-blockpanel in css/sidebar-blocks.css; only the one override below is
+   this tab's own. */
 .projects-scroll .project-group:first-child {
   margin-top: 0;
+}
+
+/* Bounded rather than sized: the archived fold takes the height of its rows
+   and stops at 45%, the point where the live list above stops being usable. */
+.projects-block--archived {
+  max-height: 45%;
+}
+
+/* An archived row is quiet: it carries no branch, no diff and no containers,
+   because nothing polls it. Dimming says that rather than implying the
+   numbers are simply zero. */
+.project-item--archived {
+  opacity: 0.62;
+}
+
+@media (hover: hover) {
+  .project-item--archived:hover {
+    opacity: 1;
+  }
+}
+
+/* Archive/restore, in the row's action cluster. Same role as the delete
+   button beside it, which style.css sizes through its own selector list. */
+.project-card-arch-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--hit-xs);
+  height: var(--hit-xs);
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  line-height: 1;
+  transition:
+    background var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
+}
+
+@media (hover: hover) {
+  .project-card-arch-btn:hover {
+    background: var(--surface-card);
+    color: var(--text-secondary);
+  }
+}
+
+.project-card-arch-btn:hover .sb-icon {
+  color: var(--text-secondary);
+}
+
+.project-card-arch-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus-ring);
 }
 
 /* style.css thins the scrollbar on #projects-content; the scrolling element
@@ -138,4 +190,67 @@
 .project-open-btn:hover .sb-icon,
 .project-open-btn:focus-visible .sb-icon {
   color: var(--text-secondary);
+}
+
+/* ── Terminal tab ────────────────────────────────────────────────────────
+   A scratch shell in the project directory. It fills the tab rather than
+   scrolling with it: a terminal that scrolls inside a scrolling page is two
+   scrollbars arguing, and xterm already owns one. */
+.pv-term {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 320px;
+  overflow: hidden;
+  border: var(--border-width-hairline) solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel-raised);
+}
+
+.pv-term__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-width-hairline) solid var(--border-subtle);
+}
+
+.pv-term__cwd {
+  min-width: 0;
+  font-family: var(--font-code);
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-term__state {
+  flex-shrink: 0;
+  font-size: var(--text-2xs);
+  color: var(--status-warning);
+}
+
+.pv-term__spacer { flex: 1; }
+
+.pv-term__btn {
+  flex-shrink: 0;
+  font-family: var(--font-ui);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  background: var(--surface-card);
+  border: var(--border-width-hairline) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+}
+.pv-term__btn:hover { background: var(--surface-card-hover); color: var(--text-primary); }
+.pv-term__btn:focus-visible { outline: none; box-shadow: var(--shadow-focus-ring); }
+
+.pv-term__host {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-2);
 }

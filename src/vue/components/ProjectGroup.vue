@@ -3,10 +3,10 @@
 
     <!-- Worktree header -->
     <div v-if="isWorktree" class="worktree-header" :class="{ collapsed }" :id="'ph-' + folderId" @click.self="toggle">
-      <span class="worktree-branch-icon" v-html="branchSvg" @click.stop="toggle"></span>
+      <span class="worktree-branch-icon" @click.stop="toggle"><SbIcon name="git-branch" :size="13" tone="muted" /></span>
       <span class="worktree-name" @click.stop="toggle">{{ worktreeName }}</span>
-      <button class="worktree-hide-btn" data-tooltip="Hide worktree" @click.stop="$emit('remove-project', project.projectPath)" v-html="closeSvg"></button>
-      <button class="project-new-btn worktree-new-btn" data-tooltip="New session in worktree" @click.stop="$emit('new-session', project, $event.currentTarget)" v-html="plusSmSvg"></button>
+      <button class="worktree-hide-btn" data-tooltip="Hide worktree" @click.stop="$emit('remove-project', project.projectPath)"><SbIcon name="x" :size="12" tone="muted" /></button>
+      <button class="project-new-btn worktree-new-btn" data-tooltip="New session in worktree" @click.stop="$emit('new-session', project, $event.currentTarget)"><SbIcon name="plus" :size="12" tone="muted" /></button>
     </div>
 
     <!-- Project header -->
@@ -28,9 +28,9 @@
       >
         <SbIcon name="square-arrow-out-up-right" :size="13" tone="muted" />
       </button>
-      <button class="project-settings-btn" data-tooltip="Project settings" @click.stop="$emit('settings', project.projectPath)" v-html="gearSvg"></button>
-      <button class="project-archive-btn" data-tooltip="Archive all sessions" @click.stop="archiveAll" v-html="archiveSvg"></button>
-      <button class="project-new-btn" data-tooltip="New session" @click.stop="$emit('new-session', project, $event.currentTarget)" v-html="plusSvg"></button>
+      <button class="project-settings-btn" data-tooltip="Project settings" @click.stop="$emit('settings', project.projectPath)"><SbIcon name="settings" :size="13" tone="muted" /></button>
+      <button class="project-archive-btn" data-tooltip="Archive all sessions" @click.stop="archiveAll"><SbIcon name="archive" :size="13" tone="muted" /></button>
+      <button class="project-new-btn" data-tooltip="New session" @click.stop="$emit('new-session', project, $event.currentTarget)"><SbIcon name="plus" :size="13" tone="muted" /></button>
     </div>
 
     <!-- Sessions list -->
@@ -179,6 +179,10 @@ const worktreeName = computed(() => {
 // truthy, so every group mounted collapsed and the heuristic never ran.
 function initialCollapsed() {
   if (props.project._projectMatchedOnly) return true;
+  // A name match with session hits inside it arrives with searchMatchIds null
+  // — the list already picked the sessions (SidebarApp) — so the flag, not the
+  // match set, is what says "this group is a search result, open it".
+  if (props.project._projectMatched) return false;
   if (props.searchMatchIds || props.showStarredOnly || props.showRunningOnly) return false;
   const sessions = props.project.sessions || [];
   if (sessions.length === 0) return false;
@@ -279,10 +283,4 @@ function openProject() {
 }
 
 // SVG icons
-const gearSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
-const archiveSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
-const plusSvg = '<svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="2" x2="6" y2="10"/><line x1="2" y1="6" x2="10" y2="6"/></svg>';
-const plusSmSvg = '<svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="6" y1="2" x2="6" y2="10"/><line x1="2" y1="6" x2="10" y2="6"/></svg>';
-const closeSvg = '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
-const branchSvg = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8c0-2.76-2.46-5-5.5-5S2 5.24 2 8h2l1-1 1 1h4"/><path d="M13 7.14A5.82 5.82 0 0 1 16.5 6c3.04 0 5.5 2.24 5.5 5h-3l-1-1-1 1h-3"/><path d="M5.89 9.71c-2.15 2.15-2.3 5.47-.35 7.43l4.24-4.25.7-.7.71-.71 2.12-2.12c-1.95-1.96-5.27-1.8-7.42.35"/><path d="M11 15.5c.5 2.5-.17 4.5-1 6.5h4c2-5.5-.5-12-1-14"/></svg>';
 </script>

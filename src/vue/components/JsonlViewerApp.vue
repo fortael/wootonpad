@@ -7,7 +7,8 @@
 </template>
 
 <script setup>
-import { ref } from 'vue';
+import { ref, watch } from 'vue';
+import { store } from '../store.js';
 // How a thinking block, a tool call or a screenshot looks now lives in one
 // place, shared with the SDK-backed session view — see message-render.js.
 import {
@@ -20,13 +21,37 @@ const title = ref('Message History');
 const sessionId = ref('');
 const bodyRef = ref(null);
 
+// A closed viewer keeps its markup, and a transcript is tens of thousands of
+// nodes; leaving it in the document makes every later layout in the app pay for
+// a view nobody is looking at. The component stays mounted — `v-show` is right
+// here, rebuilding the subtree on every open would be worse — but its contents
+// go. Watched rather than cleared by each caller: `showJsonl` is turned off from
+// half a dozen places in App.vue, and this is the one that has to be right.
+watch(() => store.showJsonl, (showing) => {
+  if (showing || !bodyRef.value) return;
+  bodyRef.value.replaceChildren();
+  sessionId.value = '';
+});
+
 // ── Public API ────────────────────────────────────────────────────
 async function open(session) {
   const result = await window.api.readSessionJsonl(session.sessionId);
-
   const displayName = session.name || session.aiTitle || session.summary || session.sessionId;
+  await render(result, displayName, session.sessionId);
+}
+
+// A sub-agent's transcript is the same shape as a session's, written to its
+// own file — so it renders through the same path rather than a second, poorer
+// viewer. See subagent-tasks.js.
+async function openSubagent(parentSessionId, agent) {
+  const result = await window.api.readSubagentJsonl(parentSessionId, agent.agentId);
+  const displayName = `${agent.agentType || 'agent'} — ${agent.description || agent.agentId}`;
+  await render(result, displayName, `${parentSessionId} · agent-${agent.agentId}`);
+}
+
+async function render(result, displayName, idLabel) {
   title.value = displayName;
-  sessionId.value = session.sessionId;
+  sessionId.value = idLabel;
 
   // Wait for the DOM to update before writing into bodyRef
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -83,5 +108,5 @@ async function open(session) {
   body.scrollTop = body.scrollHeight;
 }
 
-defineExpose({ open });
+defineExpose({ open, openSubagent });
 </script>

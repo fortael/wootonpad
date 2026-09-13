@@ -39,6 +39,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The tag is the single source of truth for the version. electron-builder
+      # only ever reads package.json, so the tag is written into this throwaway
+      # checkout before packaging — nothing is committed, and package.json on
+      # main never has to be bumped by hand.
+      - name: Set version from tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag '$GITHUB_REF_NAME' is not vMAJOR.MINOR.PATCH[-prerelease]"
+            exit 1
+          fi
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          echo "Packaging version $VERSION"
+
       - name: Bundle assets
         run: npm run bundle:codemirror && npm run bundle:vue
 
@@ -69,6 +84,18 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Same as in build-mac: the version comes from the tag, not package.json.
+      - name: Set version from tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag '$GITHUB_REF_NAME' is not vMAJOR.MINOR.PATCH[-prerelease]"
+            exit 1
+          fi
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          echo "Packaging version $VERSION"
 
       - name: Bundle assets
         run: npm run bundle:codemirror && npm run bundle:vue

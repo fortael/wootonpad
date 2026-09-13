@@ -1,16 +1,16 @@
 <template>
-  <div class="sbx-boardside">
+  <div class="sbx-blockpanel sbx-boardside">
     <!-- ── Summary ──────────────────────────────────────────────────
          What every session on the board just finished, in one place, so the
          board can be read without opening anything. -->
     <section
-      class="sbx-boardside__block sbx-boardside__block--summary"
+      class="sbx-block sbx-block--fit sbx-boardside__block--summary"
       :class="{ 'is-collapsed': collapsed }"
     >
       <!-- The whole title bar is the toggle; the buttons on it stop the click
            so pressing Summarize never also folds the answer away. -->
       <header
-        class="sbx-boardside__head sbx-boardside__head--toggle"
+        class="sbx-block__head sbx-block__head--toggle"
         role="button"
         :aria-expanded="!collapsed"
         @click="collapsed = !collapsed"
@@ -19,11 +19,11 @@
           name="chevron-down"
           :size="12"
           tone="muted"
-          class="sbx-boardside__chevron"
+          class="sbx-block__chevron"
           :class="{ 'is-collapsed': collapsed }"
         />
         <SbIcon name="sparkles" :size="13" tone="muted" />
-        <span class="sbx-boardside__title">Summary</span>
+        <span class="sbx-block__title">Summary</span>
         <button
           v-if="pending"
           type="button"
@@ -43,7 +43,7 @@
         >{{ pending ? 'Summarizing…' : 'Summarize' }}</button>
       </header>
 
-      <div v-show="!collapsed" class="sbx-boardside__body sbx-boardside__body--summary">
+      <div v-show="!collapsed" class="sbx-block__body sbx-block__body--scroll sbx-boardside__body sbx-boardside__body--summary">
         <p v-if="pending" class="sbx-boardside__note">
           Reading {{ summarizable.length }} session{{ summarizable.length === 1 ? '' : 's' }} — this runs one headless claude call and can take a while.
         </p>
@@ -55,7 +55,20 @@
         </p>
 
         <article v-for="entry in entries" :key="entry.sessionId" class="sbx-boardside__entry">
-          <p class="sbx-boardside__text">{{ entry.summary }}</p>
+          <p class="sbx-boardside__text">
+            <!-- Same flag the card carries, so the list and the board can be
+                 read against each other without matching titles by eye. -->
+            <span
+              v-if="focusLevel(entry.importance)"
+              class="sbx-focusflag"
+              :class="`sbx-focusflag--${entry.importance}`"
+              :data-tooltip="focusLevel(entry.importance).hint"
+            >
+              <SbIcon name="flag" :size="10" />
+              {{ focusLevel(entry.importance).label }}
+            </span>
+            {{ entry.summary }}
+          </p>
           <button
             type="button"
             class="sbx-boardside__link"
@@ -79,14 +92,14 @@
          The Projects tab's row stripped to what scoping a board needs:
          no containers, no git. Counts are the board's own counts, taken
          before the project filter so switching between them is possible. -->
-    <section class="sbx-boardside__block sbx-boardside__block--projects">
-      <header class="sbx-boardside__head">
+    <section class="sbx-block sbx-block--fill">
+      <header class="sbx-block__head">
         <SbIcon name="folder" :size="13" tone="muted" />
-        <span class="sbx-boardside__title">Projects</span>
-        <span class="sbx-boardside__count">{{ rows.length }}</span>
+        <span class="sbx-block__title">Projects</span>
+        <span class="sbx-block__count">{{ rows.length }}</span>
       </header>
 
-      <div class="sbx-boardside__body">
+      <div class="sbx-block__body sbx-block__body--scroll sbx-boardside__body">
         <button
           type="button"
           class="sbx-boardside__proj"
@@ -140,6 +153,7 @@ import { store } from '../store.js';
 import SbIcon from './SbIcon.vue';
 import ProjectAvatar from './ProjectAvatar.vue';
 import { filterSessions } from '../session-filter.js';
+import { focusLevel } from '../board-focus.js';
 
 const props = defineProps({
   callbacks: { type: Object, required: true },
@@ -160,12 +174,20 @@ const boardFilters = computed(() => ({
   showTodayOnly: store.showTodayOnly,
   searchMatchIds: store.searchMatchIds,
   activePtyIds: store.activePtyIds,
+  // Matching the board itself — these counts have to be the number of cards
+  // picking that project would show, terminals included in neither.
+  showTerminals: false,
 }));
 
 const rows = computed(() => {
   const out = [];
   for (const project of store.projects) {
-    const count = filterSessions(project.sessions, boardFilters.value).length;
+    // Same rule as the board itself: a project the query named counts all of
+    // its sessions, not just the ones whose titles matched too.
+    const filters = store.searchMatchProjectPaths?.has(project.projectPath)
+      ? { ...boardFilters.value, searchMatchIds: null }
+      : boardFilters.value;
+    const count = filterSessions(project.sessions, filters).length;
     if (!count) continue;
     out.push({
       projectPath: project.projectPath,
@@ -247,6 +269,9 @@ async function summarize() {
   pending.value = true;
   error.value = '';
   usage.value = null;
+  // Whatever the last run flagged is about to be re-decided, and a run that
+  // fails or is stopped should leave the board unflagged rather than stale.
+  store.boardFocus = new Map();
   try {
     const byId = new Map(sessions.map(s => [s.sessionId, s]));
     const result = await call(sessions.map(s => ({
@@ -267,11 +292,18 @@ async function summarize() {
         return {
           sessionId: s.sessionId,
           summary: s.summary,
+          importance: s.importance || 0,
           session,
           title: titleOf(session),
           projectPath: session.projectPath,
         };
       });
+    // The board reads this to flag its cards. Replaced wholesale rather than
+    // merged: a card the new run did not call out is a card that is no longer
+    // where to look, and leaving its old flag up would be a lie.
+    store.boardFocus = new Map(
+      entries.value.filter(e => e.importance > 0).map(e => [e.sessionId, e.importance])
+    );
     usage.value = result.usage || null;
     if (!entries.value.length) error.value = 'claude returned no summaries for these sessions.';
   } catch (e) {

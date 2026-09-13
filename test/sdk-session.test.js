@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { createInputQueue, userMessage, DIALOG_KINDS } = require('../sdk-session');
+const { createInputQueue, userMessage, isPromptContent, DIALOG_KINDS } = require('../sdk-session');
 
 test('a queued message is delivered to a later reader', async () => {
   const q = createInputQueue();
@@ -79,4 +79,25 @@ test('a prompt is wrapped in the shape the SDK expects', () => {
   assert.equal(m.message.role, 'user');
   assert.equal(m.message.content, 'hello');
   assert.equal(m.parent_tool_use_id, null);
+});
+
+// A prompt with an attachment is content blocks, not a string — the wrapper
+// forwards whichever it is given rather than stringifying one into the other.
+test('content blocks survive the wrapper intact', () => {
+  const blocks = [
+    { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAA' } },
+    { type: 'text', text: 'what is this' },
+  ];
+  assert.deepEqual(userMessage(blocks).message.content, blocks);
+});
+
+test('a prompt the CLI cannot answer is refused before it is queued', () => {
+  assert.equal(isPromptContent('hello'), true);
+  assert.equal(isPromptContent([{ type: 'text', text: 'hi' }]), true);
+  assert.equal(isPromptContent(''), false);
+  assert.equal(isPromptContent([]), false);
+  assert.equal(isPromptContent(null), false);
+  // A block with no `type` fails the whole request, not just itself.
+  assert.equal(isPromptContent([{ text: 'no type' }]), false);
+  assert.equal(isPromptContent(['just a string']), false);
 });

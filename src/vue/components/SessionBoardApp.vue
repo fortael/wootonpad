@@ -76,9 +76,9 @@ const COLUMNS = [
   { id: 'done', label: 'DONE' },
 ];
 
-// The precedence lives in session-column.js, because the Recent rail sorts by
-// the same thing and the two used to disagree at the edges.
-const columnFor = (id) => laneOf(id, stateFromStore(store));
+// The precedence itself lives in session-column.js, because the Recent rail
+// sorts by the same thing and the two used to disagree at the edges. It is
+// called from the board's own pass below, with the state read once per pass.
 
 function shortPath(projectPath) {
   return projectPath.split('/').filter(Boolean).slice(-2).join('/') || projectPath;
@@ -86,9 +86,19 @@ function shortPath(projectPath) {
 
 // One pass over the projects, bucketed by column, so each project appears at
 // most once per column and keeps its own header there.
-const columns = computed(() => {
+//
+// The pass also records where each card ended up. That map is what the flight
+// animation watches, and deriving it separately meant walking every column,
+// group and card a second time on every invalidation — which is every status
+// change anywhere.
+const board = computed(() => {
   tick.value; // eslint-disable-line no-unused-expressions -- re-read timeago
   const byId = new Map(COLUMNS.map(c => [c.id, { ...c, groups: [], total: 0 }]));
+  /** sessionId → column id, the thing whose change is worth animating. */
+  const lanes = new Map();
+  // Read once. The four collections do not move while this runs, and rebuilding
+  // the wrapper for every session was allocating one object per card per pass.
+  const state = stateFromStore(store);
 
   for (const project of store.projects) {
     // Scoped to one project from the board's sidebar. Applied here rather than
@@ -97,17 +107,25 @@ const columns = computed(() => {
     if (store.boardProjectFilter && project.projectPath !== store.boardProjectFilter) continue;
     // Exactly what the sidebar list is showing — same filter module, same
     // flags. The board is the list in another shape, not a second dataset.
+    // A search that named this project selects all of it: the query picked the
+    // project, and cutting it down to the sessions whose titles carry the same
+    // string would hide most of what was asked for.
+    const projectMatched = !!store.searchMatchProjectPaths?.has(project.projectPath);
     const sessions = filterSessions(project.sessions, {
       showArchived: store.showArchived,
       showStarredOnly: store.showStarredOnly,
       showRunningOnly: store.showRunningOnly,
       showTodayOnly: store.showTodayOnly,
-      searchMatchIds: store.searchMatchIds,
+      searchMatchIds: projectMatched ? null : store.searchMatchIds,
       activePtyIds: store.activePtyIds,
+      // The board sorts sessions by what their turn is doing. A plain shell
+      // has no turn, so it would sit in IDLE forever saying nothing.
+      showTerminals: false,
     });
     const buckets = new Map();
     for (const session of sessions) {
-      const colId = columnFor(session.sessionId);
+      const colId = laneOf(session.sessionId, state);
+      lanes.set(session.sessionId, colId);
       if (!buckets.has(colId)) buckets.set(colId, []);
       buckets.get(colId).push(session);
     }
@@ -119,8 +137,10 @@ const columns = computed(() => {
     }
   }
 
-  return COLUMNS.map(c => byId.get(c.id));
+  return { columns: COLUMNS.map(c => byId.get(c.id)), lanes };
 });
+
+const columns = computed(() => board.value.columns);
 
 const summary = computed(() => {
   const sessions = columns.value.reduce((n, c) => n + c.total, 0);
@@ -150,21 +170,18 @@ const summary = computed(() => {
 
 const FLIGHT_MS = 560;
 
-/** sessionId → column id, the thing whose change is worth animating. */
-const columnOf = computed(() => {
-  const map = new Map();
-  for (const col of columns.value) {
-    for (const group of col.groups) {
-      for (const session of group.items) map.set(session.sessionId, col.id);
-    }
-  }
-  return map;
-});
+/** sessionId → column id, built by the board's own pass. */
+const columnOf = computed(() => board.value.lanes);
 
 function prefersReducedMotion() {
   if (store.reduceMotion) return true;
   return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
 }
+
+// More than this many cards changing column at once is not a move anyone can
+// follow — it is the board resettling. Animating it costs a clone, a forced
+// layout and a 560ms animation each, for something that reads as noise.
+const MAX_FLYING = 8;
 
 function cardEl(sessionId) {
   return document.querySelector(`.sbx-board [data-session-id="${CSS.escape(sessionId)}"]`);
@@ -178,7 +195,16 @@ function cardEl(sessionId) {
 // So the thing that flies is a clone, parented to <body> where nothing clips
 // it, while the real card waits invisibly in its new home. On landing the
 // clone goes and the real one reappears — same pixels, no layout involved.
+//
+// Read first, then write. Every `getBoundingClientRect` and `getComputedStyle`
+// below is a question the browser can only answer by finishing layout, and the
+// appends and style writes in the second half are what invalidate it again.
+// Interleaved — which is how this read, one card at a time — each card forced
+// its own layout: measured over a board with cards moving, the flight was
+// costing ten times the style recalculations of the same churn without it.
 function fly(firstRects) {
+  // Phase 1 — measure. Nothing here touches the DOM.
+  const moves = [];
   for (const [id, first] of firstRects) {
     const el = cardEl(id);
     if (!el) continue;
@@ -186,22 +212,32 @@ function fly(firstRects) {
     const dx = last.left - first.left;
     const dy = last.top - first.top;
     if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
-
-    const clone = el.cloneNode(true);
-    clone.classList.add('is-flying');
-    clone.style.position = 'fixed';
-    clone.style.left = `${first.left}px`;
-    clone.style.top = `${first.top}px`;
-    clone.style.width = `${first.width}px`;
-    clone.style.height = `${first.height}px`;
-    clone.style.margin = '0';
-    clone.style.pointerEvents = 'none';
     // The column, not the card, declares the state colour — a clone on <body>
     // would otherwise lose its leading edge mid-flight.
-    clone.style.setProperty('--sbx-board-tone',
-      getComputedStyle(el).getPropertyValue('--sbx-board-tone'));
-    document.body.appendChild(clone);
+    const tone = getComputedStyle(el).getPropertyValue('--sbx-board-tone');
+    moves.push({ el, first, dx, dy, tone });
+  }
+  if (!moves.length || moves.length > MAX_FLYING) return;
 
+  // Phase 2 — build. Still detached, so none of this invalidates anything.
+  const frag = document.createDocumentFragment();
+  const flights = [];
+  for (const { el, first, dx, dy, tone } of moves) {
+    const clone = el.cloneNode(true);
+    clone.classList.add('is-flying');
+    // One declaration rather than eight assignments: each one on a live node
+    // would be its own invalidation, and this is per card per move.
+    clone.style.cssText = `position:fixed;left:${first.left}px;top:${first.top}px;`
+      + `width:${first.width}px;height:${first.height}px;margin:0;pointer-events:none;`
+      + `--sbx-board-tone:${tone};`;
+    frag.appendChild(clone);
+    flights.push({ el, clone, dx, dy });
+  }
+
+  // Phase 3 — write. One insertion for the whole batch.
+  document.body.appendChild(frag);
+
+  for (const { el, clone, dx, dy } of flights) {
     el.style.visibility = 'hidden';
 
     const tilt = dx > 0 ? 5 : -5;   // lean into the direction of travel
@@ -229,10 +265,18 @@ function fly(firstRects) {
 watch(columnOf, (next, previous) => {
   if (!previous || prefersReducedMotion()) return;
 
-  const firstRects = new Map();
+  // Which cards moved is decided before anything is measured, so the reads
+  // below are one uninterrupted run rather than one per lookup.
+  const moved = [];
   for (const [id, column] of next) {
     const was = previous.get(id);
     if (!was || was === column) continue;
+    moved.push(id);
+  }
+  if (!moved.length || moved.length > MAX_FLYING) return;
+
+  const firstRects = new Map();
+  for (const id of moved) {
     const el = cardEl(id);
     if (el) firstRects.set(id, el.getBoundingClientRect());
   }

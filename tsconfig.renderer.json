@@ -1,0 +1,38 @@
+{
+  "// why": [
+    "One job: catch a name that no longer exists.",
+    "",
+    "public/ is plain classic <script> JS sharing one global scope, deliberately",
+    "(see tsconfig.json). Nothing checked it, so a variable renamed in one file",
+    "kept parsing everywhere else and only threw when the line was finally",
+    "reached — three times so far: gridViewerCount after the Vue migration,",
+    "allProjects after getProjectSets collapsed two fetches into one, and",
+    "renderPlans, which survives only because App.vue assigns it to window.",
+    "",
+    "This config is NOT a type-checking pass and must not become one. Running it",
+    "reports a few hundred type complaints the renderer has no interest in;",
+    "test/renderer-globals.test.js runs it and reads only the undefined-name",
+    "codes, TS2304 and TS2552. Everything else is ignored on purpose.",
+    "",
+    "Legitimate globals — the xterm scripts and the window.* bridge App.vue",
+    "installs — are declared in public/renderer-globals.d.ts. Anything left is a",
+    "name that is not there."
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": true,
+    "strict": false,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["public/*.js", "public/renderer-globals.d.ts"],
+  "exclude": [
+    "public/vue-bundle.js",
+    "public/codemirror-bundle.js",
+    "public/codemirror-setup.js"
+  ]
+}

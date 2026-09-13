@@ -23,6 +23,8 @@ html, body {
 /* ── Landing root ────────────────────────────────────────── */
 .lp-root {
   font-family: var(--font-sans);
+  position: relative;
+  isolation: isolate;
 
   /* Marketing display type. The app's scale tops out at --text-2xl (24px)
      because it is UI chrome; a landing headline is not, so the three sizes
@@ -33,17 +35,137 @@ html, body {
 
   /* Vertical rhythm between marketing sections. */
   --lp-section-pad: 90px;
+
+  /* How wide the page runs. The demo window is the widest thing on it and
+     the app it is showing is a three-pane IDE — at 1200px the sidebar took
+     a quarter of the frame and the terminal was a letterbox. */
+  --lp-page-max: 1680px;
+  --lp-text-max: 1180px;
+
+  /* Marketing headline ink. --white is a raw palette value and is not
+     re-pointed by theme-light.css, so a heading written against it stayed
+     white on paper in light mode. */
+  --lp-heading: var(--text-primary);
+}
+
+/* ── Ambient background ──────────────────────────────────────────────────
+   Fixed behind everything: a faint technical grid plus three slow-drifting
+   colour blobs, so scrolling moves the content across one continuous light
+   rather than through a stack of separately-shaded bands. Decorative only. */
+.lp-aurora {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--surface-app);
+}
+
+.lp-aurora__grid {
+  position: absolute;
+  inset: -2px;
+  background-image:
+    linear-gradient(to right, currentColor 1px, transparent 1px),
+    linear-gradient(to bottom, currentColor 1px, transparent 1px);
+  background-size: 64px 64px;
+  color: var(--text-primary);
+  opacity: 0.035;
+  /* Fade the grid out towards the bottom so it reads as depth, not as
+     graph paper taped over the page. */
+  -webkit-mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, #000 0%, transparent 85%);
+  mask-image: radial-gradient(ellipse 90% 70% at 50% 0%, #000 0%, transparent 85%);
+}
+
+.lp-aurora__blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.5;
+  will-change: transform;
+}
+
+.lp-aurora__blob--1 {
+  width: 46vw; height: 46vw;
+  top: -18vw; left: 50%;
+  margin-left: -23vw;
+  background: radial-gradient(circle, var(--orange-500) 0%, transparent 70%);
+  opacity: 0.28;
+  animation: lp-drift-1 28s ease-in-out infinite;
+}
+
+.lp-aurora__blob--2 {
+  width: 38vw; height: 38vw;
+  top: 30vh; left: -12vw;
+  background: radial-gradient(circle, var(--purple-400) 0%, transparent 70%);
+  opacity: 0.18;
+  animation: lp-drift-2 34s ease-in-out infinite;
+}
+
+.lp-aurora__blob--3 {
+  width: 40vw; height: 40vw;
+  bottom: -14vw; right: -10vw;
+  background: radial-gradient(circle, var(--blue-500) 0%, transparent 70%);
+  opacity: 0.16;
+  animation: lp-drift-3 40s ease-in-out infinite;
+}
+
+/* Paper needs less light than near-black does, or the blobs read as stains. */
+[data-theme='light'] .lp-aurora__blob--1 { opacity: 0.16; }
+[data-theme='light'] .lp-aurora__blob--2 { opacity: 0.10; }
+[data-theme='light'] .lp-aurora__blob--3 { opacity: 0.10; }
+[data-theme='light'] .lp-aurora__grid { opacity: 0.05; }
+
+@keyframes lp-drift-1 {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50%      { transform: translate3d(4vw, 3vh, 0) scale(1.12); }
+}
+@keyframes lp-drift-2 {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50%      { transform: translate3d(6vw, -4vh, 0) scale(1.08); }
+}
+@keyframes lp-drift-3 {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50%      { transform: translate3d(-5vw, -3vh, 0) scale(1.1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-aurora__blob { animation: none; }
+}
+
+/* ── Page theme toggle ───────────────────────────────────── */
+.lp-theme-toggle {
+  position: absolute;
+  top: var(--space-5);
+  right: var(--space-6);
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 12px 6px 10px;
+  font-family: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--surface-card) 70%, transparent);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+  transition:
+    color var(--duration-base) var(--ease-standard),
+    border-color var(--duration-base) var(--ease-standard),
+    background var(--duration-base) var(--ease-standard);
+}
+
+.lp-theme-toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+  background: var(--surface-card-hover);
 }
 
 /* ── Hero ────────────────────────────────────────────────── */
 .lp-hero {
-  background:
-    radial-gradient(
-      ellipse at 50% 0%,
-      color-mix(in srgb, var(--orange-500) 12%, transparent) 0%,
-      transparent 65%
-    ),
-    var(--surface-app);
+  position: relative;
   text-align: center;
   padding: var(--space-7) var(--space-6) var(--space-9);
 }
@@ -62,7 +184,7 @@ html, body {
   font-size: var(--lp-text-hero);
   font-weight: var(--weight-bold);
   letter-spacing: -1.5px;
-  color: var(--white);
+  color: var(--lp-heading);
   margin: 0 0 var(--space-3);
   line-height: 1.1;
 }
@@ -135,7 +257,7 @@ html, body {
 
 /* ── Section common ──────────────────────────────────────── */
 .lp-section-inner {
-  max-width: 1200px;
+  max-width: var(--lp-page-max);
   margin: 0 auto;
   padding: 0 var(--space-6);
 }
@@ -144,7 +266,7 @@ html, body {
   font-size: var(--lp-text-section);
   font-weight: var(--weight-bold);
   letter-spacing: -0.8px;
-  color: var(--white);
+  color: var(--lp-heading);
   text-align: center;
   margin: 0 0 var(--space-3);
 }
@@ -164,51 +286,7 @@ html, body {
   margin-bottom: var(--space-7);
 }
 
-.lp-bento {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--space-3);
-  margin-top: var(--space-8);
-}
-
-@media (max-width: 900px) {
-  .lp-bento { grid-template-columns: repeat(2, 1fr); }
-  .lp-bento-wide { grid-column: span 2; }
-}
-@media (max-width: 560px) {
-  .lp-bento { grid-template-columns: 1fr; }
-  .lp-bento-wide { grid-column: span 1; }
-}
-
-.lp-bento-wide { grid-column: span 2; }
-
-.lp-bento-card {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  background: var(--surface-panel);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  padding: var(--space-7) var(--space-7) var(--space-6);
-  overflow: hidden;
-  transition:
-    border-color var(--duration-slow) var(--ease-standard),
-    transform var(--duration-slow) var(--ease-standard);
-}
-
-.lp-bento-card::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  opacity: 0;
-  transition: opacity var(--duration-slow) var(--ease-standard);
-}
-
-.lp-bento-card:hover { border-color: var(--border-default); transform: translateY(-2px); }
-.lp-bento-card:hover::before { opacity: 1; }
-
-/* Accent glow colours */
+/* Accent hues, shared by the showcase panels and the grid below them. */
 .lp-bento-accent-blue  { --_ac: 96, 165, 250; }
 .lp-bento-accent-purple{ --_ac: 167, 139, 250; }
 .lp-bento-accent-orange{ --_ac: 251, 146, 60;  }
@@ -217,64 +295,326 @@ html, body {
 .lp-bento-accent-green { --_ac: 74, 222, 128;  }
 .lp-bento-accent-yellow{ --_ac: 250, 204, 21;  }
 
-.lp-bento-card::after {
+/* ── Feature showcase ────────────────────────────────────────────────────
+   Three panels, each pairing the copy with the live component it describes.
+   The stage side holds real app components, so it is given the app's own
+   surface rather than the marketing one — a card floating on a marketing
+   panel would not look like the thing it is quoting. */
+.lp-showcase {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 1320px;
+  margin: var(--space-8) auto 0;
+}
+
+.lp-show {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  gap: var(--space-7);
+  align-items: center;
+  padding: var(--space-8);
+  background: color-mix(in srgb, var(--surface-panel) 82%, transparent);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg, 14px);
+  overflow: hidden;
+  backdrop-filter: blur(12px);
+}
+
+/* A wash of the panel's accent from the corner its component sits in. */
+.lp-show::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 100% 0%, rgba(var(--_ac), 0.10) 0%, transparent 55%);
+}
+
+.lp-show::after {
   content: '';
   position: absolute;
   top: 0; left: 0; right: 0;
   height: 2px;
-  background: rgb(var(--_ac));
-  border-radius: var(--radius-md) var(--radius-md) 0 0;
-  opacity: 0.7;
+  background: linear-gradient(90deg, rgb(var(--_ac)), transparent 70%);
+  opacity: 0.75;
 }
 
-.lp-bento-card::before {
-  background: radial-gradient(ellipse at 0% 0%, rgba(var(--_ac), 0.06) 0%, transparent 60%);
+/* Alternate which side the component sits on, so three panels in a column
+   do not read as one long two-column table. */
+.lp-show:nth-child(even) { grid-template-columns: minmax(0, 6fr) minmax(0, 5fr); }
+.lp-show:nth-child(even) .lp-show__copy  { order: 2; }
+.lp-show:nth-child(even) .lp-show__stage { order: 1; }
+.lp-show:nth-child(even)::before {
+  background: radial-gradient(ellipse at 0% 0%, rgba(var(--_ac), 0.10) 0%, transparent 55%);
 }
 
-.lp-bento-icon {
-  width: 44px;
-  height: 44px;
-  flex-shrink: 0;
+.lp-show__copy {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+.lp-show__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px 10px;
+  margin-bottom: var(--space-4);
+  border-radius: var(--radius-full);
+  background: rgba(var(--_ac), 0.12);
+  color: rgb(var(--_ac));
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+}
+
+.lp-show__copy h3 {
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.4px;
+  color: var(--lp-heading);
+  margin: 0 0 var(--space-3);
+  line-height: var(--leading-tight, 1.25);
+}
+
+.lp-show__copy p {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: var(--leading-relaxed);
+  margin: 0 0 var(--space-3);
+}
+
+.lp-show__copy code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  color: var(--text-primary);
+}
+
+/* What the summarizer's three levels mean, drawn with the app's own flag —
+   the same component class the board's cards carry. */
+.lp-show__legend {
+  list-style: none;
+  margin: var(--space-5) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.lp-show__legend li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.lp-show__legend .sbx-focusflag { flex-shrink: 0; }
+
+.lp-show__legendhint {
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  line-height: var(--leading-normal);
+}
+
+.lp-show__stage {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+/* Two board columns, side by side, at the width the board gives them. */
+.lp-show__stage--cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-3);
+  align-items: start;
+}
+
+.lp-show__column {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--surface-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.lp-show__columnhead {
   display: flex;
   align-items: center;
-  justify-content: center;
-  background: rgba(var(--_ac), 0.12);
-  border-radius: var(--radius-sm);
-  color: rgb(var(--_ac));
-  margin-bottom: var(--space-4);
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
 }
 
-.lp-bento-card h3 {
+.lp-show__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+.lp-show__dot--done    { background: var(--blue-500); }
+.lp-show__dot--running { background: var(--green-500); }
+
+.lp-show__cta {
+  grid-column: 1 / -1;
+  justify-self: start;
+  padding: 7px var(--space-4);
+  font-family: inherit;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: rgb(var(--_ac));
+  background: rgba(var(--_ac), 0.10);
+  border: 1px solid rgba(var(--_ac), 0.3);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: background var(--duration-base) var(--ease-standard);
+}
+
+.lp-show__cta:hover { background: rgba(var(--_ac), 0.2); }
+
+/* ── Panels quoted whole ─────────────────────────────────────────────────
+   AccountsApp and ProjectsApp are sidebar panels: `flex: 1` inside a column
+   that gives them a height. Out here there is no column, so the stage is the
+   bounded box they fill, sized to show its rows without a scrollbar. */
+.lp-show__stage--accounts,
+.lp-show__stage--projects {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.lp-show__stage--accounts { height: 300px; }
+/* Tall enough for all three mock projects with their containers expanded —
+   the list scrolls beyond that, as it does in the sidebar. */
+.lp-show__stage--projects { height: 480px; }
+
+/* The Accounts tab's second block is the Add-account form. The panel is here
+   to show the switch, and an empty form under it is not part of that. */
+.lp-show__stage--accounts .sbx-block--fit { display: none; }
+
+/* UnreadRail sizes itself to the 320px sidebar it normally lives in. */
+.lp-show__stage--rail {
+  max-width: 360px;
+  margin: 0 auto;
+  padding: var(--space-3);
+  background: var(--surface-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+/* A year of 13px cells is 850px wide; let it scroll rather than squeeze. */
+.lp-show__stage--heatmap {
+  padding: var(--space-4);
+  background: var(--surface-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow-x: auto;
+}
+
+.lp-show__meters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+  margin-top: var(--space-5);
+}
+
+.lp-show__meter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.lp-show__metertext {
+  display: flex;
+  flex-direction: column;
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  line-height: 1.3;
+}
+
+.lp-show__metertext strong {
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
-  color: var(--white);
-  margin: 0 0 var(--space-2);
+  color: var(--text-primary);
 }
 
-.lp-bento-card p {
+@media (max-width: 1000px) {
+  .lp-show,
+  .lp-show:nth-child(even) { grid-template-columns: 1fr; gap: var(--space-6); }
+  .lp-show:nth-child(even) .lp-show__copy  { order: 1; }
+  .lp-show:nth-child(even) .lp-show__stage { order: 2; }
+}
+
+/* ── Feature grid ────────────────────────────────────────────────────────
+   Everything that does not need a picture. One line each, four across. */
+.lp-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+  max-width: 1320px;
+  margin: var(--space-6) auto 0;
+}
+
+@media (max-width: 1200px) { .lp-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 860px)  { .lp-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px)  { .lp-grid { grid-template-columns: 1fr; } }
+
+.lp-gridcard {
+  position: relative;
+  padding: var(--space-5);
+  background: color-mix(in srgb, var(--surface-panel) 78%, transparent);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  transition:
+    border-color var(--duration-slow) var(--ease-standard),
+    transform var(--duration-slow) var(--ease-standard);
+}
+
+.lp-gridcard:hover {
+  border-color: rgba(var(--_ac), 0.45);
+  transform: translateY(-2px);
+}
+
+.lp-gridcard__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin-bottom: var(--space-3);
+  border-radius: var(--radius-sm);
+  background: rgba(var(--_ac), 0.12);
+  color: rgb(var(--_ac));
+}
+
+.lp-gridcard h4 {
   font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--lp-heading);
+  margin: 0 0 6px;
+}
+
+.lp-gridcard p {
+  font-size: var(--text-xs);
   color: var(--text-secondary);
   line-height: var(--leading-relaxed);
   margin: 0;
 }
 
-/* Pinned to the bottom of the card so the pills line up across a row even
-   when the paragraphs above them run to different lengths. */
-.lp-bento-pill {
-  align-self: flex-start;
-  margin-top: auto;
-  padding: var(--space-1) 10px;
-  background: rgba(var(--_ac), 0.12);
-  color: rgb(var(--_ac));
-  border-radius: var(--radius-full);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-medium);
-}
-
-/* The paragraph, not the pill, takes the slack — `margin-top: auto` on the
-   pill only pushes it down once something above it can grow. */
-.lp-bento-card:has(.lp-bento-pill) p {
-  margin-bottom: var(--space-4);
+.lp-gridcard code {
+  font-family: var(--font-mono);
+  font-size: 0.94em;
+  color: var(--text-primary);
 }
 
 /* ── Features ────────────────────────────────────────────── */
@@ -289,16 +629,34 @@ html, body {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* The ⌘K palette teleports into .lp-app-window here rather than into <body>,
+   so it dims the demo and not the marketing page around it. `fixed` would
+   ignore that and cover the viewport, so inside the demo it is absolute. */
+.lp-app-window .sbx-spotlight {
+  position: absolute;
+  padding: 8% var(--space-4) var(--space-4);
+}
+
+.lp-app-window .sbx-spotlight__panel {
+  width: 520px;
+}
+
 /* App window frame */
 .lp-app-window {
   position: relative;
   border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   overflow: hidden;
-  box-shadow: var(--shadow-lg);
-  max-width: 1200px;
+  /* A wide, tall frame: this is a three-pane IDE, and the previous 1200×620
+     box left the terminal a letterbox between the sidebar and the side panel.
+     The height follows the viewport so a laptop still sees the whole window
+     without scrolling it out of frame. */
+  box-shadow:
+    var(--shadow-lg),
+    0 0 80px -20px rgba(var(--_ac, 251, 146, 60), 0.25);
+  max-width: var(--lp-page-max);
   margin: 0 auto;
-  height: 620px;
+  height: clamp(620px, 78vh, 900px);
   display: flex;
   flex-direction: column;
   background: var(--surface-app);
@@ -442,8 +800,26 @@ html, body {
 
 /* ── Fake terminal ───────────────────────────────────────────────────────
    No PTY on a landing page: this is a static transcript rendered from
-   mock-data.js, styled with the app's tokens so it reads as the real thing. */
+   mock-data.js, styled with the app's tokens so it reads as the real thing.
+
+   Every colour below goes through one of these five locals rather than
+   straight at the palette. The real xterm surface stays dark in both themes,
+   but a marketing page that offers a light switch and then leaves a black
+   rectangle in the middle of the page has not switched — so the light theme
+   re-points the whole ramp to paper and ink at the bottom of this block. */
 .lp-term {
+  --lp-t-bg:     var(--gray-925);
+  --lp-t-bright: var(--white);      /* the line being emphasised */
+  --lp-t-fg:     var(--gray-100);   /* commands, typed input */
+  --lp-t-body:   var(--gray-300);   /* ordinary output */
+  --lp-t-dim:    var(--gray-400);   /* hints, metadata */
+  --lp-t-rule:   var(--gray-600);   /* separators */
+  --lp-t-ok:     var(--green-500);
+  --lp-t-warn:   var(--amber-500);
+  --lp-t-accent: var(--orange-400);
+  --lp-t-path:   var(--blue-500);
+  --lp-t-branch: var(--purple-400);
+
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -452,57 +828,70 @@ html, body {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   line-height: var(--leading-relaxed);
-  background: var(--gray-925);
+  background: var(--lp-t-bg);
   white-space: pre-wrap;
 }
 
-/* Colours here come from the raw palette (--gray-*, --green-500 …) rather
-   than the semantic aliases (--text-secondary …): the terminal keeps its dark
-   background in both themes, exactly like the real xterm surface, so text
-   that followed --text-* would turn dark ink on a dark panel in light mode. */
+/* Paper, warm ink, and the -600 steps of each accent — the same correction
+   theme-light.css applies to the app's own -500 accents, which go washed out
+   on white. */
+[data-theme='light'] .lp-term {
+  --lp-t-bg:     var(--paper-0);
+  --lp-t-bright: var(--ink-900);
+  --lp-t-fg:     var(--ink-900);
+  --lp-t-body:   var(--ink-700);
+  --lp-t-dim:    var(--ink-500);
+  --lp-t-rule:   var(--paper-400);
+  --lp-t-ok:     var(--green-600);
+  --lp-t-warn:   var(--amber-600);
+  --lp-t-accent: var(--orange-600);
+  --lp-t-path:   var(--blue-600);
+  --lp-t-branch: var(--purple-600);
+}
+
 .lp-term-line { display: flex; align-items: baseline; gap: var(--space-1); }
-.lp-term-cmd  { color: var(--gray-100); font-weight: var(--weight-medium); }
-.lp-term-info { color: var(--gray-400); }
-.lp-term-sep  { color: var(--gray-600); letter-spacing: -1px; }
-.lp-term-ok   { color: var(--green-500); }
-.lp-term-spin { color: var(--orange-400); }
-.lp-term-wait { color: var(--amber-500); }
-.lp-term-done { color: var(--gray-400); }
-.lp-term-hint { color: var(--gray-400); padding-left: 2ch; font-size: var(--text-2xs); }
-.lp-term-todo { color: var(--gray-400); }
-.lp-term-question { color: var(--white); font-weight: var(--weight-medium); }
-.lp-term-opt-sel { color: var(--white); }
-.lp-opt-cursor { color: var(--green-500); flex-shrink: 0; }
-.lp-term-opt-sub { color: var(--gray-400); line-height: var(--leading-normal); }
-.lp-term-opt { color: var(--gray-300); }
-.lp-term-nav { color: var(--gray-400); font-size: var(--text-2xs); }
+.lp-term-cmd  { color: var(--lp-t-fg); font-weight: var(--weight-medium); }
+.lp-term-info { color: var(--lp-t-dim); }
+.lp-term-sep  { color: var(--lp-t-rule); letter-spacing: -1px; }
+.lp-term-ok   { color: var(--lp-t-ok); }
+.lp-term-spin { color: var(--lp-t-accent); }
+.lp-term-wait { color: var(--lp-t-warn); }
+.lp-term-done { color: var(--lp-t-dim); }
+.lp-term-hint { color: var(--lp-t-dim); padding-left: 2ch; font-size: var(--text-2xs); }
+.lp-term-todo { color: var(--lp-t-dim); }
+.lp-term-question { color: var(--lp-t-bright); font-weight: var(--weight-medium); }
+.lp-term-opt-sel { color: var(--lp-t-bright); }
+.lp-opt-cursor { color: var(--lp-t-ok); flex-shrink: 0; }
+.lp-term-opt-sub { color: var(--lp-t-dim); line-height: var(--leading-normal); }
+.lp-term-opt { color: var(--lp-t-body); }
+.lp-term-nav { color: var(--lp-t-dim); font-size: var(--text-2xs); }
 .lp-term-blank { height: 0.8em; }
 .lp-term-logo-block { margin-bottom: 2px; }
 .lp-term-logo-row { gap: var(--space-2); line-height: 1; }
-.lp-term-logo-art { color: var(--orange-500); display: inline-block; min-width: 10ch; flex-shrink: 0; white-space: pre; }
-.lp-logo-meta-0 { color: var(--white); font-weight: var(--weight-semibold); }
-.lp-logo-meta-1 { color: var(--gray-300); }
-.lp-logo-meta-2 { color: var(--gray-400); }
+.lp-term-logo-art { color: var(--lp-t-accent); display: inline-block; min-width: 10ch; flex-shrink: 0; white-space: pre; }
+.lp-logo-meta-0 { color: var(--lp-t-bright); font-weight: var(--weight-semibold); }
+.lp-logo-meta-1 { color: var(--lp-t-body); }
+.lp-logo-meta-2 { color: var(--lp-t-dim); }
 
-.lp-term-sh-prompt { color: var(--gray-300); gap: 0; }
-.lp-sh-cwd { color: var(--blue-500); }
-.lp-sh-branch { color: var(--gray-400); }
-.lp-sh-branch-name { color: var(--purple-400); }
-.lp-term-sh-cmd { color: var(--gray-100); gap: var(--space-1); }
-.lp-sh-arrow { color: var(--green-500); flex-shrink: 0; }
-.lp-sh-block-cursor { color: var(--gray-100); animation: lp-blink 1s step-end infinite; }
+.lp-term-sh-prompt { color: var(--lp-t-body); gap: 0; }
+.lp-sh-cwd { color: var(--lp-t-path); }
+.lp-sh-branch { color: var(--lp-t-dim); }
+.lp-sh-branch-name { color: var(--lp-t-branch); }
+.lp-term-sh-cmd { color: var(--lp-t-fg); gap: var(--space-1); }
+.lp-sh-arrow { color: var(--lp-t-ok); flex-shrink: 0; }
+.lp-sh-block-cursor { color: var(--lp-t-fg); animation: lp-blink 1s step-end infinite; }
 @keyframes lp-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
-.lp-term-sh-out { color: var(--gray-300); }
-.lp-term-sh-out-ok { color: var(--green-500); }
+.lp-term-sh-out { color: var(--lp-t-body); }
+.lp-term-sh-out-ok { color: var(--lp-t-ok); }
 
 .lp-spinner-char {
-  color: var(--orange-400);
+  color: var(--lp-t-accent);
   font-family: var(--font-mono);
   flex-shrink: 0;
 }
 
 .lp-wait-cursor {
-  color: var(--amber-500);
+  color: var(--lp-t-warn);
   animation: lp-pulse 1s ease-in-out infinite;
   flex-shrink: 0;
 }
@@ -677,46 +1066,36 @@ html, body {
   white-space: pre;
 }
 
-/* ── Project viewer demo section ─────────────────────────── */
-.lp-project-demo-section {
-  padding: var(--lp-section-pad) var(--space-6);
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.lp-project-demo-text {
-  max-width: 640px;
-  margin: 0 auto 48px;
-  text-align: center;
-}
-
-.lp-project-demo-title {
-  margin: 0 0 16px;
-}
-
-.lp-project-demo-desc {
-  font-size: var(--text-md);
-  color: var(--text-secondary);
-  line-height: var(--leading-relaxed);
+/* ── Markdown pane ───────────────────────────────────────────────────────
+   ViewerContentApp's editor half, standing in for CodeMirror. Read-only, so
+   it only has to look like source: the app's own mono ramp, no gutter, no
+   selection chrome. The rendered half is .markdown-preview and is styled by
+   public/style.css unchanged. */
+.lp-md-source {
   margin: 0;
+  padding: var(--space-5) var(--space-6);
+  height: 100%;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-relaxed);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
 }
 
-.lp-project-window {
-  max-width: 1200px;
-  height: 580px;
+/* The demo window sets `user-select: none` on the whole frame so dragging a
+   pane does not paint a text selection. Content panes are the exception. */
+.lp-app-window .markdown-preview,
+.lp-app-window .acct-viewer,
+.lp-app-window .pv-root {
+  user-select: text;
 }
 
-.lp-project-body {
-  flex: 1;
-  overflow: hidden;
+/* #project-viewer is a flex child of #main in the app and gets `flex: 1`
+   there. v-show only toggles `display`, so the flex chain below it still
+   needs the height it would have had. */
+.lp-app-window #project-viewer .pv-root {
   min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.lp-project-body .pv-root {
-  flex: 1;
-  overflow: hidden;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
 }

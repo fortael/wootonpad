@@ -16,6 +16,10 @@ async function resolveDefaultSessionOptions(project) {
     options.worktree = true;
     if (effective.worktreeName) options.worktreeName = effective.worktreeName;
   }
+  // Only meaningful to an SDK session; a terminal one takes its model from the
+  // CLI's own flags. Passed regardless — main.js ignores what it cannot use.
+  if (effective.model) options.model = effective.model;
+  if (effective.effort) options.effort = effective.effort;
   if (effective.chrome) options.chrome = true;
   if (effective.preLaunchCmd) options.preLaunchCmd = effective.preLaunchCmd;
   if (effective.addDirs) options.addDirs = effective.addDirs;

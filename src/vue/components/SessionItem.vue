@@ -12,7 +12,7 @@
       <div class="session-info">
         <div class="session-summary">
           <!-- eslint-disable-next-line vue/no-v-html -->
-          <span v-if="session.type === 'terminal'" class="terminal-badge" v-html="terminalBadgeSvg"></span>
+          <span v-if="session.type === 'terminal'" class="terminal-badge"><SbIcon name="terminal" :size="13" /></span>
           {{ displayName }}
         </div>
         <div v-if="session.aiTitle" class="session-subtitle">{{ cleanName(session.aiTitle) }}</div>
@@ -28,6 +28,21 @@
                stay a separate element: textContent on .session-meta would wipe
                the ring beside it. -->
           <span class="session-meta-text">{{ timeStr }}{{ msgSuffix }}</span>
+          <!-- What this session changed, the same numbers the board's cards
+               show. A separate element for the same reason as the ring. -->
+          <span v-if="churn" class="session-churn">
+            <span class="session-churn__added">+{{ churn.added }}</span>
+            <span class="session-churn__removed">&minus;{{ churn.removed }}</span>
+          </span>
+          <!-- Sub-agents this session has out working. They have no rows of
+               their own anywhere, so their only trace in the list is here. -->
+          <span
+            v-if="runningAgents"
+            class="session-agents"
+            :data-tooltip="`${runningAgents} background task${runningAgents > 1 ? 's' : ''} running`"
+          >
+            <SbIcon name="bot" :size="11" />{{ runningAgents }}
+          </span>
         </div>
       </div>
 
@@ -44,9 +59,12 @@
 
 <script setup>
 import { computed } from 'vue';
+import SbIcon from './SbIcon.vue';
 import UsageRing from './UsageRing.vue';
 import SessionMenu from './SessionMenu.vue';
 import { contextPercent, formatContextLabel } from '../context-window.js';
+import { sessionChurn } from '../session-churn.js';
+import { store } from '../store.js';
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -60,6 +78,9 @@ const props = defineProps({
 // Everything else a row can do lives in SessionMenu, which calls the app.js
 // bridge directly rather than emitting up through the list.
 defineEmits(['open']);
+
+// Kept in the store by App.vue's poller — see store.subagentCounts.
+const runningAgents = computed(() => store.subagentCounts.get(props.session.sessionId) || 0);
 
 const contextPct = computed(() => contextPercent(props.session.contextTokens, props.session));
 const contextLabel = computed(() => formatContextLabel(props.session.contextTokens, props.session));
@@ -80,6 +101,9 @@ const msgSuffix = computed(() =>
   props.session.messageCount ? ` · ${props.session.messageCount} msgs` : ''
 );
 
+// Shared with the board's cards — see session-churn.js.
+const churn = computed(() => sessionChurn(props.session));
+
 const itemClasses = computed(() => ({
   active: props.isActive,
   'has-running-pty': props.isRunning,
@@ -91,6 +115,4 @@ const itemClasses = computed(() => ({
   'is-terminal': props.session.type === 'terminal',
 }));
 
-// The only inline glyph this row still owns; the menu's icons come from SbIcon.
-const terminalBadgeSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>';
 </script>

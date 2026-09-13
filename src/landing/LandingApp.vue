@@ -1,8 +1,32 @@
 <template>
   <div class="lp-root">
 
+    <!-- Ambient light. Three blurred blobs and a grid, fixed behind every
+         section so the page keeps one continuous backdrop instead of a seam
+         at each section border. Purely decorative — pointer-events: none. -->
+    <div class="lp-aurora" aria-hidden="true">
+      <span class="lp-aurora__grid"></span>
+      <span class="lp-aurora__blob lp-aurora__blob--1"></span>
+      <span class="lp-aurora__blob lp-aurora__blob--2"></span>
+      <span class="lp-aurora__blob lp-aurora__blob--3"></span>
+    </div>
+
     <!-- ── HERO ───────────────────────────────────────────────── -->
     <header class="lp-hero">
+      <!-- The page's own theme switch. It runs the same toggleTheme the demo
+           window's nav button runs, so flipping either one flips both — and
+           the fake terminal with them. -->
+      <button
+        type="button"
+        class="lp-theme-toggle"
+        :aria-label="store.theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'"
+        :title="store.theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'"
+        @click="toggleTheme"
+      >
+        <SbIcon :name="store.theme === 'light' ? 'moon' : 'sun'" :size="14" />
+        <span class="lp-theme-toggle__label">{{ store.theme === 'light' ? 'Dark' : 'Light' }}</span>
+      </button>
+
       <div class="lp-hero-inner">
         <img class="lp-logo" :src="iconUrl" alt="Wooton Pad icon" width="72" height="72">
         <h1 class="lp-title">Wooton Pad</h1>
@@ -33,7 +57,7 @@
         </p>
 
         <!-- The demo below renders the app's own components (TopNavApp,
-             CommandBar, AttentionRail, FilterTabs, SidebarApp,
+             CommandBar, UnreadRail, FilterTabs, SidebarApp,
              SessionHeaderApp, SessionPanelRail, SessionSidePanelApp,
              SessionBoardApp …) inside App.vue's wrapper markup, driven by
              mock-data.js. Change a component in src/vue/components and this
@@ -83,10 +107,10 @@
                 <CommandBar
                   :model-value="store.searchQuery"
                   :placeholder="searchPlaceholder"
-                  add-title="Add project"
+                  add-title="Quick open"
                   @update:model-value="onSearchValue"
-                  @add="onAddProject"
-                  @spotlight="focusSearch"
+                  @add="openSpotlight"
+                  @spotlight="openSpotlight"
                 >
                   <template #field-actions>
                     <button
@@ -96,25 +120,17 @@
                       aria-label="Clear search"
                       @click="doClearSearch"
                     >&times;</button>
-                    <button
-                      type="button"
-                      class="sbx-commandbar__chip"
-                      :class="{ 'is-active': store.searchTitlesOnly }"
-                      data-tooltip="Search titles only"
-                      aria-label="Search titles only"
-                      @click="toggleTitlesOnly"
-                    >Tt</button>
                   </template>
                 </CommandBar>
 
                 <!-- Not scoped to the sessions tab any more: live sessions are
                      worth watching from wherever you are. The board is the one
                      exception — it already shows every one of them as a card. -->
-                <AttentionRail
+                <UnreadRail
                   v-if="store.activeTab !== 'board'"
-                  :items="attentionProjects"
-                  :active-name="attentionActiveName"
-                  @select="onSelectAttentionName"
+                  :items="unreadRows"
+                  :active-session-id="store.activeSessionId || ''"
+                  @select="onSelectUnread"
                 />
 
                 <!-- Shared with the board: same sessions, same filter flags. -->
@@ -141,21 +157,19 @@
                   </template>
                 </FilterTabs>
 
-                <div id="sidebar-content" class="sbx-sidebar-panel" v-show="sessionListVisible">
+                <div id="sidebar-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="sessionListVisible">
                   <SidebarApp :callbacks="sidebarCallbacks" />
                 </div>
-                <div id="plans-content" class="sbx-sidebar-panel" v-show="store.activeTab === 'plans'">
+                <div id="plans-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'plans'">
                   <PlansApp ref="plansRef" :callbacks="planCallbacks" />
                 </div>
-                <div id="accounts-content" class="sbx-sidebar-panel" v-show="store.activeTab === 'accounts'">
+                <div id="accounts-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'accounts'">
                   <AccountsApp ref="accountsRef" :callbacks="accountsCallbacks" />
                 </div>
-                <div id="projects-content" class="sbx-sidebar-panel" v-show="store.activeTab === 'projects'">
+                <div id="projects-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'projects'">
                   <ProjectsApp ref="projectsRef" :callbacks="projectsCallbacks" />
                 </div>
-                <!-- Not a .sbx-sidebar-panel: this one owns two bounded scroll
-                     boxes rather than being a single scrolling column. -->
-                <div id="board-sidebar-content" class="sbx-boardside-panel" v-show="store.activeTab === 'board'">
+                <div id="board-sidebar-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'board'">
                   <BoardSidebarApp :callbacks="boardSidebarCallbacks" />
                 </div>
               </div>
@@ -171,6 +185,28 @@
                   <SessionBoardApp ref="boardRef" />
                 </div>
 
+                <!-- The three main-area pages a click in the sidebar opens.
+                     Same components, same containers and same stylesheets the
+                     app uses; only what fills them is mocked. -->
+                <div id="plan-viewer" v-show="mainView === 'plan'">
+                  <ViewerContentApp
+                    ref="planViewerRef"
+                    language="markdown"
+                    storage-key="markdownPreviewMode"
+                    :show-copy-path="true"
+                    :show-copy-content="true"
+                    :on-close="closeMainView"
+                  />
+                </div>
+
+                <div id="account-viewer" v-show="mainView === 'account'">
+                  <AccountViewerApp ref="accountViewerRef" />
+                </div>
+
+                <div id="project-viewer" v-show="mainView === 'project'">
+                  <ProjectViewerApp ref="projectViewerRef" :callbacks="projectViewerCallbacks" />
+                </div>
+
                 <!-- Drag the seam between the board and the session below it. -->
                 <div
                   v-if="boardSplitActive"
@@ -182,7 +218,7 @@
                 ></div>
 
                 <div
-                  v-show="!store.showBoard || boardSplitActive"
+                  v-show="mainView === 'session' && (!store.showBoard || boardSplitActive)"
                   id="terminal-area"
                   :class="{ 'has-side-panel': sidePanelVisible }"
                   :style="{ '--sbx-sidepanel-w': store.sidePanelWidth + 'px' }"
@@ -241,175 +277,202 @@
       </div>
     </section>
 
-    <!-- ── FEATURES (BENTO) ─────────────────────────────────── -->
+    <!-- ── FEATURES ─────────────────────────────────────────────
+         Three showcase panels, each one holding the component it is talking
+         about — the same ones the demo window mounts, on the same mock data —
+         followed by a compact grid for everything that does not need a
+         picture to be understood. -->
     <section class="lp-features">
       <div class="lp-section-inner">
         <h2 class="lp-section-title">Everything Claude Code needs</h2>
-        <p class="lp-section-subtitle">One window for every session, project, and tool — so you stay focused on shipping.</p>
+        <p class="lp-section-subtitle">
+          One window for every session, project and account. Each panel below is
+          the live component, not an illustration of it.
+        </p>
 
-        <div class="lp-bento">
+        <div class="lp-showcase">
 
-          <!-- Session browser — wide -->
-          <div class="lp-bento-card lp-bento-wide lp-bento-accent-orange">
-            <div class="lp-bento-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <!-- ① Multi-account ──────────────────────────────────────
+               First, and with the real switcher in it: two Claude plans in
+               one window is the thing people come here for. -->
+          <article class="lp-show lp-show--accounts lp-bento-accent-blue">
+            <div class="lp-show__copy">
+              <div class="lp-show__eyebrow">
+                <SbIcon name="users" :size="13" />
+                Multi-account
+              </div>
+              <h3>Two Claude plans, one window</h3>
+              <p>
+                Personal and work side by side — each with its own credentials, its own
+                session history, its own <code>CLAUDE.md</code> and settings, and its own
+                quota. Switching is one click and no re-login: nothing signs out, nothing
+                is shared, and every project list re-scans against the account you picked.
+              </p>
+              <p>
+                Sessions stay attached to the account that ran them, so the sidebar,
+                the board and the plans tab all follow the switch. An account whose
+                Claude home lives inside a WSL distribution works the same way — attach
+                the distribution and its sessions appear alongside the Windows ones.
+              </p>
+              <div class="lp-show__meters">
+                <div v-for="m in showcaseUsage" :key="m.label" class="lp-show__meter">
+                  <UsageRing :value="m.pct" :size="34" :label="`${m.label} — ${m.pct}%`" />
+                  <span class="lp-show__metertext">
+                    <strong>{{ m.pct }}%</strong>
+                    {{ m.label }}
+                  </span>
+                </div>
+              </div>
             </div>
-            <h3>Session Browser &amp; Full-Text Search</h3>
-            <p>Every Claude conversation organised by project and indexed for full-text search. Find any session by what was discussed — not just when it happened.</p>
-            <div class="lp-bento-pill">SQLite FTS5</div>
-          </div>
 
-          <!-- Multi-account -->
-          <div class="lp-bento-card lp-bento-accent-blue">
-            <div class="lp-bento-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="6" r="3.5"/><path d="M1.5 21c0-4 2.9-7 6.5-7s6.5 3 6.5 7"/><circle cx="17" cy="8.5" r="2.5"/><path d="M14.5 21c0-2.8 1.8-5 4.5-5s4.5 2.2 4.5 5"/></svg>
+            <!-- The Accounts tab's own rows, quota bars and Use button —
+                 clicking one opens that account's page in the demo above. -->
+            <div class="lp-show__stage lp-show__stage--accounts">
+              <AccountsApp ref="showcaseAccountsRef" :callbacks="showcaseAccountsCallbacks" />
             </div>
-            <h3>Multi-Account</h3>
-            <p>Switch between personal and work accounts in one click. Separate credentials, histories, and usage quotas — no re-login.</p>
-          </div>
+          </article>
 
-          <!-- Session board — wide -->
-          <div class="lp-bento-card lp-bento-wide lp-bento-accent-cyan">
-            <div class="lp-bento-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 7v7"/><path d="M12 7v4"/><path d="M16 7v9"/></svg>
+          <!-- ② Projects overview ─────────────────────────────────── -->
+          <article class="lp-show lp-show--projects lp-bento-accent-green">
+            <div class="lp-show__copy">
+              <div class="lp-show__eyebrow">
+                <SbIcon name="folder" :size="13" />
+                Projects
+              </div>
+              <h3>Every repository, and the state it is in</h3>
+              <p>
+                One overview across all of them: current branch, uncommitted churn,
+                unpushed count, how many sessions the project has, its size on disk and
+                whether its compose services are up — without opening a terminal in any
+                of them.
+              </p>
+              <p>
+                Click one and it gets a page of its own in the main area:
+                <strong>Overview</strong> with the working tree and a commit box,
+                <strong>Commits</strong> with a push button, <strong>Files</strong>,
+                its <strong>Sessions</strong>, and every <strong>agent file</strong>
+                the project loads.
+              </p>
             </div>
-            <h3>Session Board</h3>
-            <p>Every session dealt into four lifecycle columns, derived live from what each one is actually doing. One click opens it in a pane below the board without leaving the overview.</p>
-            <div class="lp-bento-pill">idle · waiting input · in progress · done</div>
-          </div>
-
-          <!-- Attention -->
-          <div class="lp-bento-card lp-bento-accent-yellow">
-            <div class="lp-bento-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></svg>
+            <div class="lp-show__stage lp-show__stage--projects">
+              <ProjectsApp ref="showcaseProjectsRef" :callbacks="showcaseProjectsCallbacks" />
             </div>
-            <h3>Knows Who's Waiting</h3>
-            <p>A rail above the session list marks every project with a live session — working, finished, or blocked on a permission prompt you haven't answered.</p>
-          </div>
+          </article>
 
-          <!-- Session side panel — wide -->
-          <div class="lp-bento-card lp-bento-wide lp-bento-accent-green">
-            <div class="lp-bento-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/></svg>
+          <!-- ③ Board + Summarize ─────────────────────────────────── -->
+          <article class="lp-show lp-show--board lp-bento-accent-cyan">
+            <div class="lp-show__copy">
+              <div class="lp-show__eyebrow">
+                <SbIcon name="square-kanban" :size="13" />
+                Session board
+              </div>
+              <h3>Every session, dealt into four lanes</h3>
+              <p>
+                Idle, waiting on you, in progress, done — derived live from what each
+                session is actually doing, not from a status somebody remembered to set.
+                One click opens it in a pane under the board.
+              </p>
+              <p>
+                <strong>Summarize</strong> reads the last message of each session in one
+                headless <code>claude</code> call and flags at most two cards per level,
+                so the board keeps a shape you can read at a glance.
+              </p>
+              <ul class="lp-show__legend">
+                <li v-for="lv in FOCUS_ORDER" :key="lv">
+                  <span class="sbx-focusflag" :class="`sbx-focusflag--${lv}`">
+                    <SbIcon name="flag" :size="10" />
+                    {{ FOCUS_LEVELS[lv].label }}
+                  </span>
+                  <span class="lp-show__legendhint">{{ FOCUS_LEVELS[lv].hint }}</span>
+                </li>
+              </ul>
             </div>
-            <h3>Session Side Panel</h3>
-            <p>A rail of icons floats over the terminal. Open one pane at a time beside the session it belongs to: the working tree with inline diffs and a commit box, the project's compose services, or a scratch shell in the same directory. Stop and close live there too.</p>
-            <div class="lp-bento-pill">changes · containers · shell</div>
-          </div>
 
-          <!-- IDE diff viewer -->
-          <div class="lp-bento-card lp-bento-accent-purple">
-            <div class="lp-bento-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z"/><path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1"/></svg>
+            <!-- Real SessionCards, real focus flags: `boardFocus` is the same
+                 map the demo's Summarize button writes, so pressing it up
+                 there re-flags these too. -->
+            <div class="lp-show__stage lp-show__stage--cards">
+              <div class="lp-show__column">
+                <div class="lp-show__columnhead">
+                  <span class="lp-show__dot lp-show__dot--done"></span> Done
+                </div>
+                <SessionCard :session="showcaseCards[0]" />
+              </div>
+              <div class="lp-show__column">
+                <div class="lp-show__columnhead">
+                  <span class="lp-show__dot lp-show__dot--running"></span> In progress
+                </div>
+                <SessionCard :session="showcaseCards[1]" />
+              </div>
+              <button type="button" class="lp-show__cta" @click="showBoardTab">
+                Open the board in the demo ↑
+              </button>
             </div>
-            <h3>IDE Diff Viewer</h3>
-            <p>Review every file change before it's applied. Accept, reject, or edit individual hunks with syntax highlighting.</p>
-          </div>
+          </article>
 
-          <!-- Git integration -->
-          <div class="lp-bento-card lp-bento-accent-green">
-            <div class="lp-bento-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/><path d="M9 3 6 6l3 3"/></svg>
+          <!-- ④ Unread rail ─────────────────────────────────────── -->
+          <article class="lp-show lp-show--rail lp-bento-accent-yellow">
+            <div class="lp-show__copy">
+              <div class="lp-show__eyebrow">
+                <SbIcon name="triangle-alert" :size="13" />
+                Attention
+              </div>
+              <h3>Nothing waits on you unnoticed</h3>
+              <p>
+                A rail above the session list carries one avatar per session that wants
+                something: a finished turn nobody has read, or a permission prompt
+                blocking the run. It is never hidden — an empty rail is the answer too.
+              </p>
+              <p>
+                The dock badge, the board's WAITING column and this rail all read the
+                same precedence table, so they cannot disagree about what is blocked.
+              </p>
             </div>
-            <h3>Git Integration</h3>
-            <p>Branch, added/deleted lines, commits with an unpushed count, push, and one-click branch switching — scoped to the session's own worktree, not just the project.</p>
-          </div>
-
-          <!-- AI commit -->
-          <div class="lp-bento-card lp-bento-accent-pink">
-            <div class="lp-bento-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+            <div class="lp-show__stage lp-show__stage--rail">
+              <UnreadRail :items="unreadRows" :active-session-id="store.activeSessionId || ''" @select="onSelectUnread" />
             </div>
-            <h3>AI Commit Messages</h3>
-            <p>Generate a commit message with Claude next to the session that made the changes, then commit without switching views.</p>
-            <div class="lp-bento-pill">short · detailed</div>
-          </div>
+          </article>
 
-          <!-- Docker -->
-          <div class="lp-bento-card lp-bento-accent-cyan">
-            <div class="lp-bento-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12.5c0 .5-.1 1-.2 1.5H2.2A10 10 0 0 1 12 2a10 10 0 0 1 10 10.5z"/><path d="M2.2 14C3.2 18.5 7.2 22 12 22a10 10 0 0 0 9.8-8H2.2z"/><rect x="5" y="9" width="2" height="3" rx=".5"/><rect x="9" y="9" width="2" height="3" rx=".5"/><rect x="13" y="9" width="2" height="3" rx=".5"/></svg>
+          <!-- ⑤ Activity ────────────────────────────────────────── -->
+          <article class="lp-show lp-show--stats lp-bento-accent-orange">
+            <div class="lp-show__copy">
+              <div class="lp-show__eyebrow">
+                <SbIcon name="chart-no-axes-column" :size="13" />
+                Activity
+              </div>
+              <h3>What each account has actually spent</h3>
+              <p>
+                A year of coding on the account's own page — messages a day, current and
+                longest streak, tokens per model, and the last thirty days as a chart.
+                Read off this app's index, topped up from <code>claude /stats</code> when
+                you ask for it.
+              </p>
+              <p>
+                Per account, not per machine: the personal plan's heatmap does not
+                include the work one's, which is the whole point of keeping them apart.
+              </p>
             </div>
-            <h3>Docker Monitoring</h3>
-            <p>Compose service status at a glance, per project and per session — know if your stack is running before handing off to Claude.</p>
-          </div>
-
-          <!-- Plans & agent files -->
-          <div class="lp-bento-card lp-bento-accent-yellow">
-            <div class="lp-bento-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/></svg>
+            <div class="lp-show__stage lp-show__stage--heatmap">
+              <ActivityHeatmap :daily-map="showcaseHeatmap" />
             </div>
-            <h3>Plans &amp; Agent Files</h3>
-            <p>Browse and edit Claude's plan files from their own tab, and every CLAUDE.md the project uses from the project panel.</p>
-          </div>
+          </article>
+        </div>
 
-          <!-- Activity stats -->
-          <div class="lp-bento-card lp-bento-accent-orange">
-            <div class="lp-bento-icon">
-              <svg width="24" height="24" viewBox="0 0 512 512" fill="currentColor"><path d="M128 496H48V304h80zm224 0h-80V208h80zm112 0h-80V96h80zm-224 0h-80V16h80z"/></svg>
-            </div>
-            <h3>Activity &amp; Usage</h3>
-            <p>A heatmap of your coding activity on each account's page, with token consumption and cost tracked per account and refreshed on demand.</p>
+        <!-- Everything else — one line each, no pictures needed. -->
+        <div class="lp-grid">
+          <div v-for="f in FEATURE_GRID" :key="f.title" class="lp-gridcard" :class="`lp-bento-accent-${f.accent}`">
+            <span class="lp-gridcard__icon"><SbIcon :name="f.icon" :size="15" /></span>
+            <h4>{{ f.title }}</h4>
+            <p v-html="f.body"></p>
           </div>
-
-          <!-- GitLab + avatars -->
-          <div class="lp-bento-card lp-bento-accent-pink">
-            <div class="lp-bento-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="m22.65 14.39-9.217 6.519a.5.5 0 0 1-.566 0L3.65 14.39a.5.5 0 0 1-.18-.557l1.28-3.943 2.396-7.373a.246.246 0 0 1 .468 0l2.397 7.373h6.782l2.397-7.373a.246.246 0 0 1 .468 0l2.395 7.372 1.28 3.944a.5.5 0 0 1-.177.556z"/></svg>
-            </div>
-            <h3>GitLab &amp; Avatars</h3>
-            <p>Connect a GitLab token to pull project avatars automatically. Falls back to generated initials.</p>
-          </div>
-
-          <!-- File tree -->
-          <div class="lp-bento-card lp-bento-accent-blue">
-            <div class="lp-bento-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><path d="M2 10h20"/></svg>
-            </div>
-            <h3>File Tree</h3>
-            <p>Browse the project directory and open any file in the viewer panel without leaving the app.</p>
-          </div>
-
-          <!-- External launcher -->
-          <div class="lp-bento-card lp-bento-accent-purple">
-            <div class="lp-bento-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-            </div>
-            <h3>External Launcher</h3>
-            <p><code>open wootonpad://+/path</code> opens or resumes sessions from any tool — no extra windows.</p>
-          </div>
-
-          <!-- Custom fonts -->
-          <div class="lp-bento-card lp-bento-accent-green">
-            <div class="lp-bento-icon">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
-            </div>
-            <h3>Custom Fonts</h3>
-            <p>Configure terminal and UI fonts in Global Settings to match your editor setup.</p>
-          </div>
-
         </div>
       </div>
     </section>
 
-    <!-- ── PROJECT VIEWER DEMO ──────────────────────────────────── -->
-    <section class="lp-project-demo-section">
-      <div class="lp-section-inner">
-        <div class="lp-project-demo-text">
-          <h2 class="lp-section-title lp-project-demo-title">Your IDE is optional</h2>
-          <p class="lp-project-demo-desc">Every project gets a page of its own: overview, commits, files, its live sessions and the agent files it loads. Review a diff, edit a file, write the commit — without an editor open anywhere.</p>
-        </div>
-
-        <!-- No traffic lights on this one: it is a crop of the main area, not a
-             second window, and the project panel's own header starts hard
-             against the top-left corner where they would sit. -->
-        <div class="lp-app-window lp-project-window" :data-theme="store.theme">
-          <div class="lp-project-body">
-            <ProjectViewerApp ref="projectViewerRef" :callbacks="projectViewerCallbacks" />
-          </div>
-        </div>
-      </div>
-    </section>
+    <!-- The project page used to get a second window of its own down here.
+         It is reachable in the demo above now — Projects tab, click a
+         project — so a static copy of it would only say the same thing
+         twice. -->
 
     <!-- ── INSTALL ────────────────────────────────────────────── -->
     <section class="lp-install">
@@ -445,6 +508,10 @@
       </div>
     </section>
 
+    <!-- The ⌘K palette. Same component the app mounts; landing.css keeps its
+         backdrop inside the demo window instead of over the whole page. -->
+    <SpotlightApp to=".lp-app-window" />
+
     <!-- Tooltip element (matches public/style.css #app-tooltip) -->
     <div id="app-tooltip"></div>
 
@@ -470,13 +537,16 @@ import { store } from '../vue/store.js';
 import { setSidePanelTab } from '../vue/side-panel-tabs.js';
 
 import SbIcon from '../vue/components/SbIcon.vue';
+import { FOCUS_LEVELS } from '../vue/board-focus.js';
 import TopNavApp from '../vue/components/TopNavApp.vue';
 import CollapsedRailApp from '../vue/components/CollapsedRailApp.vue';
 import CommandBar from '../vue/components/CommandBar.vue';
 import FilterTabs from '../vue/components/FilterTabs.vue';
-import AttentionRail from '../vue/components/AttentionRail.vue';
+import UnreadRail from '../vue/components/UnreadRail.vue';
+import { unreadSessions, stateFromStore } from '../vue/session-column.js';
 import SidebarApp from '../vue/components/SidebarApp.vue';
 import SessionHeaderApp from '../vue/components/SessionHeaderApp.vue';
+import SpotlightApp from '../vue/components/SpotlightApp.vue';
 import SessionPanelRail from '../vue/components/SessionPanelRail.vue';
 import SessionSidePanelApp from '../vue/components/SessionSidePanelApp.vue';
 import SessionBoardApp from '../vue/components/SessionBoardApp.vue';
@@ -486,6 +556,11 @@ import AccountsApp from '../vue/components/AccountsApp.vue';
 import ProjectsApp from '../vue/components/ProjectsApp.vue';
 import PlansApp from '../vue/components/PlansApp.vue';
 import ProjectViewerApp from '../vue/components/ProjectViewerApp.vue';
+import AccountViewerApp from '../vue/components/AccountViewerApp.vue';
+import ViewerContentApp from '../vue/components/ViewerContentApp.vue';
+import SessionCard from '../vue/components/SessionCard.vue';
+import UsageRing from '../vue/components/UsageRing.vue';
+import ActivityHeatmap from '../vue/components/ActivityHeatmap.vue';
 import {
   MOCK_ACCOUNTS,
   MOCK_ACTIVE_ACCOUNT_ID,
@@ -493,8 +568,8 @@ import {
   MOCK_TERMINAL_LINES,
   MOCK_USAGE,
   MOCK_PLANS,
+  MOCK_ACCOUNT_STATS,
   MOCK_SELECTED_SESSION_ID,
-  MOCK_VIEWER_PROJECT_PATH,
 } from './mock-data.js';
 
 const iconUrl = 'icon.png';
@@ -513,7 +588,25 @@ const accountsRef = ref(null);
 const projectsRef = ref(null);
 const plansRef = ref(null);
 const projectViewerRef = ref(null);
+const accountViewerRef = ref(null);
+const planViewerRef = ref(null);
 const boardRef = ref(null);
+// Second instances of two sidebar panels, mounted in the feature showcase
+// further down the page. Same components, same mock data — a screenshot of
+// them would go stale the first time either one changed.
+const showcaseAccountsRef = ref(null);
+const showcaseProjectsRef = ref(null);
+
+// ── Main area ────────────────────────────────────────────────────
+// app.js juggles the main area's panels through DOM `display` in the real
+// app; on the landing there are only four of them, so one name is enough.
+// The board is not in here — it has store.showBoard, because it can share the
+// area with a session in the split below it.
+const mainView = ref('session');   // 'session' | 'plan' | 'project' | 'account'
+
+function closeMainView() {
+  mainView.value = 'session';
+}
 
 // ── Tab config (same list App.vue feeds TopNavApp) ───────────────
 // Agent Files and Stats are gone: agent files moved into the project panel's
@@ -528,7 +621,7 @@ const TABS = [
 
 const FILTER_TABS = [
   { id: 'recent', label: 'Recent' },
-  { id: 'running', label: 'Running' },
+  { id: 'active', label: 'Active' },
   { id: 'pinned', label: 'Pinned' },
   { id: 'today', label: 'Today' },
   { id: 'archived', label: 'Archived' },
@@ -576,7 +669,7 @@ const sidePanelVisible = computed(() => !!store.sidePanelTab && !!store.headerSe
 // 340px panel leaves the terminal too narrow to read, so the demo puts the
 // panel away and leaves the rail — which is exactly what a user would do, and
 // keeps the control that reopens it on screen.
-const PANEL_MIN_VIEWPORT = 1180;
+const PANEL_MIN_VIEWPORT = 1360;
 // Only reopen what this closed. A panel the visitor put away themselves stays
 // away when the window is resized.
 let closedByWidth = null;
@@ -592,12 +685,15 @@ function syncPanelToWidth() {
   }
 }
 
+// Same wording the app uses — each tab names the fields it searches, because
+// there is no modifier on the field to explain them.
 const searchPlaceholder = computed(() => {
   switch (store.activeTab) {
-    case 'plans': return 'Search plans...';
-    case 'projects': return 'Search projects…';
-    case 'board': return 'Search the board...';
-    default: return 'Search sessions...';
+    case 'plans': return 'Search plans by title or text…';
+    case 'projects': return 'Search projects by name or folder…';
+    case 'accounts': return 'Search accounts by name or folder…';
+    case 'board': return 'Search the board by session or project…';
+    default: return 'Search sessions by title or project…';
   }
 });
 
@@ -610,7 +706,7 @@ function onSearchValue(value) {
     searchDebounceTimer = null;
     const query = store.searchQuery.trim();
     if (!query) { doClearSearch(); return; }
-    window.__sb?.search?.(query, store.searchTitlesOnly);
+    window.__sb?.search?.(query);
   }, 200);
 }
 
@@ -620,23 +716,21 @@ function doClearSearch() {
   window.__sb?.clearSearch?.();
 }
 
-function focusSearch() {
-  document.querySelector('.lp-app-window .sbx-commandbar__input')?.focus();
-}
-
-function toggleTitlesOnly() {
-  store.searchTitlesOnly = !store.searchTitlesOnly;
-  if (store.searchQuery.trim()) {
-    window.__sb?.search?.(store.searchQuery.trim(), store.searchTitlesOnly);
-  }
-}
+function openSpotlight() { store.spotlightOpen = true; }
 
 // ── Theme ────────────────────────────────────────────────────────
-// The app mirrors this onto <html data-theme>; the landing scopes it to the
-// demo window instead (:data-theme on .lp-app-window) so flipping the app's
-// theme does not repaint the marketing page around it.
+// One switch for the whole page. It writes <html data-theme> exactly like the
+// app does, so theme-light.css repaints the marketing sections, the demo
+// window and the fake terminal in one go — the demo window keeps its own
+// data-theme too, for the CSS that is scoped to it.
+function applyTheme(next) {
+  store.theme = next === 'light' ? 'light' : 'dark';
+  document.documentElement.dataset.theme = store.theme;
+  localStorage.setItem('theme', store.theme);
+}
+
 function toggleTheme() {
-  store.theme = store.theme === 'light' ? 'dark' : 'light';
+  applyTheme(store.theme === 'light' ? 'dark' : 'light');
 }
 
 // ── Active-session rail ──────────────────────────────────────────
@@ -667,13 +761,12 @@ const attentionProjects = computed(() => {
   return out.sort((a, b) => ATTENTION_ORDER[a.status] - ATTENTION_ORDER[b.status]);
 });
 
-const attentionActiveName = computed(() =>
-  attentionProjects.value.find(p => p.projectPath === store.attentionProject)?.name || ''
-);
+// Same set the app's rail shows — one entry per unread session, from the
+// mock store rather than a live one.
+const unreadRows = computed(() => unreadSessions(store.projects, stateFromStore(store)));
 
-function onSelectAttentionName(name) {
-  const hit = attentionProjects.value.find(p => p.name === name);
-  if (hit) onSelectAttentionProject(hit.projectPath);
+function onSelectUnread(session) {
+  if (session?.projectPath) onSelectAttentionProject(session.projectPath);
 }
 
 function onSelectAttentionProject(projectPath) {
@@ -693,16 +786,35 @@ function setTab(tabId) {
   if (tabId === store.activeTab) return;
   store.activeTab = tabId;
   store.showBoard = tabId === 'board';
+  // A plan, a project page or an account page belongs to the tab it was
+  // opened from; leaving it up over another tab's sidebar is the bug
+  // hideAllViewers() exists to prevent in the app.
+  mainView.value = 'session';
   store.searchQuery = '';
   store.searchMatchIds = null;
   store.searchMatchProjectPaths = null;
   window.__sb?.onTabChange?.(tabId);
 }
 
+// The showcase panels are below the demo window, so anything clicked in one
+// has to bring the window back into view or the result happens off screen.
+function jumpToDemo() {
+  document.querySelector('.lp-app-window')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+// The showcase's "open the board" link, from outside the demo window.
+function showBoardTab() {
+  setTab('board');
+  jumpToDemo();
+}
+
 // ── Filter tabs ──────────────────────────────────────────────────
 function onFilterTab(id) {
   store.sessionFilterTab = id;
-  store.showRunningOnly = id === 'running';
+  // 'active' — the id FILTER_TABS actually declares. This read 'running',
+  // the name the tab had two renames ago, so the filter never engaged and
+  // the Active tab listed every session.
+  store.showRunningOnly = id === 'active';
   store.showStarredOnly = id === 'pinned';
   store.showTodayOnly = id === 'today';
   store.showArchived = id === 'archived';
@@ -722,8 +834,6 @@ function onViewMode(mode) {
 // ── Sidebar action callbacks (identical shape to App.vue) ────────
 function onGlobalSettings() { window.__sb?.openGlobalSettings?.(); }
 function onResort() { window.__sb?.resort?.(); }
-function onAddProject() { window.__sb?.addProject?.(); }
-
 // Per-session actions are not here: SessionMenu calls window.__sb directly, so
 // the list only forwards what the rows themselves still do. Same five App.vue
 // passes — keep them in step.
@@ -735,7 +845,30 @@ const sidebarCallbacks = {
   removeProject: (path) => window.__sb?.removeProject?.(path),
 };
 
-const planCallbacks = { openPlan: (plan) => window.__sb?.openPlan?.(plan) };
+// A plan opens the same Markdown pane the app opens, on the same component —
+// only the file comes out of mock-data.js instead of ~/.claude/plans.
+async function openPlan(plan) {
+  if (!plan?.filename) return;
+  plansRef.value?.setActive?.(plan.filename);
+  const result = await window.api.readPlan(plan.filename);
+  if (!result) return;
+  mainView.value = 'plan';
+  await nextTick();
+  planViewerRef.value?.open(plan.title || plan.filename, result.filePath, result.content);
+}
+
+// Notes open in the same pane as plans — same Markdown, same preview toggle.
+// Only the directory behind them differs.
+async function openNote(note) {
+  if (!note?.filename) return;
+  const result = await window.api.readNote(note.filename);
+  if (!result?.ok) return;
+  mainView.value = 'plan';
+  await nextTick();
+  planViewerRef.value?.open(note.title || note.filename, result.filePath, result.content);
+}
+
+const planCallbacks = { openPlan, openNote };
 
 // A summary's link has to land exactly where a card click lands, so it goes
 // through the board's own handler rather than repeating it here.
@@ -743,9 +876,32 @@ const boardSidebarCallbacks = {
   selectSession: (s) => boardRef.value?.selectSession(s),
 };
 
+// Clicking an account opens its page in the main area, the same way the app
+// does — config paths, token state, MCP servers, quota meters and a year of
+// activity, all off MOCK_ACCOUNT_DETAIL / MOCK_ACCOUNT_STATS.
+async function openAccountViewer(id) {
+  if (!id) return;
+  mainView.value = 'account';
+  store.accountViewerId = id;
+  await nextTick();
+  accountViewerRef.value?.load(id);
+}
+
+// app.js broadcasts an account switch back to every component that shows one;
+// the landing has three of them (the nav chip and the two AccountsApp copies)
+// and no main process to do the broadcasting, so it happens here. Without it
+// pressing Use looks like it did nothing, which is a poor advertisement for
+// the feature this page leads with.
+function switchAccount(id) {
+  window.__sb?.switchAccount?.(id);
+  accountDropdownRef.value?.setActiveAccount?.(id);
+  accountsRef.value?.setActiveAccount?.(id);
+  showcaseAccountsRef.value?.setActiveAccount?.(id);
+}
+
 const accountsCallbacks = {
-  openAccountViewer: (id) => window.__sb?.openAccountViewer?.(id),
-  switchAccount: (id) => window.__sb?.switchAccount?.(id),
+  openAccountViewer,
+  switchAccount,
   openAccountHomeSession: (acc) => window.__sb?.openAccountHomeSession?.(acc),
   renameAccount: (id, name) => window.__sb?.renameAccount?.(id, name),
   deleteAccount: (id) => window.__sb?.deleteAccount?.(id),
@@ -754,18 +910,36 @@ const accountsCallbacks = {
   createWslAccount: (distro, name) => window.__sb?.createWslAccount?.(distro, name),
 };
 
-const accountDropdownCallbacks = {
-  switchAccount: (id) => {
-    window.__sb?.switchAccount?.(id);
-    accountDropdownRef.value?.setActiveAccount?.(id);
-  },
+// The showcase copies of the two panels differ in one thing: opening a row
+// there has to switch the demo window to the matching tab first, then scroll
+// back up to it — in the sidebar the tab is already the one you are on.
+const showcaseAccountsCallbacks = {
+  ...accountsCallbacks,
+  openAccountViewer: (id) => { setTab('accounts'); openAccountViewer(id); jumpToDemo(); },
 };
 
+const accountDropdownCallbacks = { switchAccount };
+
+// Clicking a project opens its page in the main area — overview, commits,
+// files, its sessions and the agent files it loads. It used to be a second,
+// static window further down the page.
+async function openProject(project) {
+  if (!project?.projectPath) return;
+  mainView.value = 'project';
+  await nextTick();
+  projectViewerRef.value?.open({ projectPath: project.projectPath });
+}
+
 const projectsCallbacks = {
-  openProject: (p) => window.__sb?.openProject?.(p),
+  openProject,
   newSession: (p, btn) => window.__sb?.newSession?.(p, btn),
   addProject: () => window.__sb?.addProject?.(),
   projectRemoved: () => window.__sb?.projectRemoved?.(),
+};
+
+const showcaseProjectsCallbacks = {
+  ...projectsCallbacks,
+  openProject: (p) => { setTab('projects'); openProject(p); jumpToDemo(); },
 };
 
 const projectViewerCallbacks = {
@@ -786,6 +960,87 @@ const activeSession = computed(() => {
 
 watch(activeSession, (s) => { store.headerSession = s; }, { immediate: true });
 
+// Opening a session takes the main area back off whatever page was on it —
+// the sidebar rows, the unread rail and the board's cards all go through
+// store.activeSessionId, so one watcher covers every one of them.
+watch(() => store.activeSessionId, (id) => { if (id) mainView.value = 'session'; });
+
+// ── Feature showcase ─────────────────────────────────────────────
+// The panels under the demo mount live components on the same mock data, so
+// they cannot drift from what the window above them shows.
+const FOCUS_ORDER = [3, 2, 1];
+
+const allSessions = MOCK_PROJECTS.flatMap(p =>
+  p.sessions.map(s => ({ ...s, projectPath: p.projectPath }))
+);
+// sess-006 finished a turn nobody has read; sess-004 is mid-run. One card
+// from each of the two columns that mean something.
+const showcaseCards = ['sess-006', 'sess-004'].map(id => allSessions.find(s => s.sessionId === id));
+
+const showcaseUsage = [
+  { label: 'Current session', pct: MOCK_USAGE.default.session },
+  { label: 'Week (all models)', pct: MOCK_USAGE.default.weekAll },
+];
+
+const showcaseHeatmap = Object.fromEntries(
+  MOCK_ACCOUNT_STATS.default.dailyActivity.map(e => [e.date, e.messageCount])
+);
+
+const FEATURE_GRID = [
+  {
+    icon: 'search', accent: 'orange', title: 'Full-text search',
+    body: 'Every conversation indexed with SQLite FTS5. Find a session by what was discussed, not by when it happened.',
+  },
+  {
+    icon: 'git-fork', accent: 'blue', title: 'Forks & worktrees',
+    body: 'A forked session is matched back to the one it came from, and git is scoped to the worktree it actually runs in.',
+  },
+  {
+    icon: 'panel-right-open', accent: 'green', title: 'Session side panel',
+    body: 'One pane at a time beside the session it belongs to: working tree, compose services, or a scratch shell in the same directory.',
+  },
+  {
+    icon: 'file-diff', accent: 'purple', title: 'IDE diff viewer',
+    body: 'WootonPad registers as a VS Code-compatible IDE, so the CLI sends its diffs here. Accept, reject or edit each hunk.',
+  },
+  {
+    icon: 'git-branch', accent: 'green', title: 'Git, per worktree',
+    body: 'Branch, churn, unpushed count, push and one-click branch switching — scoped to the session\'s own worktree.',
+  },
+  {
+    icon: 'sparkles', accent: 'pink', title: 'AI commit messages',
+    body: 'Write the commit with Claude next to the session that made the changes — short or descriptive — then commit in place.',
+  },
+  {
+    icon: 'container', accent: 'cyan', title: 'Docker monitoring',
+    body: 'Compose service status per project and per session, so you know the stack is up before handing off.',
+  },
+  {
+    icon: 'notebook-pen', accent: 'yellow', title: 'Plans, notes & agent files',
+    body: 'Claude\'s plan files in their own tab, account-scoped notes with TODOs, and every CLAUDE.md a project loads.',
+  },
+  {
+    icon: 'bot', accent: 'cyan', title: 'Background tasks',
+    body: 'Sub-agents a session has out working, counted on its card and readable as their own transcript.',
+  },
+  {
+    icon: 'plug', accent: 'purple', title: 'MCP servers & plugins',
+    body: 'What each account has configured, probed on demand — plus the plugin marketplaces it can install from.',
+  },
+  {
+    icon: 'square-arrow-out-up-right', accent: 'blue', title: 'External launcher',
+    body: '<code>open wootonpad://+/path</code> opens or resumes a session from any tool — no extra windows.',
+  },
+  {
+    icon: 'terminal', accent: 'orange', title: 'Your fonts, your shell',
+    body: 'Terminal and UI fonts, shell profile and per-project settings, all in Global Settings.',
+  },
+  {
+    icon: 'calendar-days', accent: 'green', title: 'Scheduled tasks',
+    body: 'Give a project a cron line and a prompt, and the session runs itself — output waiting where every other session is.',
+  },
+];
+
 const terminalLines = computed(() =>
   store.activeSessionId ? (MOCK_TERMINAL_LINES[store.activeSessionId] || []) : []
 );
@@ -793,6 +1048,9 @@ const terminalLines = computed(() =>
 onMounted(async () => {
   // SessionBoardApp hands a double-clicked card over to the session view.
   window.vueApp = { setTab };
+
+  // Same restore the app does, so a visitor who picked light keeps it.
+  applyTheme(localStorage.getItem('theme'));
 
   syncPanelToWidth();
   window.addEventListener('resize', syncPanelToWidth);
@@ -813,8 +1071,13 @@ onMounted(async () => {
   accountsRef.value?.setAccounts(MOCK_ACCOUNTS, MOCK_ACTIVE_ACCOUNT_ID);
   accountsRef.value?.setUsage(MOCK_USAGE);
   projectsRef.value?.setProjects(MOCK_PROJECTS);
+  // The showcase's own copies of those two, fed the same way.
+  showcaseAccountsRef.value?.setAccounts(MOCK_ACCOUNTS, MOCK_ACTIVE_ACCOUNT_ID);
+  showcaseAccountsRef.value?.setUsage(MOCK_USAGE);
+  showcaseProjectsRef.value?.setProjects(MOCK_PROJECTS);
   plansRef.value?.setPlans(MOCK_PLANS);
-  projectViewerRef.value?.open({ projectPath: MOCK_VIEWER_PROJECT_PATH });
+  // The project page is not opened here any more: it is a main-area panel a
+  // click in the Projects tab brings up, exactly as in the app.
 
   await nextTick();
   store.activeSessionId = MOCK_SELECTED_SESSION_ID;

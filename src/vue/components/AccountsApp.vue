@@ -1,12 +1,21 @@
 <template>
-  <div>
-    <div class="project-group">
-      <div class="project-header">
-        <span class="project-name">Accounts</span>
-      </div>
-      <div class="project-sessions">
+  <!-- The shared sidebar block — css/sidebar-blocks.css. The two .project-group
+       headers here used to pretend Accounts and Add account were projects; they
+       are the block's own title now, the same one every other tab uses. -->
+  <div class="sbx-blockpanel">
+    <section class="sbx-block sbx-block--fill">
+      <header class="sbx-block__head">
+        <SbIcon name="users" :size="13" tone="muted" />
+        <span class="sbx-block__title">Accounts</span>
+        <span class="sbx-block__count">{{ visibleAccounts.length }}</span>
+      </header>
+      <div class="sbx-block__body sbx-block__body--scroll">
+        <!-- Same hint box the projects tab uses for the same situation. -->
+        <div v-if="searchQuery && !visibleAccounts.length" class="projects-empty-hint">
+          No accounts match “{{ searchQuery }}”.
+        </div>
         <div
-          v-for="acc in accounts"
+          v-for="acc in visibleAccounts"
           :key="acc.id"
           class="session-item account-item"
           :class="{ active: acc.id === activeAccountId, 'account-item--selected': acc.id === store.accountViewerId }"
@@ -34,8 +43,7 @@
                   class="account-edit-btn"
                   data-tooltip="Rename"
                   @click.stop="startEdit(acc)"
-                  v-html="editSvg"
-                ></button>
+                ><SbIcon name="pencil" :size="13" tone="muted" /></button>
                 <button
                   v-if="acc.id !== activeAccountId"
                   class="account-open-btn"
@@ -52,8 +60,7 @@
                   class="account-row-del"
                   data-tooltip="Remove account"
                   @click.stop="onDelete(acc)"
-                  v-html="trashSvg"
-                ></button>
+                ><SbIcon name="trash-2" :size="13" tone="muted" /></button>
               </div>
             </div>
             <div class="session-subtitle">{{ acc.configDir || '~/.claude (default)' }}</div>
@@ -74,14 +81,28 @@
           </div>
         </div>
       </div>
-    </div>
+    </section>
 
-    <div class="project-group">
-      <div class="project-header" :class="{ collapsed: !addOpen }" @click="addOpen = !addOpen">
-        <span class="arrow">&#9660;</span>
-        <span class="project-name">Add account</span>
-      </div>
-      <div class="project-sessions accounts-add-section">
+    <section class="sbx-block sbx-block--fit" :class="{ 'is-collapsed': !addOpen }">
+      <header
+        class="sbx-block__head sbx-block__head--toggle"
+        role="button"
+        tabindex="0"
+        :aria-expanded="addOpen"
+        @click="addOpen = !addOpen"
+        @keydown.enter.prevent="addOpen = !addOpen"
+        @keydown.space.prevent="addOpen = !addOpen"
+      >
+        <SbIcon
+          name="chevron-down"
+          :size="12"
+          tone="muted"
+          class="sbx-block__chevron"
+          :class="{ 'is-collapsed': !addOpen }"
+        />
+        <span class="sbx-block__title">Add account</span>
+      </header>
+      <div v-show="addOpen" class="sbx-block__body sbx-block__body--scroll accounts-add-section">
         <p class="accounts-add-desc">Each account uses its own Claude credentials and session history. Add a second account to switch between personal and work Claude Pro plans, or any two separate logins.</p>
         <div class="accounts-add-form">
           <input
@@ -114,19 +135,33 @@
           </div>
         </div>
       </div>
-    </div>
+    </section>
   </div>
 </template>
 
 <script setup>
-import { ref, nextTick } from 'vue';
+import { ref, computed, nextTick } from 'vue';
 import { store } from '../store.js';
+import SbIcon from './SbIcon.vue';
 
 const props = defineProps({
   callbacks: { type: Object, required: true },
 });
 
 const accounts = ref([]);
+const searchQuery = ref('');
+
+// An account is a name over a config directory, and both are on the row — so
+// both are what the command bar searches here. Nothing else about an account
+// is text.
+const visibleAccounts = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase();
+  if (!q) return accounts.value;
+  return accounts.value.filter(acc =>
+    String(acc.name || '').toLowerCase().includes(q)
+    || String(acc.configDir || '').toLowerCase().includes(q)
+  );
+});
 const activeAccountId = ref('default');
 const usage = ref({});
 const editingId = ref(null);
@@ -243,8 +278,7 @@ defineExpose({
   },
   setActiveAccount(id) { activeAccountId.value = id; },
   setUsage(usageObj) { usage.value = { ...usageObj }; },
+  setSearch(q) { searchQuery.value = q || ''; },
 });
 
-const editSvg = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
-const trashSvg = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>';
 </script>

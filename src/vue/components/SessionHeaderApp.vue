@@ -1,17 +1,24 @@
 <template>
   <div v-if="store.headerSession" class="sbx-sesshead">
+    <!-- Two lines, not one row of everything: the name and where it lives on
+         top, the model's own title for the session underneath it. They were
+         competing for the same line, and the second one sat past the project
+         path where it read as another piece of metadata rather than as what
+         this session is about. -->
     <div class="sbx-sesshead__identity">
       <ProjectAvatar class="sbx-sesshead__avatar" :project-path="session.projectPath" />
 
-      <span class="sbx-sesshead__title" :title="sessionName">{{ sessionName }}</span>
+      <div class="sbx-sesshead__text">
+        <div class="sbx-sesshead__titlerow">
+          <span class="sbx-sesshead__title" :title="sessionName">{{ sessionName }}</span>
 
-      <span class="sbx-sesshead__sep">·</span>
+          <span class="sbx-sesshead__sep">·</span>
 
-      <span class="sbx-sesshead__project" :title="session.projectPath">{{ projectShortPath }}</span>
+          <span class="sbx-sesshead__project" :title="session.projectPath">{{ projectShortPath }}</span>
+        </div>
 
-      <span v-if="sessionId" class="sbx-sesshead__id" :title="sessionId">{{ shortId }}</span>
-
-      <span v-if="aiTitle" class="sbx-sesshead__ai" :title="aiTitle">{{ aiTitle }}</span>
+        <span v-if="aiTitle" class="sbx-sesshead__ai" :title="aiTitle">{{ aiTitle }}</span>
+      </div>
     </div>
 
     <div class="sbx-sesshead__controls">
@@ -44,6 +51,13 @@
         :title="store.headerPtyTitle"
       >{{ store.headerPtyTitle }}</span>
 
+      <!-- The same menu the list rows and the board cards carry, on the open
+           session itself: rename, fork, archive, delete and the session's
+           facts were all a trip back to the sidebar. The session id went with
+           it — nothing here needed eight hex digits, and the menu's own copy
+           button hands over the whole thing. -->
+      <SessionMenu :session="session" :is-running="isRunning" />
+
       <!-- The panel toggles and Stop used to live here. They are all on
            SessionPanelRail now, overlaid on the terminal: this header is
            hidden in the board's bottom split, and those controls have to
@@ -56,6 +70,7 @@
 import { computed } from 'vue';
 import { store } from '../store.js';
 import ProjectAvatar from './ProjectAvatar.vue';
+import SessionMenu from './SessionMenu.vue';
 
 const session = computed(() => store.headerSession);
 const sessionId = computed(() => session.value?.sessionId);
@@ -92,7 +107,7 @@ const statusClass = computed(() => ({
 const statusLabel = computed(() => {
   if (isAttention.value) return 'Needs attention';
   if (isBusy.value) return 'Working…';
-  if (isRunning.value) return 'Running';
+  if (isRunning.value) return 'Active';
   return 'Stopped';
 });
 
@@ -103,11 +118,6 @@ const timeStr = computed(() => {
   if (!s) return '';
   const t = window.lastActivityTime?.get(s.sessionId) || new Date(s.modified);
   return window.formatDate ? window.formatDate(t) : '';
-});
-
-const shortId = computed(() => {
-  const id = sessionId.value || '';
-  return id.slice(0, 8);
 });
 
 </script>

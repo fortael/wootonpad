@@ -1,5 +1,11 @@
 <template>
-  <div>
+  <!-- One block holding the whole list, matching the projects tab: the project
+       headers inside stay what they are, section headings within the list
+       rather than blocks of their own. Ten bordered cards down a narrow rail
+       reads as ten unrelated panels, which is not what a project group is. -->
+  <div class="sbx-blockpanel">
+    <section class="sbx-block sbx-block--fill">
+      <div class="sbx-block__body sbx-block__body--scroll">
     <ProjectGroup
       v-for="project in visibleProjects"
       :key="project.projectPath"
@@ -10,7 +16,7 @@
       :session-busy-state="store.sessionBusyState"
       :attention-sessions="store.attentionSessions"
       :response-ready-sessions="store.responseReadySessions"
-      :search-match-ids="store.searchMatchIds"
+      :search-match-ids="project._projectMatched ? null : store.searchMatchIds"
       :show-archived="store.showArchived"
       :show-starred-only="store.showStarredOnly"
       :show-running-only="store.showRunningOnly"
@@ -23,6 +29,8 @@
       @archive-sessions="onArchiveSessions"
       @remove-project="onRemoveProject"
     />
+      </div>
+    </section>
   </div>
 </template>
 
@@ -62,22 +70,34 @@ const visibleProjects = computed(() => {
   let projects = store.projects;
 
   if (store.searchMatchIds !== null) {
-    // Search: show all projects that match by session or by project name
+    // Search: show every project that matches by session title or by its own
+    // name. A project that matched by name keeps all of its sessions — the
+    // query named the project, so the whole project is the result; trimming it
+    // to the sessions whose titles happen to contain the same string would
+    // answer a question nobody asked.
     projects = projects
       .map(p => {
         const hasMatchingSessions = p.sessions.some(s => store.searchMatchIds.has(s.sessionId));
-        const projectMatched = store.searchMatchProjectPaths?.has(p.projectPath);
+        const projectMatched = !!store.searchMatchProjectPaths?.has(p.projectPath);
         if (!hasMatchingSessions && !projectMatched) return null;
         return {
           ...p,
-          sessions: hasMatchingSessions ? p.sessions.filter(s => store.searchMatchIds.has(s.sessionId)) : [],
+          sessions: projectMatched ? p.sessions : p.sessions.filter(s => store.searchMatchIds.has(s.sessionId)),
+          _projectMatched: projectMatched,
           _projectMatchedOnly: projectMatched && !hasMatchingSessions,
         };
       })
       .filter(Boolean);
   } else {
-    // Hide projects with no sessions surviving the active filters
+    // Hide projects with no sessions surviving the active filters — except a
+    // project that has no sessions at all, which is a real project you have
+    // just added and the one place to start work in it is its own + button.
+    // Under a filter (Active, Pinned, Today, Archived) it is correctly absent:
+    // nothing in it can satisfy one.
+    const unfiltered = !store.showArchived && !store.showStarredOnly
+      && !store.showRunningOnly && !store.showTodayOnly;
     projects = projects.filter(p => {
+      if (unfiltered && p.sessions.length === 0) return true;
       let sessions = store.showArchived ? p.sessions : p.sessions.filter(s => !s.archived);
       if (store.showStarredOnly) sessions = sessions.filter(s => s.starred);
       if (store.showRunningOnly) sessions = sessions.filter(s => store.activePtyIds.has(s.sessionId));

@@ -108,14 +108,32 @@ function createInputQueue() {
   };
 }
 
-/** Wrap plain text as the SDKUserMessage shape the SDK expects. */
-function userMessage(text) {
+/**
+ * Wrap a prompt as the SDKUserMessage shape the SDK expects.
+ *
+ * `content` is a MessageParam's content: a plain string, or the Messages API
+ * block array a prompt with an attachment needs — `image` blocks and then the
+ * text. Both are forwarded verbatim; the CLI writes whichever arrives into the
+ * transcript, which is why a pasted screenshot reads back out of the `.jsonl`
+ * the same way one pasted into the CLI's own composer does.
+ */
+function userMessage(content) {
   return {
     type: 'user',
-    message: { role: 'user', content: text },
+    message: { role: 'user', content },
     parent_tool_use_id: null,
     session_id: '',
   };
+}
+
+/** Is this something the CLI can be asked to answer? */
+function isPromptContent(content) {
+  if (typeof content === 'string') return content.length > 0;
+  // An array is content blocks. Every one must at least name its type — an
+  // entry the API cannot read fails the whole turn, not just the block.
+  return Array.isArray(content)
+    && content.length > 0
+    && content.every(block => block && typeof block === 'object' && typeof block.type === 'string');
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────
@@ -203,8 +221,17 @@ async function startSdkSession(sessionId, opts) {
     options.resume = sessionId;
   }
 
-  if (opts.permissionMode) options.permissionMode = opts.permissionMode;
+  if (opts.permissionMode) {
+    options.permissionMode = opts.permissionMode;
+    // The SDK refuses `bypassPermissions` unless the host says it meant it —
+    // and the only way to get here on that mode is the setting that says so.
+    if (opts.permissionMode === 'bypassPermissions') options.allowDangerouslySkipPermissions = true;
+  }
   if (opts.model) options.model = opts.model;
+  // Effort has no query() option — it lives in the session-scoped flag layer,
+  // which only takes a control request, and a control request needs a session
+  // that is already answering. Parked here and applied on the first init.
+  entry.pendingEffort = opts.effort || null;
   if (opts.canUseTool) options.canUseTool = opts.canUseTool;
 
   // The second way a session can stop and wait for a person: an MCP server
@@ -293,6 +320,16 @@ function route(entry, message, opts) {
   // `system/init` arrives at the head of every turn and carries the id the CLI
   // actually used. It should equal the one we asked for, but a fork or an
   // older CLI can disagree, and the transcript on disk follows the CLI.
+  // The first sign the session is answering control requests, which is when a
+  // parked effort level can finally be set.
+  if (message.type === 'system' && message.subtype === 'init' && entry.pendingEffort) {
+    const level = entry.pendingEffort;
+    entry.pendingEffort = null;
+    entry.query?.applyFlagSettings({ effortLevel: level })
+      .then(() => log.info(`[sdk] session=${entry.realSessionId} effort=${level}`))
+      .catch(err => log.warn(`[sdk] session=${entry.realSessionId} effort=${level} refused: ${err.message}`));
+  }
+
   if (message.type === 'system' && message.subtype === 'init' && message.session_id) {
     if (message.session_id !== entry.realSessionId) {
       const previous = entry.realSessionId;
@@ -327,12 +364,17 @@ function route(entry, message, opts) {
   opts.onMessage?.(entry.realSessionId, message);
 }
 
-/** Queue a prompt. Accepted while a turn is running — it lands after it. */
-function sendSdkInput(sessionId, text) {
+/**
+ * Queue a prompt. Accepted while a turn is running — it lands after it.
+ *
+ * @param {string} sessionId
+ * @param {string | Array<object>} content  text, or Messages API content blocks
+ */
+function sendSdkInput(sessionId, content) {
   const entry = find(sessionId);
   if (!entry || entry.exited) return { ok: false, error: 'No such session' };
-  if (typeof text !== 'string' || !text) return { ok: false, error: 'Empty input' };
-  entry.inputs.push(userMessage(text));
+  if (!isPromptContent(content)) return { ok: false, error: 'Empty input' };
+  entry.inputs.push(userMessage(content));
   return { ok: true };
 }
 
@@ -379,9 +421,17 @@ const setSdkModel = (sessionId, model) => sdkControl(sessionId, q => q.setModel(
 const setSdkEffort = (sessionId, effortLevel) =>
   sdkControl(sessionId, q => q.applyFlagSettings({ effortLevel }));
 
-/** What the CLI's own /context would show, for the ring in the control bar. */
+/**
+ * What the CLI's own /context would show, for the ring in the control bar and
+ * the breakdown behind it.
+ *
+ * 'full' rather than 'summary': the summary is the ring's three numbers, and
+ * the rest — which MCP servers, which memory files, which skills are spending
+ * the window — is the whole question anyone hovering the ring is asking. It is
+ * one local control request per finished turn, not per hover.
+ */
 const getSdkContextUsage = (sessionId) =>
-  sdkControl(sessionId, q => q.getContextUsage({ detail: 'summary' }));
+  sdkControl(sessionId, q => q.getContextUsage({ detail: 'full' }));
 
 /** Change the permission mode of a live session. */
 async function setSdkPermissionMode(sessionId, mode) {
@@ -428,6 +478,15 @@ function activeSdkSessions() {
   return [...sessions.values()].map(e => e.realSessionId);
 }
 
+/**
+ * The project each live SDK session is working in. An SDK session counts as
+ * activity in its project exactly as a PTY one does — see project-polling.js.
+ * May repeat; the caller de-duplicates.
+ */
+function activeSdkProjectPaths() {
+  return [...sessions.values()].map(e => e.projectPath).filter(Boolean);
+}
+
 module.exports = {
   configure,
   startSdkSession,
@@ -443,8 +502,10 @@ module.exports = {
   stopAllSdkSessions,
   isSdkSession,
   activeSdkSessions,
+  activeSdkProjectPaths,
   DIALOG_KINDS,
   // exported for tests
   createInputQueue,
   userMessage,
+  isPromptContent,
 };

@@ -711,15 +711,6 @@ body { display: flex; flex-direction: column; }
 
 #account-btn:hover, .account-btn-vue:hover { background: var(--surface-card-hover); }
 
-.account-btn-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--indigo-400);
-  box-shadow: 0 0 5px color-mix(in srgb, var(--indigo-400) 50%, transparent);
-  flex-shrink: 0;
-}
-
 #account-btn-name, .account-btn-name {
   font-size: var(--text-xs);
   font-weight: var(--weight-medium);
@@ -737,13 +728,19 @@ body { display: flex; flex-direction: column; }
   flex-shrink: 0;
 }
 
+/* One per plan window — 5-hour and 7-day — each with its own ring. A flex row
+   so the ring and its number read as one thing rather than as two. */
 .account-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
   font-size: var(--text-2xs);
   color: var(--text-tertiary);
   background: var(--surface-card-hover);
   padding: 1px var(--space-1);
   border-radius: var(--radius-xs);
   white-space: nowrap;
+  cursor: default;
 }
 
 #account-btn svg, .account-btn-vue svg {
@@ -946,11 +943,20 @@ body { display: flex; flex-direction: column; }
   background: var(--surface-card);
   border: 1px solid var(--border-default);
   color: var(--text-secondary);
-  opacity: 0;
 }
 
-.account-item:hover .account-open-btn,
-.account-item.active .account-open-btn { opacity: 1; }
+/* Out of the layout, not merely invisible.
+   These were `opacity: 0` inside a `flex-shrink: 0` cluster, so two buttons
+   nobody could see still took 160–210px of a 340px row and the account name
+   was ellipsised down to "Per…" at rest. Hidden means hidden; hover and
+   keyboard focus bring them back. */
+/* The active account is no exception. It used to keep its buttons on show,
+   which cost it the same width — and it is the row that needs them least,
+   since "Use" is already hidden on it and the green highlight says which one
+   it is without any help from a button. */
+.account-item:not(:hover):not(:focus-within) .account-open-btn {
+  display: none;
+}
 
 .account-open-btn:hover {
   background: var(--surface-card-hover);
@@ -1274,9 +1280,16 @@ body { display: flex; flex-direction: column; }
 }
 
 /* ---- Scrollable content ---- */
+/* No longer the scroller. The sessions list is a .sbx-block inside a
+   .sbx-blockpanel now (css/sidebar-blocks.css) and scrolls its own body, the
+   same as every other sidebar tab. An id rule, so it has to be changed here —
+   a class cannot outrank it per-property. */
 #sidebar-content {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* ---- Project groups ---- */
@@ -1661,18 +1674,35 @@ body { display: flex; flex-direction: column; }
   to { transform: rotate(360deg); }
 }
 
+/* A working session's title breathes.
+   This used to be a highlight sweeping across the text, which meant a gradient
+   clipped to the glyphs and its position animated — neither of those is a
+   property the compositor can move on its own, so every frame re-rasterised the
+   text of every busy row. Measured on nine rows it was 154ms of renderer time
+   per eight seconds against 15ms with the animation off, and it ran whether or
+   not anyone was looking at the window. Opacity is composited, so this costs
+   nothing and says the same thing. */
 .session-item.cli-busy:not(.needs-attention) .session-summary {
-  background: linear-gradient(110deg, var(--shimmer-ink) 44%, var(--shimmer-accent) 48%, var(--shimmer-peak) 50%, var(--shimmer-accent) 52%, var(--shimmer-ink) 56%);
-  background-size: 300% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: shimmer-text 3s linear infinite;
+  color: var(--shimmer-peak);
+  animation: pulse-summary 1.8s ease-in-out infinite;
 }
 
-@keyframes shimmer-text {
-  0% { background-position: 200% 0; }
-  100% { background-position: -100% 0; }
+@keyframes pulse-summary {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-item.cli-busy:not(.needs-attention) .session-summary { animation: none; }
+  /* A board that is not allowed to fly cards is not allowed to ripple dots.
+     The colour and the glow still say which state the row is in. */
+  .session-item.needs-attention .session-status-dot::before,
+  .session-item.needs-attention .session-status-dot::after,
+  .session-item.response-ready .session-status-dot::before,
+  .session-item.response-ready .session-status-dot::after {
+    animation: none;
+    opacity: 0;
+  }
 }
 
 /* ---- Session info ---- */
@@ -1744,11 +1774,43 @@ body { display: flex; flex-direction: column; }
   opacity: 0.55;
 }
 
-/* ---- Response ready indicator (Claude finished, unread output) ---- */
+/* ---- What this session changed ----
+   The same pair the board's cards carry, from the same numbers — counted from
+   the session's own transcript, so a worktree reports its own work. Pushed to
+   the end of the meta line, after the time and the message count. */
+.session-churn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-churn__added { color: var(--diff-added); }
+.session-churn__removed { color: var(--diff-deleted); }
+
+/* ---- Response ready indicator (Claude finished, unread output) ----
+   The same ripple the attention state uses, in blue: both are the row asking
+   to be looked at, and only one of them was moving. */
 .session-item.response-ready .session-status-dot {
   background: var(--blue-500);
   box-shadow: 0 0 8px color-mix(in srgb, var(--blue-500) 70%, transparent);
   animation: none;
+  position: relative;
+}
+
+.session-item.response-ready:not(.needs-attention) .session-status-dot::before,
+.session-item.response-ready:not(.needs-attention) .session-status-dot::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--blue-500) 70%, transparent);
+  animation: ripple-out 2s ease-out infinite;
+}
+
+.session-item.response-ready:not(.needs-attention) .session-status-dot::after {
+  animation-delay: 1s;
 }
 
 .session-item.response-ready .session-name {
@@ -1808,7 +1870,7 @@ body { display: flex; flex-direction: column; }
   position: relative;
   min-height: 0;
   min-width: 0;
-  background: var(--surface-app);
+  background: var(--surface-panel);
 }
 
 #sidebar-collapse-btn {
@@ -2374,6 +2436,12 @@ body { display: flex; flex-direction: column; }
   padding: var(--space-4) var(--space-5) var(--space-4) var(--space-4);
   overflow-y: scroll;
   align-content: start;
+  /* #terminals above carries margin-right: -20px to hide xterm's own scrollbar
+     gutter, which is right for a single terminal — #terminals is only a host
+     then. In grid mode it is itself the scroller, and that shift puts its
+     scrollbar 20px past the right edge: under the side panel when one is open,
+     off the window when not. See css/side-panel.css for the panel's half. */
+  margin-right: 0;
 }
 
 #terminals.grid-layout::-webkit-scrollbar { width: 8px; }
@@ -2424,6 +2492,41 @@ body { display: flex; flex-direction: column; }
   position: relative !important;
   flex: 1;
   min-height: 0;
+}
+
+/* The same slot, for a session that is a chat rather than a terminal. The
+   component mounts its own root inside this one, and that root is what
+   scrolls — see mountChatBody in grid-view.js. */
+.grid-card-chat {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* Scrolls on its own; a click anywhere in it opens the session for real. */
+.sbx-gridchat {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-app);
+  cursor: pointer;
+  /* A screen of these is a screen of transcripts; keep each one's layout its
+     own business. The entries themselves are already skipped off-screen — see
+     content-visibility on .jsonl-entry. */
+  contain: layout;
+}
+
+.grid-card-chat .jsonl-entry {
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-2xs);
+}
+
+/* A card is a few hundred pixels tall: a tool call that unfolds nine screens
+   of diff inside one would bury the conversation it is there to show. */
+.grid-card-chat .jsonl-tool-body {
+  max-height: 120px;
+  overflow: auto;
 }
 
 .grid-card-footer {
@@ -2847,6 +2950,10 @@ body { display: flex; flex-direction: column; }
   flex: 1;
   overflow-y: auto;
   padding: var(--space-2) var(--space-4);
+  /* A transcript's own layout is its own business: this keeps a message
+     arriving here from invalidating the sidebar, the board and everything else
+     sharing the document. */
+  contain: layout;
 }
 
 .jsonl-entry {
@@ -2854,6 +2961,16 @@ body { display: flex; flex-direction: column; }
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-xs);
   position: relative;
+  /* Off-screen messages are not laid out.
+     A transcript is a long list of boxes stacked in one column, which is the
+     exact shape this was added for: the browser skips the subtree's layout and
+     paint until it scrolls near the viewport. Measured on a real session —
+     35 000 nodes — a full layout of the document went from ~41ms to ~4.7ms,
+     and every layout in the app pays that, not just this view's.
+     `auto` in the intrinsic size means "remember what it measured last time",
+     so the scrollbar settles to the true height instead of a guess. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 90px;
 }
 
 .jsonl-user {
@@ -3481,6 +3598,16 @@ body { display: flex; flex-direction: column; }
   padding-left: var(--space-1);
 }
 
+/* One line under a section title, for what the whole section means. Where a
+   field's own description would have to repeat itself on every row. */
+.settings-section-note {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  line-height: var(--leading-normal);
+  margin: calc(var(--space-2) * -1) 0 var(--space-2);
+  padding-left: var(--space-1);
+}
+
 /* --- Setting rows (card style) --- */
 .settings-field {
   display: flex;
@@ -3495,7 +3622,8 @@ body { display: flex; flex-direction: column; }
 }
 
 .settings-section > .settings-field:first-of-type,
-.settings-section > .settings-section-title + .settings-field {
+.settings-section > .settings-section-title + .settings-field,
+.settings-section > .settings-section-note + .settings-field {
   border-top-left-radius: var(--radius-sm);
   border-top-right-radius: var(--radius-sm);
 }
@@ -3747,39 +3875,102 @@ body { display: flex; flex-direction: column; }
 }
 
 /* ── Settings panel (Vue component root) ─────────────────────── */
+/* The project page's chrome, reused rather than restated: same surface, same
+   header block, the same FilterTabs row under it. The panel opens in the same
+   slot as that page, and a second look for it would read as a second app. */
 .settings-panel {
   position: absolute;
   inset: 0;
   z-index: 10;
   display: flex;
   flex-direction: column;
-  background: var(--surface-app);
+  background: var(--surface-panel);
 }
 
 .settings-panel-header {
   display: flex;
   align-items: center;
-  min-height: var(--bar-height, 46px);
   gap: var(--space-3);
-  padding: 0 var(--space-5);
-  background: var(--surface-panel-raised);
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-4) var(--space-5) var(--space-3);
+  background: var(--surface-panel);
   flex-shrink: 0;
 }
 
+.settings-panel-titles {
+  min-width: 0;
+}
+
 .settings-panel-title {
-  font-size: var(--text-sm);
-  color: var(--text-secondary);
-  font-weight: var(--weight-medium);
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.settings-panel-scope {
+  font-size: var(--text-2xs);
+  color: var(--text-disabled);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Same re-guttering the project page does: FilterTabs is sized for a sidebar
+   and has to line up with the header above it here. */
+.settings-filtertabs {
+  flex-shrink: 0;
+  padding-inline: var(--space-5);
+  background: var(--surface-panel);
+}
+
+/* Project settings have one tab and therefore no tab row, which is also the
+   rule that draws the line under the header. This puts it back for that case
+   only — adjacency, so it cannot double up when the row is there. */
+.settings-panel-header + .settings-panel-body {
+  border-top: 1px solid var(--border-subtle);
 }
 
 .settings-panel-body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: var(--space-7) var(--space-8);
+  padding: var(--space-5) var(--space-5) var(--space-6);
   display: flex;
   justify-content: center;
 }
+
+/* --- Footer --- */
+.settings-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-shrink: 0;
+  padding: var(--space-3) var(--space-5);
+  background: var(--surface-panel);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.settings-version {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.settings-update-check {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: inherit;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  text-decoration: underline;
+  text-decoration-color: var(--border-default);
+  cursor: pointer;
+}
+.settings-update-check:hover { color: var(--text-secondary); }
 
 .settings-loading {
   color: var(--text-tertiary);
@@ -3793,9 +3984,8 @@ body { display: flex; flex-direction: column; }
   display: flex;
   gap: var(--space-3);
   align-items: center;
-  margin-top: var(--space-2);
+  margin-left: auto;
 }
-.settings-btn-row .sb-btn--danger { margin-left: auto; }
 
 .settings-notice {
   background: color-mix(in srgb, var(--status-warning) 10%, transparent);
@@ -4520,13 +4710,16 @@ body.hide-avatars .grid-card-avatar {
 
 /* ── Project Viewer Panel ── */
 
+/* The same surface the board and every other main-area panel sits on. It was
+   --surface-app, the shell colour, which made the project page read as a hole
+   in the window rather than as one more page in it. */
 #project-viewer {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  background: var(--surface-app);
+  background: var(--surface-panel);
 }
 
 /* .pv-root fills #project-viewer and sets up the flex column chain */
@@ -5017,6 +5210,15 @@ body.hide-avatars .grid-card-avatar {
   flex-direction: column;
   gap: var(--space-4);
   container-type: inline-size;
+}
+
+/* This is the only scroller on the tab, and a flex column shrinks its children
+   to fit before it will overflow. The panels inside clip (rounded corners), so
+   a six-commit list under a long history was squeezed down to three rows with
+   the rest cut off and nothing to scroll. Children keep their own height; the
+   body is what scrolls. */
+.pv-tab-body > * {
+  flex-shrink: 0;
 }
 
 /* ── Git toolbar ────────────────────────────────────────────────── */

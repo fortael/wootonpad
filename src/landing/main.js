@@ -1,5 +1,7 @@
 import { createApp } from 'vue';
+import { marked } from 'marked';
 import { store } from '../vue/store.js';
+import { matchProjectPaths } from '../vue/project-search.js';
 import LandingApp from './LandingApp.vue';
 import {
   MOCK_PROJECTS,
@@ -11,9 +13,18 @@ import {
   MOCK_RESPONSE_READY_PTY_IDS,
   MOCK_PROJECT_INFO,
   MOCK_PROJECT_DETAIL,
+  MOCK_PROJECT_AVATARS,
   MOCK_PANEL_SHELL_LINES,
   MOCK_BOARD_SUMMARIES,
   MOCK_COMMIT_MESSAGES,
+  MOCK_PLAN_FILES,
+  MOCK_NOTE_FILES,
+  MOCK_NOTES,
+  MOCK_SUBAGENTS,
+  MOCK_ACCOUNT_DETAIL,
+  MOCK_ACCOUNT_STATS,
+  MOCK_ACCOUNT_MCP,
+  MOCK_ACCOUNT_FILE_CONTENT,
   getProjectAvatar,
 } from './mock-data.js';
 import '../../public/style.css';
@@ -27,6 +38,7 @@ import '../../public/style.css';
 import '../../public/css/controls.css';
 import '../../public/css/shell.css';
 import '../../public/css/sidebar-redesign.css';
+import '../../public/css/sidebar-blocks.css';
 import '../../public/css/session-view.css';
 import '../../public/css/accounts-view.css';
 import '../../public/css/projects-view.css';
@@ -35,6 +47,7 @@ import '../../public/css/board-view.css';
 import '../../public/css/session-menu.css';
 import '../../public/css/side-panel.css';
 import '../../public/css/terminal-preview.css';
+import '../../public/css/spotlight.css';
 import '../../public/css/theme-light.css';
 // Landing-only CSS. Lives here rather than in a .vue <style> block: the app's
 // `vite build` writes its CSS asset straight over public/style.css.
@@ -87,7 +100,7 @@ const MOCK_FILE_CONTENT = {
   margin-right: calc(var(--sbx-sidepanel-w) + var(--sbx-sidepanel-gap) * 2);
 }`,
 
-  'src/landing/mock-data.js': `// Live PTYs. Three of the projects below own at least one, so AttentionRail
+  'src/landing/mock-data.js': `// Live PTYs. Three of the projects below own at least one, so UnreadRail
 // renders a row per project and CollapsedRailApp has avatars to show.
 export const MOCK_ACTIVE_PTY_IDS = new Set([
   'sess-001', 'sess-004', 'sess-006', 'sess-003', 'sess-term',
@@ -123,6 +136,17 @@ window.api = new Proxy({}, {
     if (prop === 'getProjectDetail') return async (path) => MOCK_PROJECT_DETAIL[path] ?? null;
     if (prop === 'gitBranches') return async () => ({ ok: true, branches: ['feat/rate-limiting', 'main'], remotes: ['origin/main'] });
     if (prop === 'getProjectSessions') return async () => ({ ok: true, sessions: [] });
+    // These three answer with a bare array in the app, and their callers say
+    // `(x || []).filter(...)` — the default `{ ok: false }` below is not an
+    // array, so it has to be shadowed rather than fall through.
+    if (prop === 'getNotes') return async () => MOCK_NOTES;
+    if (prop === 'getSessionSubagents') return async (id) => MOCK_SUBAGENTS[id] || [];
+    if (prop === 'getNotesDir') {
+      return async () => ({ dir: '/Users/demo/.claude/notes', exists: true, accountName: 'Personal', accountId: 'default' });
+    }
+    if (prop === 'getPlansDir') {
+      return async () => ({ dir: '/Users/demo/.claude/plans', exists: true, accountName: 'Personal', accountId: 'default' });
+    }
     if (prop === 'getActiveTerminals') return async () => ({});
     if (prop === 'getGitUserInfo') return async () => ({ ok: true, name: 'Demo User', email: 'demo@example.com' });
     if (prop === 'getFileDiff') return async (_path, filePath) => ({
@@ -139,6 +163,46 @@ window.api = new Proxy({}, {
       };
     }
     if (prop === 'gitCommit' || prop === 'gitPush' || prop === 'gitCheckout') return DEMO_ONLY;
+
+    // ── Plans ─────────────────────────────────────────────────────────
+    // The Markdown pane opens on whatever this returns, so the demo ships the
+    // plan files themselves rather than a "download the app" placeholder.
+    if (prop === 'readPlan') {
+      return async (filename) => MOCK_PLAN_FILES[filename]
+        || { filePath: filename, content: '# ' + filename + '\n\nNothing here yet.' };
+    }
+    if (prop === 'readNote') return async (filename) => MOCK_NOTE_FILES[filename] || { ok: false };
+    if (prop === 'watchFile' || prop === 'unwatchFile' || prop === 'onFileChanged') return () => {};
+    if (prop === 'readFileForPanel') return async () => ({ ok: false });
+
+    // ── Account page ──────────────────────────────────────────────────
+    if (prop === 'getAccountDetail') return async (id) => MOCK_ACCOUNT_DETAIL[id] || { ok: false };
+    if (prop === 'getAccountStats') return async (id) => MOCK_ACCOUNT_STATS[id] || null;
+    if (prop === 'getAccountMcp') return async (id) => MOCK_ACCOUNT_MCP[id] || { ok: false };
+    if (prop === 'readAccountConfigFile') {
+      return async (id, name) => {
+        const file = (MOCK_ACCOUNT_DETAIL[id]?.files || []).find(f => f.name === name);
+        const content = MOCK_ACCOUNT_FILE_CONTENT[name];
+        if (!file || content === undefined) return { ok: false, error: 'Not available in the browser demo.' };
+        return { ok: true, name, path: file.path, size: file.size, truncated: false, content };
+      };
+    }
+    // Nothing is reachable from a page, so the probes answer the way they
+    // would for a healthy account rather than inventing a failure.
+    if (prop === 'checkAccountAuth') {
+      return async () => {
+        await new Promise(r => setTimeout(r, 500));
+        return { ok: true, state: 'authorized', status: 200, message: 'Token accepted by the usage API.' };
+      };
+    }
+    if (prop === 'checkAccountMcp') {
+      return async () => {
+        await new Promise(r => setTimeout(r, 400));
+        return { state: 'ok', message: 'Connected — 12 tools advertised.', durationMs: 384 };
+      };
+    }
+    if (prop === 'getPluginCatalog') return async () => ({ ok: false, error: 'Not available in the browser demo.' });
+
     if (prop === 'boardSummarizeAbort') return async () => ({ ok: true });
     if (prop === 'boardSummarizeSessions') {
       return async (sessions) => {
@@ -147,7 +211,7 @@ window.api = new Proxy({}, {
           ok: true,
           summaries: (sessions || [])
             .filter(s => MOCK_BOARD_SUMMARIES[s.sessionId])
-            .map(s => ({ sessionId: s.sessionId, summary: MOCK_BOARD_SUMMARIES[s.sessionId] })),
+            .map(s => ({ sessionId: s.sessionId, ...MOCK_BOARD_SUMMARIES[s.sessionId] })),
           usage: { inputTokens: 18_432, outputTokens: 611, costUSD: 0.042 },
         };
       };
@@ -178,6 +242,36 @@ window.createReadOnlyUnifiedMergeViewer = function(el, _old, newContent) {
   ).join('');
   el.innerHTML = `<div class="lp-diff-wrap"><div class="lp-diff-body">${rows}</div></div>`;
   return { destroy() { el.innerHTML = ''; } };
+};
+
+// ── Markdown pane ────────────────────────────────────────────────────────
+// ViewerContentApp renders plans through CodeMirror, and reads
+// window.marked for the preview toggle. The landing does not bundle the
+// CodeMirror setup (public/codemirror-bundle.js is built separately and pulls
+// in every language mode), so the editor half gets a read-only stand-in with
+// the same handful of methods the component calls: `state.doc`, `dispatch`
+// with a full-document change, and `destroy`. No `_wrapCompartment`, which is
+// exactly how the component detects that wrapping cannot be toggled.
+marked.setOptions({ breaks: true, gfm: true });
+window.marked = marked;
+
+window.createPlanEditor = function(parent) {
+  const pre = document.createElement('pre');
+  pre.className = 'lp-md-source';
+  parent.appendChild(pre);
+  let text = '';
+  return {
+    get state() {
+      return { doc: { length: text.length, toString: () => text } };
+    },
+    dispatch(tr) {
+      const insert = tr?.changes?.insert;
+      if (insert === undefined) return;
+      text = String(insert);
+      pre.textContent = text;
+    },
+    destroy() { pre.remove(); },
+  };
 };
 
 // ── Scratch shell ────────────────────────────────────────────────────────
@@ -231,6 +325,9 @@ window.confirm = () => false;
 window.confirmAndStopSession = () => {};
 
 // Populate store with mock data
+// Avatars first: ProjectAvatar reads this map synchronously and only falls
+// back to generated initials when a path is missing from it.
+Object.assign(store.avatarDataUrls, MOCK_PROJECT_AVATARS);
 store.projects = MOCK_PROJECTS;
 store.allProjects = MOCK_PROJECTS;
 store.activePtyIds = MOCK_ACTIVE_PTY_IDS;
@@ -241,6 +338,11 @@ store.headerAccount = MOCK_ACCOUNTS.find(a => a.id === MOCK_ACTIVE_ACCOUNT_ID)?.
 store.headerShellProfile = 'zsh';
 store.sessionMaxAgeDays = 30;
 store.visibleSessionCount = 20;
+// A plan is prose, so the demo opens it rendered rather than as source. Only
+// a default: ViewerContentApp writes the visitor's own choice back here.
+if (localStorage.getItem('markdownPreviewMode') === null) {
+  localStorage.setItem('markdownPreviewMode', 'true');
+}
 // The panel opens on Changes so the pane the rail leads with is the pane the
 // demo shows. The app persists the user's last choice instead.
 store.sidePanelTab = 'changes';
@@ -270,24 +372,31 @@ window.__sb = {
     store.attentionProject = findSession(session.sessionId)?.project.projectPath || null;
   },
 
-  search(query, titlesOnly) {
+  // The demo has no FTS index, but it answers the same question the app does:
+  // session titles, plus the projects the query names.
+  search(query) {
     const q = String(query || '').toLowerCase();
     const ids = new Set();
-    const paths = new Set();
     for (const p of store.projects) {
-      if (!titlesOnly && p.projectPath.toLowerCase().includes(q)) paths.add(p.projectPath);
       for (const s of p.sessions) {
         const haystack = `${s.name || ''} ${s.aiTitle || ''}`.toLowerCase();
         if (haystack.includes(q)) ids.add(s.sessionId);
       }
     }
     store.searchMatchIds = ids;
-    store.searchMatchProjectPaths = paths;
+    store.searchMatchProjectPaths = matchProjectPaths(store.projects, query);
   },
 
   clearSearch() {
     store.searchMatchIds = null;
     store.searchMatchProjectPaths = null;
+  },
+
+  // Spotlight's Enter on a project. The demo cannot spawn a PTY, so it does
+  // the nearest honest thing: opens the project's most recent session.
+  quickNewSession(project) {
+    const latest = (project?.sessions || [])[0];
+    if (latest) window.__sb.openSession(latest);
   },
 
   toggleGridView() { store.gridViewActive = !store.gridViewActive; },

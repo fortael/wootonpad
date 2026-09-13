@@ -11,16 +11,25 @@
 
 /* ─── Session header ────────────────────────────────────────────── */
 
-/* Between the mockup's 64px and a cramped toolbar: 46px, one line, with
-   real breathing room on the sides. The terminal is the work; the header
-   still has to look designed. */
+/* Two lines of identity (name + project, then the model's title) in a box
+   that does not change height when the second line is missing — the side
+   panel and the SDK view are positioned against this number, and a header
+   that grew with its content would move them under it.
+
+   Fixed rather than derived for the same reason: --bar-height is every other
+   bar above a work area (viewer toolbars, settings, diff nav), all of which
+   are still one line. */
+:root {
+  --sbx-sesshead-h: 56px;
+}
+
 .sbx-sesshead {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
   flex-shrink: 0;
-  height: 46px;
+  height: var(--sbx-sesshead-h);
   padding: 0 var(--space-5);
   background: var(--surface-panel);
   /* No bottom hairline: the raised surface already separates the header from
@@ -66,6 +75,24 @@
   object-fit: cover;
 }
 
+/* The two stacked lines. Column rather than wrapping: the second line has to
+   start under the title, not under the avatar. */
+.sbx-sesshead__text {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 1px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.sbx-sesshead__titlerow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
 .sbx-sesshead__title {
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
@@ -95,25 +122,17 @@
   flex: 0 1 auto;
 }
 
-.sbx-sesshead__id {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  color: var(--text-disabled);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-/* Model-written session title — no slot in the mockup, kept as trailing
-   secondary text that gives up its width before anything else does. */
+/* Model-written session title — the second line, under the name it is a
+   title for. Not italic any more: it is a caption now, and the position
+   already says it is not the name the user gave. */
 .sbx-sesshead__ai {
   font-size: var(--text-xs);
-  font-style: italic;
   color: var(--text-tertiary);
+  line-height: var(--leading-tight);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   min-width: 0;
-  flex: 1 1 auto;
 }
 
 /* ─── Right-hand control cluster ────────────────────────────────── */
@@ -262,14 +281,14 @@
   background: color-mix(in srgb, var(--status-danger) 10%, transparent);
 }
 
-/* Narrow windows: the identity line keeps title + project, everything
-   else in it folds away before the controls do. */
+/* Narrow windows: the identity block keeps both its lines — the model's
+   title has its own row now and is no longer competing for width — and the
+   count/time pair in the controls is what folds away. */
 @media (max-width: 900px) {
   .sbx-sesshead {
     padding: 0 var(--space-3);
     gap: var(--space-2);
   }
-  .sbx-sesshead__ai,
   .sbx-sesshead__meta {
     display: none;
   }
@@ -293,7 +312,7 @@
 
 .sbx-sdk {
   position: absolute;
-  top: 46px;              /* clears .sbx-sesshead, as the side panel does */
+  top: var(--sbx-sesshead-h);   /* clears .sbx-sesshead, as the side panel does */
   right: 0;
   bottom: 0;
   left: 0;
@@ -335,11 +354,19 @@
 /* The composer floats over this rather than sitting beside it, so the last
    message keeps scrolling underneath and dissolves into the surface instead of
    stopping at a hard edge. The bottom padding is the room it needs. */
+/* The bottom padding is the room the floating composer needs, plus the band its
+   gradient dissolves through. At 96px the working row — which is always the
+   last thing in the transcript — sat inside that gradient and was read as
+   half-faded rather than as "still running". */
 .sbx-sdk__body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-8, 40px) var(--space-5) 96px;
+  padding: var(--space-8, 40px) var(--space-5) 150px;
+  /* A streaming answer repaints this on a cadence. Containment keeps that
+     inside the transcript instead of invalidating the layout of the sidebar,
+     the board and everything else in the document. */
+  contain: layout;
 }
 
 /* ─── Chat transcript ───────────────────────────────────────────── */
@@ -413,42 +440,544 @@
 /* Sits at the end of the transcript for as long as the turn runs. Present
    before the first token and through every silent stretch — a tool running, a
    long think — which is the whole point: those are the moments that look like
-   nothing is happening. */
+   nothing is happening, and the row answers the three questions asked during
+   one: how long, doing what, at what cost. */
 .sbx-working {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  color: var(--text-disabled);
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--blue-500) 26%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--blue-500) 8%, var(--surface-card));
+  color: var(--text-secondary);
   font-size: var(--text-2xs);
+  line-height: var(--leading-tight);
 }
 
-.sbx-working__dots {
-  display: inline-flex;
-  gap: 3px;
-}
-
-.sbx-working__dots i {
-  width: 4px;
-  height: 4px;
+/* One orb with a ring leaving it, rather than three hopping dots. A pulse that
+   starts at the centre and travels outward reads as ongoing work at a glance,
+   and it holds up next to a label that changes every few seconds. */
+.sbx-working__orb {
+  position: relative;
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
   border-radius: var(--radius-full);
   background: var(--blue-500);
-  animation: sbx-working-dot 1.2s ease-in-out infinite;
+  animation: sbx-working-core 1.6s var(--ease-standard, ease-in-out) infinite;
 }
 
-.sbx-working__dots i:nth-child(2) { animation-delay: 0.15s; }
-.sbx-working__dots i:nth-child(3) { animation-delay: 0.3s; }
+.sbx-working__orb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--blue-500);
+  animation: sbx-working-ring 1.6s var(--ease-standard, ease-out) infinite;
+}
+
+/* What it is doing right now — "Running Bash", "Thinking", "Responding". The
+   sweep is the movement; the word is the answer. */
+.sbx-working__label {
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+  background: linear-gradient(
+    100deg,
+    var(--text-secondary) 20%,
+    var(--text-primary) 40%,
+    var(--text-secondary) 60%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: sbx-working-sweep 2.4s linear infinite;
+}
+
+/* Elapsed and tokens. Monospaced so a number that grows does not shuffle the
+   words next to it. */
+.sbx-working__meta {
+  font-family: var(--font-mono);
+  color: var(--text-disabled);
+  font-variant-numeric: tabular-nums;
+}
+
+.sbx-working__meta:not(:empty)::before {
+  content: '·';
+  margin-right: var(--space-1);
+}
+
+@keyframes sbx-working-core {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(0.75); opacity: 0.7; }
+}
+
+@keyframes sbx-working-ring {
+  0% { transform: scale(1); opacity: 0.6; }
+  70%, 100% { transform: scale(2.4); opacity: 0; }
+}
+
+@keyframes sbx-working-sweep {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
 
 @keyframes sbx-working-dot {
   0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
   30% { opacity: 1; transform: translateY(-3px); }
 }
 
-/* A board that is not allowed to fly cards is not allowed to bounce dots. */
+/* A board that is not allowed to fly cards is not allowed to pulse an orb. */
 @media (prefers-reduced-motion: reduce) {
-  .sbx-working__dots i,
+  .sbx-working__orb,
+  .sbx-working__orb::after,
+  .sbx-working__label,
   .sbx-streaming .jsonl-text::after {
     animation: none;
   }
+  .sbx-working__label {
+    background: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}
+
+/* ─── Reasoning, live ───────────────────────────────────────────── */
+
+/* The turn's reasoning as it is written, above the answer it is leading to.
+   Capped and self-scrolling: it is longer than the answer and it is not the
+   answer, but it is where you find out Claude has misread the task — early
+   enough to stop it, which is the whole reason for showing it. Replaced by the
+   foldable block on the finished message. */
+.sbx-think {
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid color-mix(in srgb, var(--indigo-400) 45%, transparent);
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--indigo-400) 7%, transparent);
+}
+
+.sbx-think__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-tertiary);
+}
+
+.sbx-think__spark {
+  width: 5px;
+  height: 5px;
+  border-radius: var(--radius-full);
+  background: var(--indigo-400);
+  animation: sbx-working-core 1.6s var(--ease-standard, ease-in-out) infinite;
+}
+
+.sbx-think__text {
+  max-height: 180px;
+  margin-top: var(--space-1);
+  overflow-y: auto;
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Finished reasoning, folded. The preview is what makes the row worth opening
+   — "Thinking" alone is a row nobody ever clicked. */
+.jsonl-thinking-label {
+  font-weight: var(--weight-medium);
+}
+
+.jsonl-thinking-preview {
+  margin-left: var(--space-2);
+  color: var(--text-disabled);
+  font-weight: var(--weight-regular);
+  font-style: italic;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sbx-think__spark { animation: none; }
+}
+
+/* ─── Tool groups ───────────────────────────────────────────────── */
+
+/* A turn's run of calls, framed as the one operation it is. Read, read, read,
+   edit, edit is one step in the work — drawn as five loose rows between two
+   sentences it read as five interruptions. */
+.sbx-sdk__body .jsonl-toolgroup {
+  margin: var(--space-3) 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-card) 55%, transparent);
+  overflow: hidden;
+}
+
+.sbx-sdk__body .jsonl-toolgroup > .jsonl-tool-block {
+  margin: 0;
+  border-radius: 0;
+}
+
+/* Hairlines between the rows, not around them: the frame is already the box. */
+.sbx-sdk__body .jsonl-toolgroup > .jsonl-tool-block + .jsonl-tool-block {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sbx-sdk__body .jsonl-toolgroup > .jsonl-tool-block > .jsonl-tool-header {
+  border-radius: 0;
+  padding: var(--space-1) var(--space-2);
+}
+
+/* How long the call took, against the right edge of its own row. Folded, a
+   call says what it did but not what it cost — and a forty-second test run and
+   a forty-millisecond read look identical until it is written down. */
+.jsonl-tool-took {
+  margin-left: auto;
+  padding-left: var(--space-2);
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-disabled);
+}
+
+/* A Bash summary is a whole command line. It gives up its width to the
+   duration rather than pushing it off the row. */
+.sbx-sdk__body .jsonl-tool-summary {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+/* ─── AskUserQuestion, in the transcript ────────────────────────── */
+
+/* The question as it was asked, in the dialog's own markup — the `.sbx-req`
+   block above is the whole stylesheet for it, and this adds only what a record
+   differs by. It arrived as a tool call, which is why it used to render as one;
+   but the tool *is* the dialog, and the one exchange in a session that was a
+   conversation should not be the one that reads like plumbing.
+
+   Read-only. Nothing here is a control — the interactive copy lives in the
+   composer and only while the session is actually stopped on the question. */
+.sbx-req--record {
+  margin: var(--space-4) 0;
+  /* In flow in a scrolling transcript rather than floating over it. */
+  box-shadow: none;
+  background: color-mix(in srgb, var(--orange-500) 4%, var(--surface-panel));
+}
+
+/* All the questions at once. The dialog walks them one at a time because it is
+   being answered; a record is read, and a wizard you cannot drive is a worse
+   way to read three questions than a list of three questions. */
+.sbx-req--record .sbx-req__body {
+  gap: var(--space-4);
+  overflow: visible;
+}
+
+.sbx-req--record .sbx-req__record-q {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.sbx-req--record .sbx-req__record-question {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+}
+
+.sbx-req--record .sbx-req__desc {
+  margin-top: -4px;
+}
+
+/* What was on offer. Dimmed, because none of it is answerable any more — the
+   option that was taken is the only one with its colour left. */
+.sbx-req--record .sbx-req__option {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.sbx-req--record .sbx-req__option.is-picked {
+  opacity: 1;
+  border-color: var(--accent-primary, var(--orange-500));
+  background: color-mix(in srgb, var(--accent-primary, var(--orange-500)) 10%, var(--surface-card));
+}
+
+/* What was said, under the question it answers. */
+.sbx-req__answer {
+  margin: 0;
+  padding: var(--space-1) var(--space-3);
+  border-left: 2px solid var(--accent-primary, var(--orange-500));
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+}
+
+/* An unanswered record folds the tool result in instead — the answer in the
+   CLI's own words. Quoted for the same reason, not dumped as a pre block. */
+.sbx-req--record .jsonl-tool-content .jsonl-tool-body {
+  margin: 0;
+  padding: var(--space-1) var(--space-3);
+  border-left: 2px solid color-mix(in srgb, var(--accent-primary, var(--orange-500)) 45%, transparent);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  white-space: pre-wrap;
+}
+
+/* ─── Mentions ──────────────────────────────────────────────────── */
+
+/* `@path` and a leading `/command` in a message the user wrote. In the composer
+   they are syntax the CLI highlights; in the transcript they were prose, and
+   the file you asked about was the one thing on the row you could not open. */
+.jsonl-mention {
+  display: inline;
+  margin: 0;
+  padding: 1px var(--space-1);
+  border: none;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  line-height: inherit;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard),
+              color var(--duration-fast) var(--ease-standard);
+}
+
+.jsonl-mention--file {
+  background: color-mix(in srgb, var(--blue-500) 16%, transparent);
+  color: color-mix(in srgb, var(--blue-500) 70%, var(--text-primary));
+}
+
+.jsonl-mention--file:hover {
+  background: color-mix(in srgb, var(--blue-500) 28%, transparent);
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+.jsonl-mention--command {
+  background: color-mix(in srgb, var(--indigo-400) 18%, transparent);
+  color: color-mix(in srgb, var(--indigo-400) 72%, var(--text-primary));
+  font-weight: var(--weight-medium);
+}
+
+.jsonl-mention--command:hover {
+  background: color-mix(in srgb, var(--indigo-400) 30%, transparent);
+  color: var(--text-primary);
+}
+
+.jsonl-mention:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+/* ─── Timestamps ────────────────────────────────────────────────── */
+
+/* "2 minutes ago", under the message it belongs to — on the same side the
+   message is on, so it reads as a caption rather than as a second column. The
+   absolute time is in the tooltip: scrolling back through a session looking
+   for where yesterday ended is the question this answers, and a column of
+   `14:03` does not answer it. */
+.jsonl-when {
+  display: block;
+  margin-top: 2px;
+  text-align: left;
+  font-size: var(--text-2xs);
+  color: var(--text-disabled);
+  user-select: none;
+}
+
+/* The user's own messages are a bubble on the right, so their caption is too. */
+.jsonl-user .jsonl-when {
+  text-align: right;
+}
+
+/* ─── Day separators ────────────────────────────────────────────── */
+
+/* Where one day ended and the next began. "2 minutes ago" answers how long ago
+   one message was; it does not answer where yesterday ended, and a session left
+   open for a week is otherwise one unbroken scroll. */
+.sbx-dayline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-6) 0 var(--space-4);
+}
+
+.sbx-dayline::before,
+.sbx-dayline::after {
+  content: '';
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.sbx-dayline__label {
+  flex: 0 0 auto;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-normal);
+  color: var(--text-disabled);
+  text-transform: uppercase;
+  user-select: none;
+}
+
+/* The first day on screen needs no gap above it — the transcript's own top
+   padding is already there. */
+.sbx-sdk__body > .sbx-dayline:first-child {
+  margin-top: 0;
+}
+
+/* ─── Compact rail ──────────────────────────────────────────────── */
+
+/* Where this session's context was thrown away, down the left edge.
+   Measured against the file's record count rather than the scroll height: the
+   records above a compact are not loaded and have no height to scroll through,
+   which is exactly why the scrollbar cannot answer this. */
+.sbx-timeline {
+  position: absolute;
+  left: 6px;
+  top: var(--space-8, 40px);
+  bottom: 150px;                 /* the band the composer occupies */
+  width: 8px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.sbx-timeline::before {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: var(--radius-full);
+  background: var(--border-subtle);
+}
+
+/* Where in the session the reader is. No transition: it tracks the scroll, and
+   a thumb that eases into place trails the content it is reporting on. */
+.sbx-timeline__thumb {
+  position: absolute;
+  left: 2px;
+  width: 4px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--indigo-400) 70%, transparent);
+}
+
+/* One notch per compact. Clickable, because "what was thrown away here" is the
+   only question a mark like this raises — it loads the segment above it. */
+.sbx-timeline__notch {
+  position: absolute;
+  left: 0;
+  width: 8px;
+  height: 2px;
+  padding: 0;
+  border: none;
+  border-radius: 1px;
+  background: var(--orange-500);
+  cursor: pointer;
+  pointer-events: auto;
+  transform: translateY(-1px);
+  transition: width var(--duration-fast) var(--ease-standard),
+              left var(--duration-fast) var(--ease-standard);
+}
+
+.sbx-timeline__notch:hover {
+  left: -2px;
+  width: 12px;
+}
+
+.sbx-timeline__notch:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+/* ─── History paging ────────────────────────────────────────────── */
+
+/* Where the context was compacted.
+   Everything above this line was dropped from the model's own context, so the
+   transcript is drawn as two segments rather than one long scroll — and the
+   earlier one, usually the larger half of the file, is loaded only when asked
+   for. See loadEarlier in SessionSdkApp.vue. */
+.sbx-compact {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-4) 0 var(--space-6);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+}
+
+.sbx-compact__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sbx-compact__label {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+}
+
+.sbx-compact__meta {
+  font-size: var(--text-2xs);
+  color: var(--text-disabled);
+}
+
+.sbx-compact__more {
+  flex: 0 0 auto;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+
+.sbx-compact__more:hover:not(:disabled) {
+  background: var(--surface-card-hover);
+  color: var(--text-primary);
+}
+
+.sbx-compact__more:disabled {
+  cursor: default;
+  color: var(--text-disabled);
+}
+
+/* Scrolling into this loads the page above it. It occupies a row's worth of
+   height so the observer has something to see before the top of the list. */
+.sbx-history-top {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+}
+
+.sbx-history-top__dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.sbx-history-top__dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--text-disabled);
+  animation: sbx-working-dot 1.2s ease-in-out infinite;
+}
+
+.sbx-history-top__dots i:nth-child(2) { animation-delay: 0.15s; }
+.sbx-history-top__dots i:nth-child(3) { animation-delay: 0.3s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sbx-history-top__dots i { animation: none; }
 }
 
 /* Unrecognised messages are a message from the future, not a glitch to hide:
@@ -538,6 +1067,139 @@
   color: var(--text-disabled);
 }
 
+/* ─── Attachments ───────────────────────────────────────────────── */
+
+/* Same size and alignment as the Interrupt button on the other end of the
+   field, so the row reads as one strip with the text between its two controls. */
+.sbx-sdk__attach {
+  flex-shrink: 0;
+  align-self: flex-end;
+  width: var(--hit-xs);
+  height: var(--hit-xs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard),
+              color var(--duration-fast) var(--ease-standard);
+}
+
+.sbx-sdk__attach:hover {
+  color: var(--text-primary);
+  background: var(--surface-hover, color-mix(in srgb, var(--text-primary) 8%, transparent));
+}
+
+.sbx-sdk__attach .sb-icon { display: block; }
+
+/* Driven by the paperclip; never shown, but still focusable if it is displayed
+   as none, so it is hidden by size instead. */
+.sbx-sdk__filepick {
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sbx-sdk__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.sbx-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: 3px var(--space-2) 3px 3px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel);
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+}
+
+.sbx-chip__thumb {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-xs);
+  object-fit: cover;
+}
+
+.sbx-chip__icon {
+  flex-shrink: 0;
+  margin-left: 4px;
+  color: var(--text-tertiary);
+}
+
+/* The file's own name; the path it will be sent as is the chip's tooltip. */
+.sbx-chip__name {
+  min-width: 0;
+  max-width: 24ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+}
+
+.sbx-chip__size {
+  flex-shrink: 0;
+  color: var(--text-disabled);
+}
+
+.sbx-chip__drop {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+
+.sbx-chip__drop:hover {
+  color: var(--status-danger);
+  background: color-mix(in srgb, var(--status-danger) 12%, transparent);
+}
+
+/* A file dropped anywhere on the chat is meant for the next prompt. The whole
+   pane is the target, so the whole pane says so. */
+.sbx-sdk.is-dropping::after {
+  content: 'Drop to attach';
+  position: absolute;
+  inset: var(--space-2);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface-panel) 80%, transparent);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  pointer-events: none;
+}
+
+/* An image in a message, rather than one a tool returned: it is the message,
+   so it is not indented under a header and it may take the width it has. */
+.jsonl-msgimage {
+  display: block;
+  max-height: 320px;
+}
+
 /* Enter sends. The glyph says so without a sentence explaining it. */
 .sbx-sdk__enter {
   flex-shrink: 0;
@@ -587,7 +1249,46 @@
 }
 
 .jsonl-notice--warn { color: var(--orange-500); }
-.jsonl-notice--error { color: var(--status-danger); }
+
+/* An error is not an aside. A CLI that would not launch, or a turn that could
+   not run, is the most important thing in the transcript — and as an "unknown
+   message" card it was drawn as the thing that looks most like a glitch. */
+.jsonl-notice--error {
+  display: flex;
+  flex-direction: column;
+  /* .jsonl-meta-entry centres its row; in a column that centres the heading. */
+  align-items: stretch;
+  gap: var(--space-1);
+  margin: var(--space-3) 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--status-danger) 40%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--status-danger) 8%, transparent);
+  color: var(--status-danger);
+}
+
+.jsonl-notice__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+}
+
+.jsonl-notice__head .sb-icon {
+  display: block;
+  flex-shrink: 0;
+}
+
+/* The message itself, in the reading colour — the border and the heading
+   already say it is an error, and a whole paragraph in red is hard to read. */
+.jsonl-notice__body {
+  font-size: var(--text-2xs);
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 
 .sbx-sdk__loading {
   flex-shrink: 0;
@@ -828,9 +1529,26 @@
 }
 
 /* An option's preview belongs to the option under the cursor, so it reads as
-   part of the list rather than as a second thing to look at. */
+   part of the list rather than as a second thing to look at.
+ 
+   Fixed height, not a maximum: this box sits below the options, so a height
+   that varied with the content moved the list under the pointer — and moving
+   the list changes which option is under the cursor, which changes the
+   content. Six lines is enough to recognise a snippet, and the rest scrolls. */
 .sbx-req__preview {
+  --sbx-preview-lines: 6;
+  height: calc(1.5em * var(--sbx-preview-lines) + var(--space-2) * 2);
+  max-height: none;
+  line-height: 1.5;
   border-left: 2px solid var(--accent-primary, var(--orange-500));
+}
+
+/* An option with nothing to preview still holds the space, or the list would
+   move the moment the cursor reached it. */
+.sbx-req__preview.is-empty {
+  color: var(--text-disabled);
+  font-style: italic;
+  border-left-color: var(--border-subtle);
 }
 
 .sbx-req__text {
@@ -945,32 +1663,51 @@
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   color: var(--text-disabled);
+  cursor: default;
 }
+
+@media (hover: hover) {
+  .sbx-sdk__context:hover {
+    color: var(--text-secondary);
+  }
+}
+
 
 /* ─── Slash commands ────────────────────────────────────────────── */
 
-/* The session's own command list, above the field. Sized to the content and
-   scrolled rather than growing: forty-nine commands would otherwise push the
-   conversation off the screen. */
+/* The session's own command list, above the field. It holds every command the
+   session has — that is the question a bare `/` is asking, and nothing else in
+   the app answers it — so it scrolls rather than grows, and the arrow keys walk
+   it with the row scrolled into view. */
 .sbx-sdk__commands {
   display: flex;
   flex-direction: column;
-  max-height: 220px;
+  gap: 1px;
+  max-height: 340px;
+  /* Shrinkable inside the capped composer: in a short pane the field must stay
+     on screen, and a flex child keeps its content height without this. */
+  flex: 0 1 auto;
+  min-height: 0;
   margin-bottom: var(--space-2);
-  padding: var(--space-1);
+  padding: var(--space-2);
   overflow-y: auto;
+  overscroll-behavior: contain;
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: var(--surface-panel);
   box-shadow: var(--shadow-md);
+  scroll-padding: var(--space-2) 0;
 }
 
+/* Two lines, not one: the name on top and the description under it, where it
+   has the full width to wrap into. Packed onto one line, every description
+   past the fortieth column was an ellipsis. */
 .sbx-sdk__command {
   display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
-  padding: var(--space-1) var(--space-2);
+  padding: var(--space-2);
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -978,30 +1715,199 @@
   cursor: pointer;
 }
 
+.sbx-sdk__command-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
 .sbx-sdk__command-name {
   flex-shrink: 0;
   font-family: var(--font-mono);
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
   color: var(--text-secondary);
 }
 
 .sbx-sdk__command-hint {
-  flex-shrink: 0;
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  color: var(--text-disabled);
-}
-
-/* The description the CLI wrote for itself. Takes the slack and truncates: a
-   row that wrapped would turn the menu into a wall of prose. */
-.sbx-sdk__command-desc {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
+  font-family: var(--font-mono);
   font-size: var(--text-2xs);
   color: var(--text-disabled);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Where the command came from — "project", "user", "project skill". The CLI
+   writes this into the tail of its own description; pulling it out of the prose
+   makes it something you can scan for rather than five characters at the end of
+   a line that is already being clamped. */
+.sbx-sdk__command-tag {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  font-size: var(--text-2xs);
+  line-height: 1.5;
+  color: var(--text-disabled);
+  white-space: nowrap;
+}
+
+/* This project's own commands, against everything the CLI and the user bring
+   with them. Picking yours out of forty-nine is the whole reason to look.
+   --status-running is the palette's green and already steps down in light mode,
+   where the -500 accents go washed out on paper. */
+.sbx-sdk__command.is-project .sbx-sdk__command-name {
+  color: var(--status-running, var(--green-500));
+}
+
+.sbx-sdk__command.is-project .sbx-sdk__command-tag {
+  border-color: color-mix(in srgb, var(--status-running, var(--green-500)) 40%, transparent);
+  background: color-mix(in srgb, var(--status-running, var(--green-500)) 12%, transparent);
+  color: color-mix(in srgb, var(--status-running, var(--green-500)) 80%, var(--text-primary));
+}
+
+/* ─── Local slash commands ──────────────────────────────────────── */
+
+/* `/usage` and what it printed. The CLI records one of these as three
+   envelopes of XML addressed to the model — a caveat telling it not to answer,
+   the invocation, the output — and rendered as prose they were three bubbles
+   of tags where the user ran one command. This is the command. */
+.jsonl-slash {
+  margin: var(--space-3) 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface-card) 55%, transparent);
+  overflow: hidden;
+}
+
+.jsonl-slash__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+/* A run of calls under it would have no separator; the head keeps its rule
+   only while there is something below. */
+.jsonl-slash__head:last-child {
+  border-bottom: none;
+}
+
+.jsonl-slash__sigil {
+  color: var(--indigo-400);
+}
+
+.jsonl-slash__name {
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+}
+
+.jsonl-slash__args {
+  min-width: 0;
+  color: var(--text-disabled);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What it printed. A cap rather than a fold: `/usage` is worth reading and
+   `/context` is a wall — the scroll keeps both honest. */
+.jsonl-slash__out {
+  max-height: 320px;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.jsonl-slash__out.is-error {
+  color: var(--status-danger);
+}
+
+/* ─── Recalled memory ───────────────────────────────────────────── */
+
+/* The one thing in a transcript that shaped the answer without appearing in
+   the conversation. Without it the reply simply knows something and there is
+   nothing on screen saying where from. */
+.jsonl-memory {
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 2px solid color-mix(in srgb, var(--indigo-400) 45%, transparent);
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--indigo-400) 6%, transparent);
+}
+
+.jsonl-memory__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-tertiary);
+}
+
+.jsonl-memory__head .sb-icon {
+  display: block;
+  flex-shrink: 0;
+  color: var(--indigo-400);
+}
+
+.jsonl-memory__item {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.jsonl-memory__scope {
+  flex-shrink: 0;
+  font-size: var(--text-2xs);
+  color: var(--text-disabled);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-normal);
+}
+
+.jsonl-memory__name {
+  font-size: var(--text-2xs);
+  font-style: italic;
+  color: var(--text-tertiary);
+}
+
+/* Wraps onto its own line inside the row it belongs to — indented, so it reads
+   as that memory's body rather than as a control for the whole block. */
+.jsonl-memory__body {
+  flex: 1 1 100%;
+  min-width: 0;
+  margin-left: var(--space-5);
+}
+
+/* The description the CLI wrote for itself, soft-wrapped to two lines. Long
+   enough to tell two commands apart, short enough that forty rows are still a
+   list rather than a document. */
+.sbx-sdk__command-desc {
+  min-width: 0;
+  font-size: var(--text-2xs);
+  line-height: 1.45;
+  color: var(--text-disabled);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 
 .sbx-sdk__command:hover .sbx-sdk__command-name,
@@ -1023,4 +1929,297 @@
   font-size: var(--text-2xs);
   color: var(--text-disabled);
   cursor: default;
+}
+
+/* The controls are locked while a turn runs — see SessionSdkApp. Dimmed rather
+   than hidden: the values are still worth reading, they just cannot change. */
+.sbx-sdk__controls.is-locked .sbx-sdk__select {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sbx-sdk__controls.is-locked .sbx-sdk__select:hover {
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════
+   Context breakdown — ContextBreakdown.vue
+
+   The hover panel behind the context ring in the chat's control bar. Rows
+   are the CLI's own /context categories, colours included: `color` comes
+   down with each category, so nothing here picks one.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* The teleported box that positions it. Scrolls on its own — a session with
+   thirty MCP tools has more rows than a window has height. */
+.sbx-ctxpop__anchor {
+  position: fixed;
+  z-index: 210;
+  overflow-y: auto;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-modal);
+}
+
+.sbx-ctxpop {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--surface-panel-raised);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  font-family: var(--font-ui);
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+}
+
+.sbx-ctxpop__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.sbx-ctxpop__title {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.sbx-ctxpop__total {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.sbx-ctxpop__pct {
+  color: var(--text-disabled);
+}
+
+.sbx-ctxpop__bar {
+  display: flex;
+  height: 6px;
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  background: var(--surface-input);
+}
+
+.sbx-ctxpop__seg {
+  height: 100%;
+  min-width: 1px;
+}
+
+.sbx-ctxpop__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+}
+
+.sbx-ctxpop__row {
+  display: grid;
+  grid-template-columns: 8px 1fr auto auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 2px 0;
+}
+
+/* Free space and the deferred schemas are context about the number, not the
+   number — they read one step back from the rows that spend the window. */
+.sbx-ctxpop__row.is-muted {
+  color: var(--text-disabled);
+}
+
+.sbx-ctxpop__swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.sbx-ctxpop__row dt {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sbx-ctxpop__row dd {
+  margin: 0;
+}
+
+.sbx-ctxpop__tokens {
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.sbx-ctxpop__share {
+  min-width: 42px;
+  text-align: right;
+  font-family: var(--font-mono);
+  color: var(--text-disabled);
+  white-space: nowrap;
+}
+
+.sbx-ctxpop__seclabel {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  font-weight: var(--weight-semibold);
+  color: var(--text-disabled);
+}
+
+.sbx-ctxpop__seccount {
+  font-family: var(--font-mono);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.sbx-ctxpop__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 1px 0;
+}
+
+.sbx-ctxpop__itemname {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+}
+
+.sbx-ctxpop__more {
+  padding-left: var(--space-1);
+  color: var(--text-disabled);
+}
+
+.sbx-ctxpop__foot {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  color: var(--text-disabled);
+}
+
+/* ── Sub-agent view ──────────────────────────────────────────────────────
+   A background task's transcript, taking the main area the way a session
+   does. The chat body below the bar is the session chat's own — same
+   renderer, same .sbx-sdk__body rules — so a Task reads exactly like the
+   conversation that spawned it. */
+#subagent-viewer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-app);
+}
+
+.sbx-agentview {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* The bar is the whole reason this is a view and not a raw file dump: an
+   agent has no row in the sidebar and no card on the board, so the way back
+   to its session has to be here. */
+.sbx-agentview__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--bar-height, 46px);
+  padding: 0 var(--space-4);
+  background: var(--surface-panel-raised);
+  border-bottom: var(--border-width-hairline) solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.sbx-agentview__back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.sbx-agentview__back:hover { background: var(--surface-card-hover); color: var(--text-primary); }
+.sbx-agentview__backchev { transform: rotate(90deg); }
+
+.sbx-agentview__sep { color: var(--text-disabled); }
+
+.sbx-agentview__type {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.sbx-agentview__desc {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sbx-agentview__spacer { flex: 1; min-width: var(--space-2); }
+
+.sbx-agentview__state {
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-full);
+  border: var(--border-width-hairline) solid var(--border-subtle);
+}
+.sbx-agentview__state.is-running {
+  color: var(--status-running);
+  border-color: color-mix(in srgb, var(--status-running) 40%, transparent);
+  background: color-mix(in srgb, var(--status-running) 10%, transparent);
+}
+
+.sbx-agentview__iconbtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--hit-xs);
+  height: var(--hit-xs);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.sbx-agentview__iconbtn:hover { background: var(--surface-card-hover); color: var(--text-primary); }
+.sbx-agentview__iconbtn.is-busy svg { animation: acct-spin 0.8s linear infinite; }
+
+.sbx-agentview__chat { flex: 1; min-height: 0; }
+
+/* ── Running background tasks, on a row and on a card ─────────────────── */
+.session-agents,
+.sbx-board__agents {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--status-running);
 }

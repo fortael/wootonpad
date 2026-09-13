@@ -151,15 +151,13 @@ function trackActivity(sessionId, data) {
 }
 
 // The board reads this set straight off the store, so every write has to be
-// mirrored there — app.js owns the truth, Vue only renders it.
+// mirrored there — app.js owns the truth, Vue only renders it. Through the
+// bridge rather than into the store directly, so one module owns the shape of
+// these collections.
 function setReadPending(sessionId, pending) {
-  if (pending) {
-    readPendingSessions.add(sessionId);
-    window.vueStore?.readPendingSessions?.add(sessionId);
-  } else {
-    readPendingSessions.delete(sessionId);
-    window.vueStore?.readPendingSessions?.delete(sessionId);
-  }
+  if (pending) readPendingSessions.add(sessionId);
+  else readPendingSessions.delete(sessionId);
+  window.vueSidebar?.setReadPending(sessionId, pending);
 }
 
 function clearUnread(sessionId) {
@@ -178,6 +176,15 @@ function clearNotifications(sessionId) {
   if (blockedSessions.has(sessionId)) return;
   attentionSessions.delete(sessionId);
   window.vueSidebar?.clearNotifications(sessionId);
+}
+
+/** Is this session in any of the collections a sweep would have to clear? */
+function hasSessionState(sessionId) {
+  return attentionSessions.has(sessionId)
+    || responseReadySessions.has(sessionId)
+    || readPendingSessions.has(sessionId)
+    || blockedSessions.has(sessionId)
+    || sessionBusyState.has(sessionId);
 }
 
 /** Only the status tracker moves this — see applySessionStatus. */
@@ -298,7 +305,7 @@ window.api.onProcessExited((sessionId, exitCode) => {
     destroySession(sessionId);
   }
   if (gridViewActive) {
-    if (window.vueStore) window.vueStore.gridViewerCount = gridCards.size + ' session' + (gridCards.size !== 1 ? 's' : '');
+    setGridViewerCount();
   } else if (activeSessionId === sessionId) {
     setActiveSession(null);
     terminalHeader.style.display = 'none';
@@ -370,7 +377,7 @@ function applySessionStatus(sessionId, status) {
     // Belt and braces with onProcessExited: whichever lands first wins, and the
     // sets must not keep a spinner for a session that is gone.
     sessionBusyState.delete(sessionId);
-    window.vueStore?.sessionBusyState?.delete(sessionId);
+    window.vueSidebar?.setBusy(sessionId, false);
     setBlocked(sessionId, false);   // a session that is gone is not waiting
     clearNotifications(sessionId);
     setReadPending(sessionId, false);
@@ -443,7 +450,7 @@ function refreshSidebar({ resort = false } = {}) {
 }
 
 // --- Search & filter handlers moved to App.vue ---
-// App.vue calls window.__sb.search(query, titlesOnly) and window.__sb.clearSearch()
+// App.vue calls window.__sb.search(query) and window.__sb.clearSearch()
 // App.vue calls window.__sb.onFilterChange(filters) for filter toggles
 
 function clearSearch() {
@@ -458,6 +465,8 @@ function clearSearch() {
   } else if (activeTab === 'projects') {
     projectsSearchQuery = '';
     window.vueProjects?.setSearch('');
+  } else if (activeTab === 'accounts') {
+    window.vueAccounts?.setSearch('');
   }
 }
 
@@ -526,7 +535,10 @@ function updateRunningIndicators() {
     const id = item.dataset.sessionId;
     const running = activePtyIds.has(id);
     item.classList.toggle('has-running-pty', running);
-    if (!running) {
+    // Only when there is something to clear. This runs for every row on screen
+    // twenty times a minute, and unguarded it did six set operations and two
+    // store writes per row each time, every one of them a no-op.
+    if (!running && hasSessionState(id)) {
       item.classList.remove('needs-attention', 'response-ready', 'cli-busy');
       setBlocked(id, false);   // no process, nothing left to answer
       attentionSessions.delete(id);
@@ -536,12 +548,27 @@ function updateRunningIndicators() {
       // The board and the header read the store, not these local sets. Clearing
       // only the local copies left the Vue side showing "Working…" for a
       // session that had already exited.
-      window.vueStore?.sessionBusyState?.delete(id);
+      window.vueSidebar?.setBusy(id, false);
       window.vueSidebar?.clearNotifications(id);
     }
     const dot = item.querySelector('.session-status-dot');
     if (dot) dot.classList.toggle('running', running);
   });
+  // The loop above only reaches sessions that have a row on screen. An id whose
+  // row is filtered out, scrolled out of the virtual list, or on a tab you are
+  // not looking at was never cleared — and the dock badge counts these sets, so
+  // it went on reporting a session the board had stopped drawing. Sweep by
+  // liveness instead of by what happens to be rendered.
+  for (const id of [...attentionSessions, ...responseReadySessions, ...readPendingSessions]) {
+    if (activePtyIds.has(id)) continue;
+    setBlocked(id, false);
+    attentionSessions.delete(id);
+    responseReadySessions.delete(id);
+    setReadPending(id, false);
+    if (sessionBusyState.delete(id)) window.vueSidebar?.setBusy(id, false);
+    window.vueSidebar?.clearNotifications(id);
+  }
+
   // Update slug group running dots
   document.querySelectorAll('.slug-group').forEach(group => {
     const hasRunning = group.querySelector('.session-item.has-running-pty') !== null;
@@ -561,7 +588,7 @@ function updateTerminalHeader() {
   if (!activeSessionId) return;
   const running = activePtyIds.has(activeSessionId);
   terminalHeaderStatus.className = running ? 'running' : 'stopped';
-  terminalHeaderStatus.textContent = running ? 'Running' : 'Stopped';
+  terminalHeaderStatus.textContent = running ? 'Active' : 'Stopped';
   terminalStopBtn.style.display = running ? '' : 'none';
   updatePtyTitle();
 }
@@ -618,12 +645,11 @@ function dedup(projects) {
 async function loadProjects({ resort = false } = {}) {
   const wasEmpty = cachedProjects.length === 0;
   if (wasEmpty && window.vueStore) window.vueStore.loadingStatus = 'Loading\u2026';
-  const [defaultProjects, allProjects] = await Promise.all([
-    window.api.getProjects(false),
-    window.api.getProjects(true),
-  ]);
-  cachedProjects = defaultProjects;
-  cachedAllProjects = allProjects;
+  // One round trip for both lists: they come from the same scan of the cache
+  // and differ only by the archive filter.
+  const { visible, all } = await window.api.getProjectSets();
+  cachedProjects = visible;
+  cachedAllProjects = all;
   if (window.vueStore) window.vueStore.loadingStatus = '';
   dedup(cachedProjects);
   dedup(cachedAllProjects);
@@ -631,7 +657,7 @@ async function loadProjects({ resort = false } = {}) {
   // Reconcile pending sessions: remove ones that now have real data
   let hasReinjected = false;
   for (const [sid, pending] of [...pendingSessions]) {
-    const realExists = allProjects.some(p => p.sessions.some(s => s.sessionId === sid));
+    const realExists = cachedAllProjects.some(p => p.sessions.some(s => s.sessionId === sid));
     if (realExists) {
       pendingSessions.delete(sid);
     } else {
@@ -1062,19 +1088,21 @@ window.api.onProjectsChanged(() => {
     return;
   }
 
+  // The board draws the same sessions as the sidebar, so it needs the same
+  // reload. Leaving it out is why a card's file count and diff totals sat
+  // still while you watched them: the change arrived, and was deferred until
+  // you happened to switch tabs.
+  const LIVE_TABS = ['sessions', 'projects', 'board'];
   const activeTab = window.vueStore?.activeTab || 'sessions';
-  if (activeTab !== 'sessions' && activeTab !== 'projects') {
+  if (!LIVE_TABS.includes(activeTab)) {
     projectsChangedWhileAway = true;
     return;
   }
   projectsChangedTimer = setTimeout(() => {
     projectsChangedTimer = null;
     const tab = window.vueStore?.activeTab || 'sessions';
-    if (tab === 'sessions') {
-      loadProjects();
-    } else if (tab === 'projects') {
-      loadProjects().then(() => renderProjectsPanel());
-    }
+    if (tab === 'projects') loadProjects().then(() => renderProjectsPanel());
+    else if (LIVE_TABS.includes(tab)) loadProjects();
   }, 300);
 });
 
@@ -1231,6 +1259,11 @@ let projectsSortOrder = 'name'; // 'name' | 'changes'
 const projectInfoCache = new Map(); // persists across renders
 
 function openProjectViewer(project) {
+  // The sidebar follows the main area. Reached from the spotlight while the
+  // board was up, this left the board's own sidebar — its summary box and its
+  // project filter — standing beside a project page, which is the other half
+  // of the two pages looking mixed together.
+  window.vueApp?.setTab('projects');
   hideAllViewers();
   placeholder.style.display = 'none';
   terminalArea.style.display = 'none';
@@ -1323,12 +1356,24 @@ window.__sb = {
     searchMatchIds = null;
     searchMatchProjectPaths = null;
     window.vueSidebar?.setSearch(null, null);
+    // App.vue empties the field on a tab switch; the two tabs that filter
+    // their own list from a local copy of the query have to hear about it, or
+    // they keep filtering by a query no longer on screen.
+    projectsSearchQuery = '';
+    window.vueProjects?.setSearch('');
+    window.vueAccounts?.setSearch('');
     saveUiState({ sidebarTab: tabName });
 
     // Not every branch below routes through hideAllViewers() (the sessions tab
     // with nothing open only un-hides the placeholder), so retire the board
     // here rather than trusting each one to do it.
     if (tabName !== 'board' && window.vueStore) window.vueStore.showBoard = false;
+
+    // The grid belongs to the sessions tab. Every other tab draws its own main
+    // area — the board especially, whose preview pane shows one session — so
+    // the grid comes down on the way out and goes back up on the way in. The
+    // stored preference is untouched by either.
+    if (tabName === 'sessions') resumeGridView(); else suspendGridView();
 
     if (tabName === 'sessions') {
       saveUiState({ panel: 'terminal', sidebarTab: tabName });
@@ -1381,30 +1426,32 @@ window.__sb = {
     refreshSidebar({ resort: true });
   },
 
-  async search(query, titlesOnly) {
+  // What each tab searches is fixed per tab — there is no modifier on the
+  // field. Sessions and the board match a session's own title and the name of
+  // the project holding it; plans match their title and their text; projects
+  // and accounts match the name and the folder on the row.
+  async search(query) {
     const tab = activeTab;
     try {
       if (tab === 'sessions') {
-        const results = await window.api.search('session', query, titlesOnly);
+        // Titles only. A transcript hit puts a row on screen whose visible text
+        // has nothing to do with the query, which reads as a wrong result.
+        const results = await window.api.search('session', query, true);
         searchMatchIds = new Set(results.map(r => r.id));
-        searchMatchProjectPaths = null;
-        if (titlesOnly) {
-          const matchProjects = new Set();
-          for (const r of results) {
-            const s = sessionMap.get(r.id);
-            if (s?.projectPath) matchProjects.add(s.projectPath);
-          }
-          searchMatchProjectPaths = matchProjects;
-        }
+        // The index has no rows for projects — see src/vue/project-search.js.
+        searchMatchProjectPaths = window.sbMatchProjectPaths?.(cachedAllProjects, query) || null;
         window.vueSidebar?.setSearch(searchMatchIds, searchMatchProjectPaths);
         refreshSidebar({ resort: true });
       } else if (tab === 'plans') {
-        const results = await window.api.search('plan', query, titlesOnly);
+        // A plan is one document; its body is the thing worth finding in it.
+        const results = await window.api.search('plan', query, false);
         const matchIds = new Set(results.map(r => r.id));
         renderPlans(window.cachedPlans.filter(p => matchIds.has(p.filename)));
       } else if (tab === 'projects') {
         projectsSearchQuery = query;
         window.vueProjects?.setSearch(query);
+      } else if (tab === 'accounts') {
+        window.vueAccounts?.setSearch(query);
       }
     } catch {
       if (tab === 'sessions') {
@@ -1494,7 +1541,10 @@ window.__sb = {
   // The menu confirms before calling. Main kills the PTY and removes the
   // transcript; here we only have to stop showing it.
   deleteSession: async (id) => {
-    const result = await window.api.deleteSession(id);
+    // A session that has not written a transcript yet exists only here, so the
+    // project has to travel with the id — main cannot look it up.
+    const projectPath = sessionMap.get(id)?.projectPath || pendingSessions.get(id)?.projectPath || null;
+    const result = await window.api.deleteSession(id, projectPath);
     if (!result?.ok) {
       window.vueStatusBar?.setActivity('Delete failed: ' + (result?.error || 'unknown error'), 'error');
       return;
@@ -1534,6 +1584,13 @@ window.__sb = {
     window.vueJsonlViewer?.open(session);
   },
 
+  // By id, for callers holding one rather than the session object — the
+  // sub-agent view's way back to the session that spawned it.
+  openSessionById: (id) => {
+    const session = sessionMap.get(id);
+    if (session) openSession(session);
+  },
+
   launchConfig: (id) => {
     const session = sessionMap.get(id);
     if (session && typeof showResumeSessionDialog === 'function') showResumeSessionDialog(session);
@@ -1562,6 +1619,19 @@ window.__sb = {
 
   newSession: (project, anchorEl) => {
     if (typeof showNewSessionPopover === 'function') showNewSessionPopover(project, anchorEl);
+  },
+
+  // Spotlight's Enter on a project. The popover asks Claude / Claude with
+  // config / Terminal; picking a project in the palette has already answered
+  // the question the palette was opened to answer, so this takes the popover's
+  // first button directly. The other two stay on the project header's +.
+  quickNewSession: async (project) => {
+    if (!project?.projectPath) return;
+    window.vueApp?.setTab?.('sessions');
+    const options = typeof resolveDefaultSessionOptions === 'function'
+      ? await resolveDefaultSessionOptions(project)
+      : undefined;
+    launchNewSession(project, options);
   },
 
   openSettings: (path) => openSettingsViewer('project', path),
@@ -1634,6 +1704,17 @@ window.__sb = {
   },
 
   openProject: (project) => openProjectViewer(project),
+
+  // The session side panel shows a file read-only; this is where it hands one
+  // over to be edited. The Projects tab already owns the tree, the save button
+  // and the modified marker, so the panel does not grow a second editor.
+  openProjectFile: (projectPath, relPath) => {
+    const proj = cachedAllProjects.find(p => p.projectPath === projectPath)
+      || { projectPath, name: projectPath.split('/').filter(Boolean).pop() };
+    openProjectViewer(proj);
+    // After open(), which resets viewedPath — the tree is read off that.
+    setTimeout(() => window.vueProjectViewer?.openFile(relPath), 50);
+  },
   onPvTabChange: (tab) => saveUiState({ pvTab: tab }),
 
   // "Highlight fresh", from either of the two buttons that flip it. Guarded

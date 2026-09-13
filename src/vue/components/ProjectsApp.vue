@@ -10,7 +10,7 @@
       @select="sortOrder = $event"
     >
       <template #actions>
-        <span class="projects-count" :title="`${filteredProjects.length} projects`">{{ filteredProjects.length }}</span>
+        <span class="projects-count" :title="`${liveProjects.length} projects`">{{ liveProjects.length }}</span>
         <button
           type="button"
           class="sbx-filtertabs__view"
@@ -34,14 +34,18 @@
       </template>
     </FilterTabs>
 
-    <div class="projects-scroll">
-    <div class="project-group">
+    <!-- The shared sidebar block — css/sidebar-blocks.css. Same box every other
+         tab's sidebar uses; the archived one below is it again, folded shut. -->
+    <div class="sbx-blockpanel projects-scroll">
+    <section class="sbx-block sbx-block--fill">
+      <div class="sbx-block__body sbx-block__body--scroll">
+      <div class="project-group">
       <div class="project-sessions">
-        <div v-if="filteredProjects.length === 0" class="projects-empty-hint">
+        <div v-if="liveProjects.length === 0" class="projects-empty-hint">
           {{ searchQuery ? 'No matching projects.' : 'No projects yet. Click Add to select a folder.' }}
         </div>
         <div
-          v-for="project in filteredProjects"
+          v-for="project in liveProjects"
           :key="project.projectPath"
           class="session-item project-item"
           :class="{ active: project.projectPath === activeProjectPath, syncing: loadingPaths.has(project.projectPath) }"
@@ -66,7 +70,7 @@
               <div v-if="showContainers && projectInfo[project.projectPath]?.containers?.length" class="project-card-env">
                 <div class="project-env-containers-box">
                   <div class="project-env-containers-hdr">
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-4 0v2M8 7V5a2 2 0 0 0-4 0v2"/></svg>
+                    <SbIcon name="container" :size="12" tone="muted" />
                     CONTAINERS · {{ projectInfo[project.projectPath].containers.length }}
                   </div>
                   <div
@@ -98,29 +102,89 @@
                 data-tooltip="New session"
                 @click.stop="callbacks.newSession?.(project, $event.currentTarget)"
               >
-                <svg width="13" height="13" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-                  <line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/>
-                </svg>
+                <SbIcon name="plus" :size="13" tone="muted" />
+              </button>
+              <button
+                class="project-card-arch-btn"
+                data-tooltip="Archive project"
+                @click.stop="setArchived(project, true)"
+              >
+                <SbIcon name="archive" :size="13" tone="muted" />
               </button>
               <button
                 class="project-card-del-btn"
                 data-tooltip="Remove project"
                 @click.stop="removeProject(project)"
-                v-html="trashSvg"
-              ></button>
+              ><SbIcon name="trash-2" :size="13" tone="muted" /></button>
             </div>
           </div>
         </div>
       </div>
-      <div class="projects-add-row">
+      </div>
+      </div>
+      <!-- Outside the scroller: the way to add a project should not be
+           something you have to scroll thirty rows to reach. -->
+      <div class="sbx-block__foot projects-add-row">
         <button class="projects-add-btn" @click="callbacks.addProject?.()">
-          <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
-            <line x1="6" y1="1" x2="6" y2="11"/><line x1="1" y1="6" x2="11" y2="6"/>
-          </svg>
+          <SbIcon name="plus" :size="12" tone="muted" />
           Add project
         </button>
       </div>
-    </div>
+    </section>
+
+    <!-- Archived: folded shut, and nothing in here is polled. Opening one is
+         what fetches its git and containers, and that is the point — see
+         project-polling.js. -->
+    <section v-if="archivedProjects.length" class="sbx-block sbx-block--fit projects-block--archived">
+      <header
+        class="sbx-block__head sbx-block__head--toggle"
+        role="button"
+        tabindex="0"
+        :aria-expanded="!archivedCollapsed"
+        @click="archivedCollapsed = !archivedCollapsed"
+        @keydown.enter.prevent="archivedCollapsed = !archivedCollapsed"
+        @keydown.space.prevent="archivedCollapsed = !archivedCollapsed"
+      >
+        <SbIcon
+          name="chevron-down"
+          :size="12"
+          tone="muted"
+          class="sbx-block__chevron"
+          :class="{ 'is-collapsed': archivedCollapsed }"
+        />
+        <span class="sbx-block__title">Archived</span>
+        <span class="sbx-block__count">{{ archivedProjects.length }}</span>
+      </header>
+      <div v-show="!archivedCollapsed" class="sbx-block__body sbx-block__body--scroll">
+        <div
+          v-for="project in archivedProjects"
+          :key="project.projectPath"
+          class="session-item project-item project-item--archived"
+          :class="{ active: project.projectPath === activeProjectPath }"
+          @click="openProject(project)"
+        >
+          <div class="session-row">
+            <ProjectAvatar class="project-card-avatar" :project-path="project.projectPath" />
+            <div class="session-info">
+              <div class="session-summary">
+                <span class="project-item-name">{{ projectName(project) }}</span>
+              </div>
+              <div class="session-subtitle" :title="project.projectPath">{{ project.projectPath }}</div>
+              <div class="session-meta">{{ baseMeta(project) }}</div>
+            </div>
+            <div class="project-card-actions" @click.stop>
+              <button
+                class="project-card-arch-btn"
+                data-tooltip="Restore project"
+                @click.stop="setArchived(project, false)"
+              >
+                <SbIcon name="folder-open" :size="13" tone="muted" />
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
     </div>
   </div>
 </template>
@@ -130,6 +194,7 @@ import { ref, reactive, computed, onMounted } from 'vue';
 import ProjectAvatar from './ProjectAvatar.vue';
 import FilterTabs from './FilterTabs.vue';
 import SbIcon from './SbIcon.vue';
+import { matchProjectPaths } from '../project-search.js';
 
 const props = defineProps({
   callbacks: { type: Object, required: true },
@@ -142,6 +207,11 @@ const showContainers = ref(true);
 const projectInfo = reactive({});
 const loadingPaths = reactive(new Set());
 const activeProjectPath = ref(null);
+// path → { archived, hasCompose }. Held here rather than merged into
+// `projects` because it outlives any one project list: the list is rebuilt
+// from the session cache on every change, and this is not part of it.
+const projectMeta = reactive({});
+const archivedCollapsed = ref(true);
 // Same shape FilterTabs takes on the sessions tab; the ids are the sort orders.
 const SORT_TABS = [
   { id: 'name', label: 'Name' },
@@ -169,14 +239,12 @@ function scheduleInfoFlush() {
 const WORKTREE_RE = /\/\.claude\/worktrees\/[^/]+\/?$/;
 
 const filteredProjects = computed(() => {
-  const q = searchQuery.value.trim().toLowerCase();
+  const q = searchQuery.value.trim();
   const base = projects.value.filter(p => !WORKTREE_RE.test(p.projectPath));
-  let list = q
-    ? base.filter(p => {
-        const name = p.projectPath.split('/').filter(Boolean).pop() || '';
-        return name.toLowerCase().includes(q) || p.projectPath.toLowerCase().includes(q);
-      })
-    : [...base];
+  // Name or folder, decided by the same matcher the sessions list and the
+  // board use — one rule for "this project matches", wherever it is asked.
+  const matched = q ? matchProjectPaths(base, q) : null;
+  let list = matched ? base.filter(p => matched.has(p.projectPath)) : [...base];
 
   if (sortOrder.value === 'name') {
     list.sort((a, b) => {
@@ -195,6 +263,49 @@ const filteredProjects = computed(() => {
   }
   return list;
 });
+
+function isArchived(projectPath) {
+  return !!projectMeta[projectPath]?.archived;
+}
+
+/** The list proper: everything not folded away. */
+const liveProjects = computed(() => filteredProjects.value.filter(p => !isArchived(p.projectPath)));
+
+/** Always sorted by name — an archived project has no fresh numbers to sort by. */
+const archivedProjects = computed(() =>
+  filteredProjects.value
+    .filter(p => isArchived(p.projectPath))
+    .sort((a, b) => projectName(a).localeCompare(projectName(b)))
+);
+
+// The first list arrives before onMounted's read comes back, and a queue that
+// starts without the flags would poll every archived project exactly once —
+// the one case archiving exists to prevent. Held as a promise so the queue can
+// wait for it instead of racing it.
+let metaReady = null;
+
+function loadProjectMeta() {
+  metaReady = (window.api.getProjectMeta?.() ?? Promise.resolve(null))
+    .then((meta) => {
+      if (!meta) return;
+      for (const key of Object.keys(projectMeta)) delete projectMeta[key];
+      Object.assign(projectMeta, meta);
+    })
+    .catch(() => {});
+  return metaReady;
+}
+
+async function setArchived(project, archived) {
+  const p = project.projectPath;
+  await window.api.setProjectArchived?.(p, archived);
+  projectMeta[p] = { ...(projectMeta[p] || {}), archived };
+  // Restoring is also the moment its numbers become worth having again; the
+  // queue skips archived projects, so nothing else would ever ask.
+  if (!archived) {
+    queueGen++;
+    runInfoQueue(queueGen, [project]);
+  }
+}
 
 function projectName(p) {
   return p.projectPath.split('/').filter(Boolean).pop() || p.projectPath;
@@ -229,8 +340,13 @@ async function removeProject(project) {
 }
 
 async function runInfoQueue(gen, list) {
+  await (metaReady || loadProjectMeta());
+  if (queueGen !== gen) return;
   for (const project of list) {
     if (queueGen !== gen) break;
+    // An archived project is not asked about at all — main.js would refuse
+    // anyway, but not sending the call is the point of archiving.
+    if (isArchived(project.projectPath)) continue;
     if (projectInfo[project.projectPath]) continue; // already loaded, skip
     loadingPaths.add(project.projectPath);
     try {
@@ -249,6 +365,7 @@ async function runInfoQueue(gen, list) {
 }
 
 onMounted(() => {
+  loadProjectMeta();
   window.api.onProjectInfoLoading?.((path) => {
     loadingPaths.add(path);
   });
@@ -278,5 +395,4 @@ defineExpose({
   },
 });
 
-const trashSvg = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>';
 </script>

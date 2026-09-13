@@ -20,7 +20,7 @@
       </button>
     </Teleport>
     <Teleport :to="card.footerEl">
-      <span>{{ card.running ? 'Running' : 'Stopped' }}</span>
+      <span>{{ card.running ? 'Active' : 'Stopped' }}</span>
       <span>{{ card.time }}</span>
     </Teleport>
   </template>

@@ -253,7 +253,10 @@
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
               <span class="pv-push-panel-label">Remote</span>
               <span class="pv-push-panel-val" v-if="detail.upstream">{{ detail.upstream }}</span>
-              <span class="pv-push-panel-val pv-push-panel-val--muted" v-else>no upstream set</span>
+              <!-- Not "no upstream set", which reads as a problem: pushing sets
+                   one. Name where it will go. See git-push-target.js. -->
+              <span class="pv-push-panel-val" v-else-if="push.willSetUpstream">{{ push.label }} <span class="pv-push-panel-val--muted">(will be created)</span></span>
+              <span class="pv-push-panel-val pv-push-panel-val--muted" v-else>{{ push.reason }}</span>
               <span class="pv-push-panel-url" v-if="detail.remoteUrl" :title="detail.remoteUrl">{{ detail.remoteUrl }}</span>
             </div>
             <div class="pv-push-panel-row" v-if="detail.tags && detail.tags.length">
@@ -274,7 +277,7 @@
               </div>
             </div>
             <div class="pv-push-panel-actions">
-              <button class="pv-action-btn pv-push-btn" @click="confirmPush = true" :disabled="gitBusy || !detail.upstream" title="Push to remote">
+              <button class="pv-action-btn pv-push-btn" @click="confirmPush = true" :disabled="gitBusy || !push.canPush" :title="push.reason || `Push to ${push.label}`">
                 <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>
                 Push{{ unpushedCount ? ` (${unpushedCount})` : '' }}
               </button>
@@ -426,6 +429,26 @@
           <div v-else class="pv-loading">Loading…</div>
         </template>
 
+        <!-- ── TERMINAL TAB ──────────────────────────────────────────
+             A scratch shell in the project's own directory: run the command,
+             read the output, move on. Not a session — it never reaches the
+             sidebar, the board or the transcript folder, and it dies with the
+             page. v-show, not v-if: xterm is bound to this host element, and
+             tearing it down on a tab switch would kill a command mid-run. -->
+        <div v-show="activeTab === 'terminal'" class="pv-term">
+          <div class="pv-term__bar">
+            <SbIcon name="terminal" :size="12" tone="muted" />
+            <span class="pv-term__cwd" :title="viewedPath">{{ viewedPath }}</span>
+            <span v-if="termExited" class="pv-term__state">exited</span>
+            <span class="pv-term__spacer"></span>
+            <button type="button" class="pv-term__btn" @click="clearTerm">Clear</button>
+            <button type="button" class="pv-term__btn" @click="restartTerm">
+              {{ termExited ? 'Start' : 'Restart' }}
+            </button>
+          </div>
+          <div ref="termHostRef" class="pv-term__host" @mousedown="focusTerm"></div>
+        </div>
+
       </div>
 
       <!-- ── Agent file pane ───────────────────────────────────────────
@@ -500,6 +523,7 @@ import { store } from '../store.js';
 import FileTreeNode from './FileTreeNode.vue';
 import FilterTabs from './FilterTabs.vue';
 import SbButton from './SbButton.vue';
+import { pushTarget } from '../git-push-target.js';
 import SbSwitch from './SbSwitch.vue';
 import SbIcon from './SbIcon.vue';
 import ProjectAvatar from './ProjectAvatar.vue';
@@ -512,6 +536,7 @@ const TABS = computed(() => [
   { id: 'files', label: 'Files' },
   { id: 'sessions', label: liveSessions.value.length ? `Sessions (${liveSessions.value.length})` : 'Sessions' },
   { id: 'agents', label: 'Agent files' },
+  { id: 'terminal', label: 'Terminal' },
   ...(detail.value?.readmePath ? [{ id: 'readme', label: 'README' }] : []),
 ]);
 
@@ -643,6 +668,8 @@ const projectName = computed(() =>
 );
 const changedFiles = computed(() => detail.value?.changedFiles || []);
 const unpushedCommits = computed(() => detail.value?.unpushedCommits || []);
+// Same answer the side panel uses, so the two can never disagree.
+const push = computed(() => pushTarget(detail.value));
 const unpushedCount = computed(() => unpushedCommits.value.length);
 const currentFileIndex = computed(() =>
   changedFiles.value.findIndex(f => f.file === activeDiff.value?.filePath)
@@ -785,7 +812,71 @@ watch(activeTab, async (tab) => {
   // get-memories walks every project folder, so it runs when the tab is asked
   // for and not before.
   if (tab === 'agents' && !agentData.value) loadAgentFiles();
+  if (tab === 'terminal') openTerm();
 });
+
+// ── Terminal tab ──────────────────────────────────────────────────
+// A scratch shell in the project directory, for the errand that is not worth
+// a session: run it, read it, leave. terminal-manager.js owns the xterm and
+// the PTY; this only says which project and when. The shell keeps running
+// while you look at another tab — a build does not deserve to die because you
+// checked the diff — and is killed when the page closes or changes project.
+const TERM_SLOT = 'project';
+const termHostRef = ref(null);
+const termExited = ref(false);
+let termPath = '';
+
+async function openTerm({ force = false } = {}) {
+  const path = viewedPath.value;
+  if (!path) return;
+  if (!force && termPath === path) {
+    // Already running for this project: it was only hidden, so refit and hand
+    // the keyboard back.
+    window.fitPanelTerminal?.(TERM_SLOT);
+    window.focusPanelTerminal?.(TERM_SLOT);
+    return;
+  }
+  await nextTick();
+  const host = termHostRef.value;
+  if (!host) return;
+  host.replaceChildren();
+  termExited.value = false;
+  termPath = path;
+  await window.createPanelTerminal?.(host, path, {
+    slot: TERM_SLOT,
+    onExit: () => { termExited.value = true; },
+  });
+  window.focusPanelTerminal?.(TERM_SLOT);
+}
+
+function closeTerm() {
+  window.destroyPanelTerminal?.(TERM_SLOT);
+  termPath = '';
+  termExited.value = false;
+}
+
+function restartTerm() {
+  return openTerm({ force: true });
+}
+
+function clearTerm() {
+  window.clearPanelTerminal?.(TERM_SLOT);
+  window.focusPanelTerminal?.(TERM_SLOT);
+}
+
+function focusTerm() {
+  window.focusPanelTerminal?.(TERM_SLOT);
+}
+
+// A shell belongs to the directory it was started in. Following a worktree
+// switch silently would leave you typing into the wrong tree.
+watch(viewedPath, (path) => {
+  if (!termPath) return;
+  if (path && activeTab.value === 'terminal') openTerm({ force: true });
+  else closeTerm();
+});
+
+onUnmounted(closeTerm);
 
 // Scheduled tasks are agent files too — schedule-runner.js reads them from the
 // same directories. Running one on demand used to live in the Agent Files tab;
@@ -1140,8 +1231,22 @@ defineExpose({
     detail.value = null; activeDiff.value = null; activeFile.value = null;
     if (agentFile.value) closeAgentFile();
     agentData.value = null;
+    closeTerm();
   },
   setTab(tab) { activeTab.value = tab; },
   setViewedPath,
+  /**
+   * Open one file, editable — the hand-off from the session side panel's
+   * read-only view of the same file.
+   *
+   * The tree is not waited for: it is the list beside the editor, not the way
+   * to the file, and switching the tab already starts loading it.
+   *
+   * @param {string} relPath path relative to the project root
+   */
+  async openFile(relPath) {
+    activeTab.value = 'files';
+    await openFileFromTree(relPath);
+  },
 });
 </script>

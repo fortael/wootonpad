@@ -61,9 +61,15 @@
         </button>
       </div>
 
-      <!-- Rendered for the option under the cursor, which is what "on focus"
-           means for a list you drive with a keyboard. -->
-      <pre v-if="cursorPreview" class="sbx-req__preview">{{ cursorPreview }}</pre>
+      <!-- Shows the option under the cursor, which is what "on focus" means for
+           a list you drive with a keyboard. Present whenever *any* option in
+           this question has a preview, and always the same height — see the
+           comment on cursorPreview. -->
+      <pre
+        v-if="hasPreviews"
+        class="sbx-req__preview"
+        :class="{ 'is-empty': !cursorPreview }"
+      >{{ cursorPreview || 'No preview for this option' }}</pre>
 
       <input
         v-if="current.kind === 'number'"
@@ -230,6 +236,22 @@ const error = computed(() =>
 
 const cursorPreview = computed(() =>
   (current.value?.kind === 'choice' && current.value.options[cursor.value]?.preview) || '');
+
+/**
+ * Whether this question has previews at all — not whether the option under the
+ * cursor does.
+ *
+ * The preview sits below the options, so anything that changes its height moves
+ * the list under the pointer: the row beneath the cursor changes, which changes
+ * the preview, which moves the list again. The box flickered and could settle
+ * on the wrong option.
+ *
+ * Breaking that needs the geometry to be constant, not merely bounded. So the
+ * box is reserved for the whole question and fixed in height (see the CSS),
+ * which means moving between options cannot move anything.
+ */
+const hasPreviews = computed(() =>
+  current.value?.kind === 'choice' && current.value.options.some(o => o.preview));
 
 const textPlaceholder = computed(() => {
   const q = current.value;

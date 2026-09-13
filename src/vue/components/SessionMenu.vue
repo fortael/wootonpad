@@ -359,7 +359,7 @@ const rows = computed(() => {
   if (active) out.push({ label: 'Last active', value: active.value, title: active.title });
   if (m) push('Duration', duration(new Date(m.lastActivity) - new Date(m.created)));
 
-  push('Status', props.isRunning ? 'Running' : (s.archived ? 'Archived' : null));
+  push('Status', props.isRunning ? 'Active' : (s.archived ? 'Archived' : null));
   push('Messages', m ? `${m.userTurns} user · ${m.assistantTurns} assistant` : s.messageCount);
 
   const added = m?.linesAdded ?? s.linesAdded;

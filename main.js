@@ -25,9 +25,18 @@ const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolveP
 const { startHookServer, stopHookServer } = require('./hook-server');
 const { buildHookSettings } = require('./hook-settings');
 const { SessionStatusTracker } = require('./session-status');
+const { readTranscriptWindow, readCompactBoundaries, forgetTranscript } = require('./transcript-window');
 const { createDockAttention } = require('./dock-attention');
+const {
+  detectCompose, composeCheckDue, pollPlan, activeProjectPaths,
+} = require('./project-polling');
 const sdkSession = require('./sdk-session');
 const { fetchAndTransformUsage, getOAuthToken, probeUsage } = require('./claude-auth');
+const mcpInventory = require('./mcp-inventory');
+const { probeMcpServer } = require('./mcp-probe');
+const accountNotes = require('./account-notes');
+const pluginCatalog = require('./plugin-catalog');
+const subagentTasks = require('./subagent-tasks');
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
@@ -102,6 +111,7 @@ const {
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
   getProjectGitCache, setProjectGitCache, getAllProjectGitCounts,
+  getProjectMeta, getAllProjectMeta, setProjectCompose, setProjectArchived, deleteProjectMeta,
   upsertSearchEntries, updateSearchTitle, deleteSearchSession, deleteSearchFolder, deleteSearchType,
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting,
@@ -478,6 +488,9 @@ function startSdkSessionFor(sessionId, projectPath, isNew, sessionOptions) {
       ? 'bypassPermissions'
       : (sessionOptions?.permissionMode || undefined),
     model: sessionOptions?.model || undefined,
+    // Not a query() option: effort rides the session-scoped flag layer, so
+    // sdk-session.js applies it once the session is answering.
+    effort: sessionOptions?.effort || undefined,
     // The same account resolution every other spawn path uses, so an SDK
     // session writes its transcript into the folder this account's cache
     // watches rather than the default home.
@@ -802,14 +815,14 @@ function initSessionCache() {
     db: {
       deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession,
       deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
-      setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName, getAllProjectGitCounts,
+      setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName, getAllProjectGitCounts,
     },
   });
 }
 
 initSessionCache();
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, populateCacheFromFilesystem,
-        buildProjectsFromCache, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker } = sessionCache;
+        buildProjectSets, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker } = sessionCache;
 
 
 // --- IPC: browse-folder ---
@@ -855,17 +868,20 @@ ipcMain.handle('add-project', (_event, rawProjectPath) => {
       fs.mkdirSync(folderPath, { recursive: true });
     }
 
-    // Seed a minimal .jsonl so deriveProjectPath can read the cwd
-    if (!fs.readdirSync(folderPath).some(f => f.endsWith('.jsonl'))) {
-      const seedId = require('crypto').randomUUID();
-      const seedFile = path.join(folderPath, seedId + '.jsonl');
-      const now = new Date().toISOString();
-      const line = JSON.stringify({ type: 'user', cwd: projectPath, sessionId: seedId, uuid: require('crypto').randomUUID(), timestamp: now, message: { role: 'user', content: 'New project' } });
-      fs.writeFileSync(seedFile, line + '\n');
-    }
+    // The folder name is the project path with every non-alphanumeric
+    // character flattened to a dash, so reading it back is guesswork —
+    // derive-project-path.js resolves it against the disk, but here we simply
+    // know the answer. Recording it means the project resolves from its first
+    // render, before anything has been written inside it.
+    setFolderMeta(folder, projectPath, 0);
 
-    // Immediately index the new folder so it's in cache before frontend renders
+    // Deliberately no starter transcript. A project is a place work happens,
+    // not a transcript: it has to be able to exist with none, and seeding a
+    // fake "New project" session to make it visible was the app lying to
+    // itself. buildProjectsFromCache() lists empty project directories on
+    // their own.
     refreshFolder(folder);
+
     notifyRendererProjectsChanged();
     // Kick off du -sk once on add; subsequent refreshes use the long random TTL
     cacheProjectSize(projectPath);
@@ -891,6 +907,7 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
     deleteCachedFolder(folder);
     deleteSearchFolder(folder);
     deleteSetting('project:' + projectPath);
+    deleteProjectMeta(projectPath);
 
     notifyRendererProjectsChanged();
     return { ok: true };
@@ -899,19 +916,68 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
   }
 });
 
-// --- IPC: get-project-info (git branch/diff + docker compose, cached with jittered TTL) ---
-const PROJECT_INFO_TTL_MS = 60 * 1000;
+// --- IPC: get-project-info (git branch/diff + docker compose, cached per TTL) ---
+//
+// The intervals themselves, and the rules for which project gets which, are in
+// project-polling.js so they can be tested without an Electron app, a git
+// repository or a Docker daemon. Read that file first; this one only carries
+// them out.
 // du -sk is expensive; cache with a random long TTL so projects don't all expire at once
 const SIZE_TTL_OPTIONS_MS = [3 * 3600000, 20 * 3600000, 24 * 3600000];
 
 const DOCKER_PATH = (process.env.PATH || '') + ':/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin';
 
-// ±30 s jitter so projects cached at the same time don't all expire simultaneously
-function infoJitter() {
-  return PROJECT_INFO_TTL_MS + (Math.random() * 60000 - 30000);
+// Which projects are being worked in right now — a PTY session or an SDK one
+// counts the same. Their numbers are the only ones that are moving, so they
+// are the only ones worth a short interval.
+function liveSessionProjectPaths() {
+  const paths = [];
+  for (const [, session] of activeSessions) {
+    if (session?.projectPath) paths.push(session.projectPath);
+  }
+  try { paths.push(...sdkSession.activeSdkProjectPaths()); } catch {}
+  return paths;
 }
 
-function fetchProjectInfo(projectPath) {
+function isProjectActive(projectPath) {
+  return liveSessionProjectPaths().includes(projectPath);
+}
+
+/**
+ * Look for a compose file and record the answer, so `docker compose ps` is
+ * never again run for a project that cannot have containers. Cheap — a handful
+ * of existsSync calls — and re-run on open, on refresh and once a day.
+ */
+function refreshComposeFlag(projectPath) {
+  try {
+    const found = detectCompose(projectPath, {
+      exists: (p) => { try { return fs.existsSync(hostPath(p)); } catch { return false; } },
+      join: (...parts) => projectJoin(...parts),
+      dirname: (p) => (isPosixAbsolutePath(p) ? path.posix.dirname(p) : path.dirname(p)),
+      stopAt: os.homedir(),
+    });
+    setProjectCompose(projectPath, found);
+    return found;
+  } catch {
+    return null;
+  }
+}
+
+function parseComposePs(dockerOut) {
+  return dockerOut.split('\n').filter(Boolean).map(line => {
+    try {
+      const c = JSON.parse(line);
+      return { name: c.Service || c.Name, state: (c.State || '').toLowerCase(), status: c.Status || '' };
+    } catch { return null; }
+  }).filter(Boolean);
+}
+
+/**
+ * @param {string} projectPath
+ * @param {{git: boolean, docker: boolean}} plan  which halves to actually run
+ * @param {object|null} previous  the last answer, for the half being skipped
+ */
+function fetchProjectInfo(projectPath, plan = { git: true, docker: true }, previous = null) {
   const { execFile } = require('child_process');
   // argv form: for a WSL account these run inside the distribution, where the
   // project's git and docker live, instead of over the 9p share.
@@ -921,30 +987,44 @@ function fetchProjectInfo(projectPath) {
       resolve(err ? null : (stdout || '').trim());
     });
   });
+  const skip = Promise.resolve(null);
   const data = { branch: null, added: null, deleted: null, containers: null };
   return Promise.all([
-    run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 5000 }),
-    run(['git', 'diff', '--shortstat', 'HEAD'], { timeout: 5000 }),
-    run(['docker', 'compose', 'ps', '--format', 'json'], {
+    plan.git ? run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 5000 }) : skip,
+    plan.git ? run(['git', 'diff', '--shortstat', 'HEAD'], { timeout: 5000 }) : skip,
+    plan.docker ? run(['docker', 'compose', 'ps', '--format', 'json'], {
       timeout: 8000,
       env: { ...process.env, PATH: DOCKER_PATH },
-    }),
+    }) : skip,
   ]).then(([branch, stat, dockerOut]) => {
-    if (branch) data.branch = branch;
-    if (stat) {
-      const addM = stat.match(/(\d+) insertion/);
-      const delM = stat.match(/(\d+) deletion/);
-      if (addM) data.added = parseInt(addM[1]);
-      if (delM) data.deleted = parseInt(delM[1]);
+    if (plan.git) {
+      if (branch) data.branch = branch;
+      if (stat) {
+        const addM = stat.match(/(\d+) insertion/);
+        const delM = stat.match(/(\d+) deletion/);
+        if (addM) data.added = parseInt(addM[1]);
+        if (delM) data.deleted = parseInt(delM[1]);
+      }
+    } else {
+      // A half that was not run keeps what it last said, rather than blanking
+      // the row it is drawn in.
+      data.branch = previous?.branch ?? null;
+      data.added = previous?.added ?? null;
+      data.deleted = previous?.deleted ?? null;
     }
-    if (dockerOut) {
-      data.containers = dockerOut.split('\n').filter(Boolean).map(line => {
-        try {
-          const c = JSON.parse(line);
-          return { name: c.Service || c.Name, state: (c.State || '').toLowerCase(), status: c.Status || '' };
-        } catch { return null; }
-      }).filter(Boolean);
+    if (plan.docker) {
+      if (dockerOut) data.containers = parseComposePs(dockerOut);
+      // A project with a compose file that answers with containers settles the
+      // question even if the file lives somewhere the walk did not look.
+      if (data.containers?.length) {
+        try { setProjectCompose(projectPath, true); } catch {}
+      }
+    } else {
+      data.containers = previous?.containers ?? null;
     }
+    data.fetchedAt = Date.now();
+    data.gitFetchedAt = plan.git ? data.fetchedAt : (previous?.gitFetchedAt ?? null);
+    data.dockerFetchedAt = plan.docker ? data.fetchedAt : (previous?.dockerFetchedAt ?? null);
     return data;
   });
 }
@@ -970,38 +1050,129 @@ function cacheProjectSize(projectPath) {
   }).catch(() => {});
 }
 
-ipcMain.handle('get-project-info', (_event, projectPath) => {
-  if (!projectPath || !fs.existsSync(hostPath(projectPath))) return null;
+/**
+ * Bring one project's info up to date, if anything about it is due.
+ *
+ * Returns the cached answer synchronously and refreshes behind it — the list
+ * draws immediately and corrects itself. `force` is an explicit refresh: it
+ * overrides every interval, and is the only thing that reaches an archived
+ * project.
+ */
+// One fetch per project at a time. The tick, the list and an explicit refresh
+// all land on the same handler, and a second fetch started while the first is
+// still running does the same work twice and reports out of order.
+const projectInfoInFlight = new Set();
+
+function refreshProjectInfo(projectPath, { force = false } = {}) {
   const cacheKey = 'project-info:' + projectPath;
   const cached = getSetting(cacheKey);
-  const cachedSize = getSetting('project-size:' + projectPath);
+  const previous = cached?.data ?? null;
 
-  const gitFresh = cached && cached.fetchedAt && (Date.now() - cached.fetchedAt) < (cached.ttl || PROJECT_INFO_TTL_MS);
+  let meta = null;
+  try { meta = getProjectMeta(projectPath); } catch {}
+  const hasCompose = (force || composeCheckDue(meta))
+    ? refreshComposeFlag(projectPath)
+    : meta.hasCompose;
+
+  const plan = pollPlan({
+    active: isProjectActive(projectPath),
+    archived: !!meta?.archived,
+    hasCompose,
+    // Old cache entries predate the split and carry only `fetchedAt`.
+    gitFetchedAt: previous?.gitFetchedAt ?? cached?.fetchedAt ?? null,
+    dockerFetchedAt: previous?.dockerFetchedAt ?? cached?.fetchedAt ?? null,
+    force,
+  });
+
+  if (!plan.git && !plan.docker) return previous;
+  if (projectInfoInFlight.has(projectPath)) return previous;
+
+  projectInfoInFlight.add(projectPath);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('project-info-loading', projectPath);
+  }
+  const sizeMb = previous?.sizeMb ?? getSetting('project-size:' + projectPath)?.sizeMb ?? null;
+  fetchProjectInfo(projectPath, plan, previous).then(data => {
+    const merged = sizeMb !== null ? { ...data, sizeMb } : data;
+    setSetting(cacheKey, { data: merged, fetchedAt: Date.now() });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('project-info-updated', projectPath, merged);
+    }
+  }).catch(() => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('project-info-updated', projectPath, null);
+    }
+  }).finally(() => {
+    projectInfoInFlight.delete(projectPath);
+  });
+  return previous;
+}
+
+ipcMain.handle('get-project-info', (_event, projectPath, opts) => {
+  if (!projectPath || !fs.existsSync(hostPath(projectPath))) return null;
+  const cachedSize = getSetting('project-size:' + projectPath);
   const sizeFresh = cachedSize && cachedSize.fetchedAt && (Date.now() - cachedSize.fetchedAt) < (cachedSize.ttl || SIZE_TTL_OPTIONS_MS[0]);
   const sizeMb = cachedSize?.sizeMb ?? null;
 
-  if (!gitFresh) {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('project-info-loading', projectPath);
-    }
-    fetchProjectInfo(projectPath).then(data => {
-      const merged = sizeMb !== null ? { ...data, sizeMb } : data;
-      setSetting(cacheKey, { data: merged, fetchedAt: Date.now(), ttl: infoJitter() });
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('project-info-updated', projectPath, merged);
-      }
-    }).catch(() => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('project-info-updated', projectPath, null);
-      }
-    });
-  }
+  const base = refreshProjectInfo(projectPath, { force: !!opts?.force });
 
   // Refresh size in background if its long-TTL has expired
   if (!sizeFresh) cacheProjectSize(projectPath);
 
-  const base = cached?.data ?? null;
   return base && sizeMb !== null ? { ...base, sizeMb } : base;
+});
+
+// --- Activity-driven polling ---
+//
+// Only projects with a live session, and only what their own intervals say is
+// due. Deliberately not a sweep over every project: that is a separate feature
+// with a separate cost, and doing it here by accident is what this whole file
+// change exists to stop.
+// Deliberately shorter than the shortest interval in project-polling.js. A tick
+// that runs exactly as often as the TTL it checks is a race: a tick landing a
+// millisecond early finds nothing due and the next one is a whole period away,
+// so a 20 s interval polled every 20 s refreshes every 40 s. Measured, before
+// this was halved: one refresh in a 70 s window where three were due. The tick
+// itself is a Map scan and a subtraction, so running it spare costs nothing.
+const ACTIVE_POLL_MS = 10 * 1000;
+let activePollTimer = null;
+
+function pollActiveProjects() {
+  let metaByPath = new Map();
+  try { metaByPath = getAllProjectMeta(); } catch {}
+  for (const projectPath of activeProjectPaths(liveSessionProjectPaths(), metaByPath)) {
+    try {
+      if (!fs.existsSync(hostPath(projectPath))) continue;
+      refreshProjectInfo(projectPath);
+    } catch {}
+  }
+}
+
+function startActiveProjectPolling() {
+  if (activePollTimer) clearInterval(activePollTimer);
+  activePollTimer = setInterval(pollActiveProjects, ACTIVE_POLL_MS);
+}
+
+// --- IPC: project archiving ---
+//
+// An archived project folds away in the list and is not polled at all. The
+// data it already has stays in the cache, so opening it still draws something
+// while the forced refresh runs.
+ipcMain.handle('set-project-archived', (_event, projectPath, archived) => {
+  try {
+    setProjectArchived(projectPath, !!archived);
+    return { ok: true };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+ipcMain.handle('get-project-meta', () => {
+  try {
+    return Object.fromEntries(getAllProjectMeta());
+  } catch {
+    return {};
+  }
 });
 
 // --- IPC: get-project-detail (full git log + docker details, no cache) ---
@@ -1030,21 +1201,48 @@ ipcMain.handle('get-project-detail', (_event, projectPath) => {
         return { hash, message, author, date };
       });
     }
+    // The upstream first, and on its own. It used to be read *after* the
+    // unpushed log inside the same try, so when that log threw it took the
+    // upstream and the remote URL down with it.
     try {
-      const unpushed = sh(['git', 'log', '--format=%h\x1f%s\x1f%an\x1f%ar', '@{u}..HEAD'], { timeout: 5000 });
-      if (unpushed) {
-        detail.unpushedCommits = unpushed.split('\n').filter(Boolean).map(line => {
-          const [hash, message, author, date] = line.split('\x1f');
-          return { hash, message, author, date };
-        });
-      }
-      const upstream = sh(['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], { timeout: 3000 });
-      detail.upstream = upstream;
-      const remoteName = upstream.split('/')[0];
+      detail.upstream = sh(['git', 'rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}'], { timeout: 3000 });
+      const remoteName = detail.upstream.split('/')[0];
       try {
         detail.remoteUrl = sh(['git', 'remote', 'get-url', remoteName], { timeout: 3000 });
       } catch {}
-    } catch {} // no upstream set — just leave empty
+    } catch {} // no upstream configured for this branch
+
+    // What is here and is not on the remote.
+    //
+    // `@{u}..HEAD` is the precise question and was the only one asked — but it
+    // fails outright on a branch with no upstream, which is every branch
+    // before its first push. The page then reported zero unpushed commits for
+    // a branch on which every commit was unpushed.
+    //
+    // Without an upstream the honest answer is everything no remote branch can
+    // reach, which is what `git push -u` would send. Only when there is a
+    // remote to compare against, though: in a repository with none, that range
+    // is the entire history, and "you have 4000 commits to push" is not an
+    // answer to anything.
+    let unpushedRange = null;
+    if (detail.upstream) {
+      unpushedRange = ['@{u}..HEAD'];
+    } else {
+      try {
+        if (sh(['git', 'remote'], { timeout: 3000 })) unpushedRange = ['HEAD', '--not', '--remotes'];
+      } catch {}
+    }
+    if (unpushedRange) {
+      try {
+        const unpushed = sh(['git', 'log', '--format=%h\x1f%s\x1f%an\x1f%ar', ...unpushedRange], { timeout: 5000 });
+        if (unpushed) {
+          detail.unpushedCommits = unpushed.split('\n').filter(Boolean).map(line => {
+            const [hash, message, author, date] = line.split('\x1f');
+            return { hash, message, author, date };
+          });
+        }
+      } catch {}
+    }
     // Always try origin as fallback even without upstream
     if (!detail.remoteUrl) {
       try {
@@ -1075,26 +1273,71 @@ ipcMain.handle('get-project-detail', (_event, projectPath) => {
       }).sort((a, b) => (b.added + b.deleted) - (a.added + a.deleted));
     }
   } catch {}
-  try {
-    const raw = sh(['docker', 'compose', 'ps', '--format', 'json'], {
-      timeout: 8000,
-      env: { ...process.env, PATH: DOCKER_PATH },
-    });
-    if (raw) {
-      detail.containers = raw.split('\n').filter(Boolean).map(line => {
-        try {
-          const c = JSON.parse(line);
-          const ports = (c.Publishers || []).map(p => `${p.PublishedPort}→${p.TargetPort}/${p.Protocol}`).filter(p => !p.startsWith('0→')).join(', ');
-          return { name: c.Service || c.Name, state: (c.State || '').toLowerCase(), status: c.Status || '', ports };
-        } catch { return null; }
-      }).filter(Boolean);
-    }
-  } catch {}
+  // Opening a project, and the Refresh button, are where the compose flag is
+  // (re)established — this is the one call that always runs in full, so it is
+  // the honest place to answer the question the polling then relies on.
+  const hasCompose = refreshComposeFlag(projectPath);
+  if (hasCompose !== false) {
+    try {
+      const raw = sh(['docker', 'compose', 'ps', '--format', 'json'], {
+        timeout: 8000,
+        env: { ...process.env, PATH: DOCKER_PATH },
+      });
+      if (raw) {
+        detail.containers = raw.split('\n').filter(Boolean).map(line => {
+          try {
+            const c = JSON.parse(line);
+            const ports = (c.Publishers || []).map(p => `${p.PublishedPort}→${p.TargetPort}/${p.Protocol}`).filter(p => !p.startsWith('0→')).join(', ');
+            return { name: c.Service || c.Name, state: (c.State || '').toLowerCase(), status: c.Status || '', ports };
+          } catch { return null; }
+        }).filter(Boolean);
+      }
+      // Containers where the walk found no file: believe the daemon, not us.
+      if (detail.containers.length && hasCompose !== true) {
+        try { setProjectCompose(projectPath, true); } catch {}
+      }
+    } catch {}
+  }
   try {
     setProjectGitCache(projectPath, detail);
     notifyRendererProjectsChanged();
   } catch {}
   return detail;
+});
+
+// --- IPC: get-project-changes ---
+// Just the working tree, for polling. `get-project-detail` above answers the
+// same question, but it also runs the log, tags, worktrees and
+// `docker compose ps` (an 8s timeout), and it broadcasts projects-changed,
+// which re-renders the whole sidebar. That is fine once when a panel opens and
+// far too much every fifteen seconds.
+ipcMain.handle('get-project-changes', (_event, projectPath) => {
+  if (!projectPath || !fs.existsSync(hostPath(projectPath))) return null;
+  const { execFileSync } = require('child_process');
+  try {
+    const [file, args, options] = projectExecFile(
+      ['git', 'diff', '--numstat', 'HEAD'], projectPath,
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000 },
+    );
+    const numstat = execFileSync(file, args, options).trim();
+    const changedFiles = [];
+    let totalAdded = 0;
+    let totalDeleted = 0;
+    for (const line of numstat.split('\n')) {
+      if (!line) continue;
+      const [added, deleted, changed] = line.split('\t');
+      const a = parseInt(added, 10) || 0;
+      const d = parseInt(deleted, 10) || 0;
+      totalAdded += a;
+      totalDeleted += d;
+      changedFiles.push({ file: changed, added: a, deleted: d });
+    }
+    changedFiles.sort((x, y) => (y.added + y.deleted) - (x.added + x.deleted));
+    return { changedFiles, totalAdded, totalDeleted };
+  } catch {
+    // Not a repo, or git took too long. The panel keeps what it had.
+    return null;
+  }
 });
 
 ipcMain.handle('get-project-git-cache', (_event, projectPath) => {
@@ -1312,6 +1555,10 @@ function sessionTranscriptTail(sessionId, limit = BOARD_SUMMARY_MAX_PER_SESSION)
   return turns.join('\n---\n').slice(-limit);
 }
 
+// What the board flags after a run, and how much of it — see
+// board-importance.js for why the cap is enforced rather than only asked for.
+const { IMPORTANCE_PROMPT: BOARD_IMPORTANCE_PROMPT, importanceRater } = require('./board-importance');
+
 // The child of the summarize run currently in flight, so the sidebar's Stop
 // button has something to kill. One at a time: the renderer disables Summarize
 // while a run is pending, and a second run would only queue behind this one on
@@ -1350,6 +1597,10 @@ ipcMain.handle('board-summarize-sessions', async (_event, sessions, options) => 
     }
     if (!blocks.length) return { ok: false, error: 'No readable transcripts for these sessions' };
 
+    // Which language the summaries come back in. A preference about reading
+    // rather than about the work, so it is global and not per-project.
+    const language = (getSetting('global') || {}).summaryLanguage || '';
+
     const prompt = 'Each <session> below is the tail of a Claude Code transcript.\n'
       + (detail
         ? 'Write 2-3 sentences in past tense describing what the last few turns of that session accomplished. '
@@ -1360,8 +1611,16 @@ ipcMain.handle('board-summarize-sessions', async (_event, sessions, options) => 
       + (detail
         ? 'Hard limit of 70 words — cut detail rather than run long.\n\n'
         : 'Hard limit of 35 words per summary — cut detail rather than run long.\n\n')
+      // Names stay in the language they were written in: a translated path or
+      // identifier cannot be searched for or pasted anywhere.
+      + (language
+        ? `Write every summary in ${language}, whatever language the transcript is in. Leave file paths, identifiers, branch names and commands exactly as they appear.\n\n`
+        : '')
+      + (detail ? '' : BOARD_IMPORTANCE_PROMPT)
       + 'Reply with ONLY a JSON array, no prose and no code fence, one object per session in the order given:\n'
-      + '[{"id": "<the session id exactly as given>", "summary": "<1-2 sentences>"}]\n\n'
+      + (detail
+        ? '[{"id": "<the session id exactly as given>", "summary": "<1-2 sentences>"}]\n\n'
+        : '[{"id": "<the session id exactly as given>", "summary": "<1-2 sentences>", "importance": <0-3>}]\n\n')
       + blocks.join('\n\n');
 
     // Nothing here is project work, but the CLI still runs somewhere: anchor it
@@ -1430,9 +1689,18 @@ ipcMain.handle('board-summarize-sessions', async (_event, sessions, options) => 
       return { ok: false, error: 'claude did not return JSON' };
     }
     if (!Array.isArray(parsed)) return { ok: false, error: 'claude did not return a JSON array' };
+    // One rater per run: the cap is asked for in the prompt and enforced here,
+    // because a model that flags six cards red has not answered the question
+    // and the board would be the one to show it.
+    const rateImportance = importanceRater();
+
     const summaries = parsed
       .filter(item => item && item.id && typeof item.summary === 'string' && item.summary.trim())
-      .map(item => ({ sessionId: String(item.id), summary: item.summary.trim() }));
+      .map(item => ({
+        sessionId: String(item.id),
+        summary: item.summary.trim(),
+        importance: rateImportance(item.importance),
+      }));
     if (!summaries.length) return { ok: false, error: 'claude returned no summaries' };
     return { ok: true, summaries, usage };
   } catch (e) { return { ok: false, error: e.message, cancelled: !!e.cancelled }; }
@@ -1498,6 +1766,58 @@ ipcMain.handle('get-file-tree', (_event, projectPath) => {
   // canonical project path.
   try { return { ok: true, tree: walk(hostPath(projectPath), '', 0) }; }
   catch (e) { return { ok: false, error: e.message }; }
+});
+
+/**
+ * One directory's worth of `@` completions, for a token that leaves the project.
+ *
+ * `get-file-tree` answers everything inside the project and answers it from
+ * memory; it cannot answer `@../other-checkout/src/` — and the CLI's own
+ * composer can, which is where a sibling repository gets referenced from. So
+ * anything starting with `../`, `~/` or `/` is read a directory at a time,
+ * which is also the only way to walk one.
+ *
+ * `token` is what follows the `@`, and the returned `value` is the whole token
+ * it should become — the renderer substitutes it, it does not join it.
+ */
+ipcMain.handle('list-path-completions', (_event, projectPath, token) => {
+  const SKIP = new Set(['.git', 'node_modules', '.DS_Store']);
+  const LIMIT = 60;
+  const text = String(token || '');
+  const cut = text.lastIndexOf('/');
+  const dir = cut === -1 ? '' : text.slice(0, cut + 1);
+  const base = cut === -1 ? text : text.slice(cut + 1);
+
+  // `~` is the host's home. On a WSL account the distribution's own home is a
+  // different directory, and there is no cheap way to ask for it from here —
+  // a `~/` token on such a project simply finds nothing, which is the same
+  // answer it would get for a path that does not exist.
+  let target;
+  if (dir.startsWith('~/') || dir === '~') target = path.join(os.homedir(), dir.slice(1));
+  else if (dir.startsWith('/')) target = dir;
+  else target = projectJoin(projectPath, dir || '.');
+
+  let entries;
+  try { entries = fs.readdirSync(hostPath(target), { withFileTypes: true }); }
+  catch (e) { return { ok: false, error: e.message, entries: [] }; }
+
+  const needle = base.toLowerCase();
+  const matched = entries
+    .filter(e => !SKIP.has(e.name))
+    // Dotfiles only once the dot has been typed, the way a shell does it.
+    .filter(e => base.startsWith('.') || !e.name.startsWith('.'))
+    .filter(e => e.name.toLowerCase().startsWith(needle))
+    .sort((a, b) => {
+      if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    })
+    .slice(0, LIMIT)
+    .map((e) => {
+      const isDir = e.isDirectory();
+      return { name: e.name, isDir, value: dir + e.name + (isDir ? '/' : '') };
+    });
+
+  return { ok: true, entries: matched };
 });
 
 ipcMain.handle('get-file-diff', (_event, projectPath, filePath) => {
@@ -1571,19 +1891,23 @@ ipcMain.handle('unwatch-file', (_event, filePath) => {
   return { ok: true };
 });
 
-ipcMain.handle('get-projects', (_event, showArchived) => {
+// Both views of the tree in one answer. The renderer needs the archive-filtered
+// list and the unfiltered one together on every refresh, and it used to ask for
+// them separately — two whole-table scans, two readdirs and two payloads for a
+// difference of one filter. See buildProjectSets.
+ipcMain.handle('get-project-sets', () => {
   try {
     const needsPopulate = !isCachePopulated(getActiveAccount().id) || !isSearchIndexPopulated();
 
     if (needsPopulate) {
       populateCacheViaWorker();
-      return [];
+      return { visible: [], all: [] };
     }
 
-    return buildProjectsFromCache(showArchived);
+    return buildProjectSets();
   } catch (err) {
     console.error('Error listing projects:', err);
-    return [];
+    return { visible: [], all: [] };
   }
 });
 
@@ -1593,6 +1917,12 @@ ipcMain.handle('get-plans', () => {
     const plansDir = activePlansDir();
     if (!fs.existsSync(plansDir)) return [];
     const files = fs.readdirSync(plansDir).filter(f => f.endsWith('.md'));
+    // A plan records no project of its own, so the projects it belongs to are
+    // the ones it names: a plan for a repository quotes paths inside it. Good
+    // enough to offer a session's own plans beside its notes, and wrong only
+    // in the direction of showing one plan in two places.
+    const projectPaths = [...new Set([...getAllFolderMeta().values()]
+      .map(m => m.projectPath).filter(Boolean))];
     const plans = [];
     for (const file of files) {
       const filePath = path.join(plansDir, file);
@@ -1603,7 +1933,12 @@ ipcMain.handle('get-plans', () => {
         const title = firstLine && firstLine.startsWith('# ')
           ? firstLine.slice(2).trim()
           : file.replace(/\.md$/, '');
-        plans.push({ filename: file, title, modified: stat.mtime.toISOString() });
+        plans.push({
+          filename: file,
+          title,
+          modified: stat.mtime.toISOString(),
+          projects: projectPaths.filter(p => content.includes(p)),
+        });
       } catch {}
     }
     plans.sort((a, b) => new Date(b.modified) - new Date(a.modified));
@@ -1660,6 +1995,42 @@ ipcMain.handle('save-plan', (_event, filePath, content) => {
     return { ok: false, error: err.message };
   }
 });
+
+// --- IPC: account notes ---
+// Free-form notes and TODO lists. They sit in the account's Claude home next
+// to its plans, so they follow the account rather than any one checkout — a
+// note can name a project without living inside it.
+function activeNotesDir() {
+  return path.join(activeConfigDir(), 'notes');
+}
+
+ipcMain.handle('get-notes', () => accountNotes.listNotes(activeNotesDir()));
+
+ipcMain.handle('get-notes-dir', () => {
+  const account = getActiveAccount();
+  const dir = activeNotesDir();
+  return { dir, exists: fs.existsSync(dir), accountName: account.name, accountId: account.id };
+});
+
+ipcMain.handle('read-note', (_event, filename) => accountNotes.readNote(activeNotesDir(), filename));
+
+ipcMain.handle('save-note', (_event, filePath, content) => accountNotes.saveNote(activeNotesDir(), filePath, content));
+
+ipcMain.handle('create-note', (_event, options) => {
+  try {
+    return accountNotes.createNote(activeNotesDir(), options || {});
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('delete-note', (_event, filename) => accountNotes.deleteNote(activeNotesDir(), filename));
+
+ipcMain.handle('toggle-note-todo', (_event, filename, index) =>
+  accountNotes.toggleTodo(activeNotesDir(), filename, index));
+
+ipcMain.handle('set-note-projects', (_event, filename, projectPaths) =>
+  accountNotes.setNoteProjects(activeNotesDir(), filename, projectPaths));
 
 // Stats for one account: its own rows in the session cache, enriched with the
 // stats-cache.json `claude /stats` wrote into that account's config dir. The
@@ -2350,6 +2721,175 @@ ipcMain.handle('get-account-stats', (_event, accountId) => {
   return buildStatsForAccount(account);
 });
 
+// --- Account MCP servers and plugins ---
+// Claude keeps user-scoped state in .claude.json, which for the default
+// account sits beside the config dir rather than inside it. mcp-inventory is
+// told which, instead of guessing from a path.
+function accountUserConfigPath(account) {
+  return account.configDir === DEFAULT_CLAUDE_DIR
+    ? path.join(os.homedir(), '.claude.json')
+    : path.join(account.configDir, '.claude.json');
+}
+
+function accountInventoryArgs(account) {
+  return { configDir: account.configDir, userConfigPath: accountUserConfigPath(account) };
+}
+
+// Rule 3 of the WSL contract: a stdio server configured in a distribution's
+// Claude home is a command that only exists inside that distribution, so the
+// probe has to run there too.
+function accountWrapArgv(account) {
+  const distro = accountWslDistro(account);
+  if (!distro) return null;
+  return (argv) => ['wsl.exe', wslExecArgs(distro, account.wslHome || null, argv)];
+}
+
+ipcMain.handle('get-account-mcp', (_event, accountId) => {
+  const account = findAccount(accountId);
+  if (!account) return { ok: false, error: 'unknown account' };
+  try {
+    return { ok: true, ...mcpInventory.readMcpInventory(accountInventoryArgs(account)) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// Probes one configured server. The renderer sends the inventory id; the
+// command or URL behind it is read back out of the account's own files, so
+// nothing the renderer says decides what gets spawned or fetched.
+ipcMain.handle('check-account-mcp', async (_event, accountId, id) => {
+  const account = findAccount(accountId);
+  if (!account) return { state: 'error', message: 'unknown account' };
+  const config = mcpInventory.resolveServerConfig({ ...accountInventoryArgs(account), id });
+  if (!config) return { state: 'error', message: 'Server is no longer in this account’s configuration.' };
+  try {
+    return await probeMcpServer(config, {
+      wrapArgv: accountWrapArgv(account),
+      // Same PATH the CLI's own children get: a stdio server launched via npx
+      // or a version-managed node is not on launchd's PATH.
+      env: { PATH: claudeChildPath() },
+    });
+  } catch (err) {
+    return { state: 'error', message: err.message || 'Check failed.' };
+  }
+});
+
+ipcMain.handle('add-account-mcp', (_event, accountId, definition) => {
+  const account = findAccount(accountId);
+  if (!account) return { ok: false, error: 'unknown account' };
+  try {
+    const added = mcpInventory.addMcpServer({ configDir: account.configDir, definition });
+    log.info('[mcp] added server', added.name, 'to', added.path);
+    return { ok: true, ...added };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('remove-account-mcp', (_event, accountId, name) => {
+  const account = findAccount(accountId);
+  if (!account) return { ok: false, error: 'unknown account' };
+  try {
+    const removed = mcpInventory.removeMcpServer({ configDir: account.configDir, name });
+    log.info('[mcp] removed server', removed.name, 'from', removed.path);
+    return { ok: true, ...removed };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// --- Plugin marketplaces ---
+// Browsing is a read of the marketplace checkouts already on disk. Installing
+// is the CLI's job: it resolves the source, clones it, and may run a command
+// the marketplace declares — reimplementing that here would be a second,
+// divergent installer.
+const PLUGIN_COMMAND_TIMEOUT_MS = 180000;
+
+// `claude` as one account, in that account's own Claude home rather than in a
+// project. The WSL flavour runs inside the distribution, where both the home
+// and the binary actually live — its Windows configDir would mean nothing
+// there, so CLAUDE_CONFIG_DIR is left off, exactly as the PTY spawn does.
+function runAccountClaude(account, argv, { timeoutMs = PLUGIN_COMMAND_TIMEOUT_MS } = {}) {
+  const { spawn } = require('child_process');
+  const distro = accountWslDistro(account);
+  const [file, args, options] = distro
+    ? ['wsl.exe', wslExecArgs(distro, account.wslHome || null, ['claude', ...argv]), {}]
+    : [resolveClaudeBinary(), argv, {
+      cwd: os.homedir(),
+      env: {
+        ...process.env,
+        PATH: claudeChildPath(),
+        // A marketplace clone that needs credentials would otherwise sit on a
+        // password prompt no one can see until the timeout expires.
+        GIT_TERMINAL_PROMPT: '0',
+        ...(account.configDir === DEFAULT_CLAUDE_DIR ? {} : { CLAUDE_CONFIG_DIR: account.configDir }),
+      },
+    }];
+
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(file, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    } catch (err) {
+      resolve({ ok: false, error: err.message });
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', d => { stdout += d; });
+    child.stderr.on('data', d => { stderr += d; });
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch {}
+      resolve({ ok: false, error: `Timed out after ${Math.round(timeoutMs / 1000)}s.`, output: stdout.trim() });
+    }, timeoutMs);
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ ok: false, error: err.code === 'ENOENT' ? 'The claude CLI was not found.' : err.message });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      const output = [stdout.trim(), stderr.trim()].filter(Boolean).join('\n');
+      resolve(code === 0
+        ? { ok: true, output }
+        : { ok: false, error: stderr.trim() || stdout.trim() || `claude exited with code ${code}.`, output });
+    });
+  });
+}
+
+ipcMain.handle('get-plugin-catalog', (_event, accountId, options) => {
+  const account = findAccount(accountId);
+  if (!account) return { ok: false, error: 'unknown account' };
+  try {
+    // What is already installed comes from the same inventory the panel shows,
+    // so "Installed" cannot disagree between the two lists.
+    const installedKeys = mcpInventory
+      .readMcpInventory(accountInventoryArgs(account))
+      .plugins.map(p => p.key);
+    const result = pluginCatalog.searchCatalog(account.configDir, { ...(options || {}), installedKeys });
+    return { ok: true, official: pluginCatalog.OFFICIAL_MARKETPLACE, ...result };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// install / uninstall / enable / disable / add-marketplace. The argv is built
+// and validated in plugin-catalog; nothing from the renderer reaches execFile
+// unchecked, and there is no shell in the path.
+ipcMain.handle('plugin-command', async (_event, accountId, action, options) => {
+  const account = findAccount(accountId);
+  if (!account) return { ok: false, error: 'unknown account' };
+  let argv;
+  try {
+    argv = pluginCatalog.pluginCommandArgv(action, options || {});
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  log.info('[plugins]', account.id, argv.join(' '));
+  const result = await runAccountClaude(account, argv);
+  if (!result.ok) log.warn('[plugins] failed:', result.error);
+  return result;
+});
+
 // --- Scheduled tasks ---
 const scheduleIpc = require('./schedule-ipc');
 
@@ -2357,6 +2897,12 @@ const COMMIT_MSG_PROMPT_DEFAULT = `Write a concise git commit message (max 72 ch
 
 const SETTING_DEFAULTS = {
   permissionMode: null,
+  // What a new session starts on. Both are per-project with a global fallback,
+  // like everything else here — a repo you plan in and a repo you grind in want
+  // different answers. null means "whatever the CLI picks", which is what the
+  // app did before these existed.
+  model: null,
+  effort: null,
   dangerouslySkipPermissions: false,
   worktree: false,
   worktreeName: '',
@@ -2379,6 +2925,10 @@ const SETTING_DEFAULTS = {
   // honoured on its own; this is for people whose system says nothing but who
   // still want the movement gone.
   reduceMotion: false,
+  // The language board and session summaries are written in, as a plain
+  // language name the prompt can carry. Empty means the model answers in
+  // whatever the transcript is in.
+  summaryLanguage: '',
 };
 
 ipcMain.handle('get-shell-profiles', () => {
@@ -2481,6 +3031,86 @@ ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
   }
 });
 
+// --- IPC: sub-agents ---
+// A session's Task calls each get their own transcript in a folder beside the
+// session's own. Neither the sidebar nor the board lists them — they are not
+// sessions — so the side panel is where they surface.
+function sessionTranscriptPaths(sessionId) {
+  const folder = getCachedFolder(sessionId);
+  if (!folder) return null;
+  const base = path.join(activeProjectsDir(), folder);
+  return { sessionDir: path.join(base, sessionId), parentPath: path.join(base, sessionId + '.jsonl') };
+}
+
+ipcMain.handle('get-session-subagents', (_event, sessionId) => {
+  const paths = sessionTranscriptPaths(sessionId);
+  if (!paths) return [];
+  try {
+    return subagentTasks.listSubagents(paths.sessionDir, paths.parentPath);
+  } catch (err) {
+    log.warn('[subagents] list failed:', err.message);
+    return [];
+  }
+});
+
+// Running counts for the sidebar rows and the board cards. The renderer only
+// asks about sessions that are actually running — an agent cannot outlive the
+// CLI process that spawned it — and the count itself skips the expensive read
+// for any session whose agent files have gone quiet.
+ipcMain.handle('get-subagent-counts', (_event, sessionIds) => {
+  const counts = {};
+  for (const sessionId of (Array.isArray(sessionIds) ? sessionIds : []).slice(0, 40)) {
+    const paths = sessionTranscriptPaths(sessionId);
+    if (!paths) continue;
+    try {
+      const running = subagentTasks.countRunningSubagents(paths.sessionDir, paths.parentPath);
+      if (running) counts[sessionId] = running;
+    } catch {}
+  }
+  return counts;
+});
+
+ipcMain.handle('read-subagent-jsonl', (_event, sessionId, agentId) => {
+  const paths = sessionTranscriptPaths(sessionId);
+  if (!paths) return { error: 'Session not found in cache' };
+  return subagentTasks.readSubagentEntries(paths.sessionDir, agentId);
+});
+
+// --- IPC: read-session-transcript ---
+// The windowed read behind the chat view. `read-session-jsonl` above hands over
+// the whole transcript, which is what the raw viewer wants and what the chat
+// must not do — see transcript-window.js for the cost and for how a compact
+// boundary floors a window.
+ipcMain.handle('read-session-transcript', (_event, sessionId, opts) => {
+  const folder = getCachedFolder(sessionId);
+  if (!folder) return { error: 'Session not found in cache' };
+  const jsonlPath = path.join(activeProjectsDir(), folder, sessionId + '.jsonl');
+  try {
+    return readTranscriptWindow(jsonlPath, {
+      before: opts?.before ?? null,
+      limit: opts?.limit ?? 50,
+    });
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
+// --- IPC: session-compacts ---
+// Where this session's context was thrown away, for the chat's timeline rail.
+// Reuses the same cached line index the windowed read builds, so it costs one
+// stat on a warm file and parses only the boundary records themselves.
+ipcMain.handle('session-compacts', (_event, sessionId) => {
+  const folder = getCachedFolder(sessionId);
+  if (!folder) return { ok: false, total: 0, compacts: [] };
+  const jsonlPath = path.join(activeProjectsDir(), folder, sessionId + '.jsonl');
+  try {
+    return { ok: true, ...readCompactBoundaries(jsonlPath) };
+  } catch {
+    // A session with no transcript yet is the normal case for a new one.
+    return { ok: false, total: 0, compacts: [] };
+  }
+});
+
 ipcMain.handle('archive-session', (_event, sessionId, archived) => {
   const val = archived ? 1 : 0;
   setArchived(sessionId, val);
@@ -2494,7 +3124,10 @@ ipcMain.handle('archive-session', (_event, sessionId, archived) => {
 // and off the startup path — nothing on screen depends on it.
 ipcMain.handle('get-session-meta', (_event, sessionId) => {
   const folder = getCachedFolder(sessionId);
-  if (!folder) return { ok: false, error: 'Session not found in cache' };
+  // Not an error the user can act on: a session that has not written its
+  // first turn yet is not in the index, and saying so in the index's own
+  // vocabulary reads like corruption.
+  if (!folder) return { ok: false, error: 'No transcript yet — this session has not written its first turn.' };
   // activeProjectsDir() is already the host's view of the account's home — for
   // a WSL account, the UNC path. Same composition read-session-jsonl uses.
   const jsonlPath = path.join(activeProjectsDir(), folder, sessionId + '.jsonl');
@@ -2605,9 +3238,12 @@ ipcMain.handle('get-session-meta', (_event, sessionId) => {
 // Removes the transcript itself, not just the row: a session deleted here is
 // gone from ~/.claude/projects too, so the next scan cannot bring it back.
 // Destructive and unrecoverable — the renderer confirms before calling.
-ipcMain.handle('delete-session', async (_event, sessionId) => {
-  const folder = getCachedFolder(sessionId);
-  if (!folder) return { ok: false, error: 'Session not found in cache' };
+ipcMain.handle('delete-session', async (_event, sessionId, projectPath) => {
+  // The cache is not the only place a session can exist. One launched a moment
+  // ago has no .jsonl yet, so nothing indexed it — and refusing to delete it
+  // left the row in the sidebar with no way to get rid of it. The renderer
+  // knows which project it is in; that is enough to name the file.
+  const folder = getCachedFolder(sessionId) || (projectPath ? encodeProjectPath(projectPath) : null);
 
   // A live PTY holds the file open and would keep writing to it.
   const live = activeSessions.get(sessionId);
@@ -2616,12 +3252,15 @@ ipcMain.handle('delete-session', async (_event, sessionId) => {
     await new Promise(r => setTimeout(r, 150));
   }
 
-  const jsonlPath = path.join(activeProjectsDir(), folder, sessionId + '.jsonl');
-  try {
-    fs.unlinkSync(jsonlPath);
-  } catch (err) {
-    // Already gone on disk is not a failure — the cache rows still have to go.
-    if (err.code !== 'ENOENT') return { ok: false, error: err.message };
+  const jsonlPath = folder ? path.join(activeProjectsDir(), folder, sessionId + '.jsonl') : null;
+  if (jsonlPath) {
+    try {
+      fs.unlinkSync(jsonlPath);
+    } catch (err) {
+      // Already gone on disk is not a failure — the cache rows still have to go.
+      if (err.code !== 'ENOENT') return { ok: false, error: err.message };
+    }
+    forgetTranscript(jsonlPath);
   }
   deleteCachedSession(sessionId);
   deleteSearchSession(sessionId);
@@ -3097,6 +3736,16 @@ ipcMain.on('terminal-input', (_event, sessionId, data) => {
   }
 });
 
+// --- IPC: sdk-send-prompt ---
+// A whole prompt for an SDK session, as text or as Messages API content blocks.
+// `terminal-input` cannot carry the second shape: it is the PTY's keystroke
+// channel, and a session that is not SDK-backed would hand the array straight
+// to `pty.write`. Request-response rather than fire-and-forget, because a
+// prompt carrying an attachment has ways to be refused that typing does not.
+ipcMain.handle('sdk-send-prompt', (_event, sessionId, content) => {
+  return sdkSession.sendSdkInput(sessionId, content);
+});
+
 // --- IPC: sdk-interrupt ---
 // The Escape key of an SDK session: stops the turn, keeps the session.
 ipcMain.handle('sdk-interrupt', async (_event, sessionId) => {
@@ -3329,6 +3978,7 @@ app.whenReady().then(() => {
   buildMenu();
   createWindow();
   startProjectsWatcher();
+  startActiveProjectPolling();
 
   // Both schedule modules resolve their directories per call, so schedules
   // follow the active account instead of the Windows home, and project paths

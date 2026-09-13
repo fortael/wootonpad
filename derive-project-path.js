@@ -1,6 +1,16 @@
 const fs = require('fs');
 const path = require('path');
 
+// The folder name is the path, with every non-alphanumeric character replaced
+// by a dash — see encode-project-path.js. Kept in step with it by hand: this
+// module cannot require it without dragging its hashing branch in, and the
+// substitution is the only half that has to be reversed.
+const encodeSegment = (segment) => segment.replace(/[^a-zA-Z0-9]/g, '-');
+
+// Deep enough for any real project path, shallow enough that a pathological
+// name cannot walk the whole disk.
+const MAX_DEPTH = 12;
+
 function extractCwdFromJsonl(filePath) {
   try {
     const lines = fs.readFileSync(filePath, 'utf8').split('\n');
@@ -26,7 +36,73 @@ function resolveWorktreePath(cwd) {
   return cwd;
 }
 
-function deriveProjectPath(folderPath) {
+/**
+ * Resolve `-Users-me-Projects-wooton-pad` back to `/Users/me/Projects/wooton-pad`
+ * by walking the filesystem, one level per matched segment.
+ *
+ * The encoding is lossy — `/`, `.`, `_`, ` ` and `-` all become the same dash —
+ * so the name alone cannot be decoded. What resolves it is the disk: at each
+ * level only the directories actually there are candidates, and a candidate is
+ * accepted when its own encoded name matches the next run of the folder name.
+ * `wooton-pad` therefore wins over a `wooton` that does not exist.
+ *
+ * Ambiguity that survives all of that (two real directories, both matching)
+ * takes the first that leads to a complete match, and returns null when none
+ * does — a guess would be worse than the caller's own fallback.
+ */
+function decodeFolderName(name, root) {
+  const walk = (dir, rest, depth) => {
+    if (!rest) return dir;
+    if (depth > MAX_DEPTH) return null;
+    let entries;
+    try {
+      // Symlinks count: /tmp and /var are links on macOS, and a project living
+      // under a linked home or volume is ordinary. Confirmed with a stat below
+      // rather than trusted, so a link to a file is not walked into.
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+        .filter(e => e.isDirectory() || e.isSymbolicLink());
+    } catch {
+      return null;
+    }
+    for (const entry of entries) {
+      const encoded = encodeSegment(entry.name);
+      if (!encoded) continue;
+      const next = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        try {
+          if (!fs.statSync(next).isDirectory()) continue;
+        } catch { continue; }
+      }
+      if (rest === encoded) return next;
+      if (rest.startsWith(encoded + '-')) {
+        const found = walk(next, rest.slice(encoded.length + 1), depth + 1);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+  // A leading dash is the root slash the encoder ate. A native Windows path has
+  // no leading slash to eat — it starts at a drive, and `C:\` encodes to `C--`,
+  // so the walk has to begin at that drive instead of at `/`. A POSIX name
+  // always starts with a dash, so the two cannot be confused. An explicit root
+  // wins over both: the caller has already said where the walk starts.
+  const raw = String(name || '');
+  const drive = root === undefined && raw.match(/^([A-Za-z])--(.+)$/);
+  if (drive) return walk(`${drive[1]}:\\`, drive[2], 0);
+
+  const trimmed = raw.replace(/^-+/, '');
+  return trimmed ? walk(root === undefined ? '/' : root, trimmed, 0) : null;
+}
+
+/**
+ * @param {string} folderPath  the directory inside ~/.claude/projects
+ * @param {string} [folderName] its name, used to resolve a project that has no
+ *   transcript naming it — a folder just created, or one whose only transcript
+ *   is the stub the CLI writes for a session abandoned before its first turn.
+ *   Without this a project with no usable transcript resolves to nothing and
+ *   disappears from every view in the app.
+ */
+function deriveProjectPath(folderPath, folderName) {
   try {
     const entries = fs.readdirSync(folderPath, { withFileTypes: true });
     // Check direct .jsonl files first
@@ -58,7 +134,7 @@ function deriveProjectPath(folderPath) {
       } catch {}
     }
   } catch {}
-  return null;
+  return decodeFolderName(folderName || path.basename(folderPath || ''));
 }
 
-module.exports = { deriveProjectPath };
+module.exports = { deriveProjectPath, decodeFolderName };

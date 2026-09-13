@@ -1,14 +1,45 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+/**
+ * Register an IPC listener and hand back the way to remove it.
+ *
+ * The `_event` argument is dropped rather than forwarded: it carries a
+ * `sender` the renderer has no business holding, and every caller here only
+ * ever wanted the payload.
+ *
+ * @param {string} channel
+ * @param {(...args: unknown[]) => void} callback
+ * @returns {() => void} unsubscribe — safe to call more than once
+ */
+function subscribe(channel, callback) {
+  const handler = (_event, ...args) => callback(...args);
+  ipcRenderer.on(channel, handler);
+  return () => ipcRenderer.removeListener(channel, handler);
+}
+
 contextBridge.exposeInMainWorld('api', {
   // Invoke (request-response)
   getPlans: () => ipcRenderer.invoke('get-plans'),
   getPlansDir: () => ipcRenderer.invoke('get-plans-dir'),
   readPlan: (filename) => ipcRenderer.invoke('read-plan', filename),
   savePlan: (filePath, content) => ipcRenderer.invoke('save-plan', filePath, content),
+  // Account notes / TODO lists — stored in the active account's Claude home,
+  // never in a project. Every call takes a bare filename; the main process
+  // resolves it inside that directory and refuses anything that escapes.
+  getNotes: () => ipcRenderer.invoke('get-notes'),
+  getNotesDir: () => ipcRenderer.invoke('get-notes-dir'),
+  readNote: (filename) => ipcRenderer.invoke('read-note', filename),
+  saveNote: (filePath, content) => ipcRenderer.invoke('save-note', filePath, content),
+  createNote: (options) => ipcRenderer.invoke('create-note', options),
+  deleteNote: (filename) => ipcRenderer.invoke('delete-note', filename),
+  toggleNoteTodo: (filename, index) => ipcRenderer.invoke('toggle-note-todo', filename, index),
+  setNoteProjects: (filename, projectPaths) => ipcRenderer.invoke('set-note-projects', filename, projectPaths),
   refreshStats: () => ipcRenderer.invoke('refresh-stats'),
   getMemories: () => ipcRenderer.invoke('get-memories'),
-  getProjects: (showArchived) => ipcRenderer.invoke('get-projects', showArchived),
+  // `{ visible, all }` — the archive-filtered tree and the unfiltered one, from
+  // one pass over the cache. Both are needed on every refresh and neither can be
+  // derived from the other here; see buildProjectSets in session-cache.js.
+  getProjectSets: () => ipcRenderer.invoke('get-project-sets'),
   getActiveSessions: () => ipcRenderer.invoke('get-active-sessions'),
   getSessionStatuses: () => ipcRenderer.invoke('get-session-statuses'),
   getActiveTerminals: () => ipcRenderer.invoke('get-active-terminals'),
@@ -18,12 +49,21 @@ contextBridge.exposeInMainWorld('api', {
   archiveSession: (id, archived) => ipcRenderer.invoke('archive-session', id, archived),
   // Deletes the .jsonl as well as the cache rows. Unrecoverable — the caller
   // confirms first.
-  deleteSession: (id) => ipcRenderer.invoke('delete-session', id),
+  deleteSession: (id, projectPath) => ipcRenderer.invoke('delete-session', id, projectPath),
   // Aggregated facts about one session, read from its transcript on demand.
   getSessionMeta: (id) => ipcRenderer.invoke('get-session-meta', id),
   openTerminal: (id, projectPath, isNew, sessionOptions) => ipcRenderer.invoke('open-terminal', id, projectPath, isNew, sessionOptions),
   search: (type, query, titleOnly) => ipcRenderer.invoke('search', type, query, titleOnly),
   readSessionJsonl: (sessionId) => ipcRenderer.invoke('read-session-jsonl', sessionId),
+  // Sub-agents a session spawned with the Task tool. They have transcripts but
+  // no session rows, so they appear only in the session's side panel.
+  getSessionSubagents: (sessionId) => ipcRenderer.invoke('get-session-subagents', sessionId),
+  readSubagentJsonl: (sessionId, agentId) => ipcRenderer.invoke('read-subagent-jsonl', sessionId, agentId),
+  getSubagentCounts: (sessionIds) => ipcRenderer.invoke('get-subagent-counts', sessionIds),
+  // One window of a transcript, newest first. `before` pages upward; a window
+  // never spans a `/compact` boundary — see transcript-window.js.
+  readSessionTranscript: (sessionId, opts) => ipcRenderer.invoke('read-session-transcript', sessionId, opts),
+  sessionCompacts: (sessionId) => ipcRenderer.invoke('session-compacts', sessionId),
 
   // Settings
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
@@ -47,6 +87,17 @@ contextBridge.exposeInMainWorld('api', {
   readAccountConfigFile: (id, name) => ipcRenderer.invoke('read-account-config-file', id, name),
   checkAccountAuth: (id) => ipcRenderer.invoke('check-account-auth', id),
   getAccountStats: (id) => ipcRenderer.invoke('get-account-stats', id),
+  // MCP servers and plugins configured in that account's Claude home.
+  // checkAccountMcp takes an inventory id, never a command: what runs is read
+  // back from the account's own files in the main process.
+  getAccountMcp: (id) => ipcRenderer.invoke('get-account-mcp', id),
+  checkAccountMcp: (id, serverId) => ipcRenderer.invoke('check-account-mcp', id, serverId),
+  addAccountMcp: (id, definition) => ipcRenderer.invoke('add-account-mcp', id, definition),
+  removeAccountMcp: (id, name) => ipcRenderer.invoke('remove-account-mcp', id, name),
+  // Plugin marketplaces. The catalogue is read from the marketplace checkouts
+  // already on disk; installing runs `claude plugin …` as that account.
+  getPluginCatalog: (id, options) => ipcRenderer.invoke('get-plugin-catalog', id, options),
+  pluginCommand: (id, action, options) => ipcRenderer.invoke('plugin-command', id, action, options),
   getHomedir: () => ipcRenderer.invoke('get-homedir'),
   getEffectiveSettings: (projectPath) => ipcRenderer.invoke('get-effective-settings', projectPath),
   getScheduleCreatorCommand: () => ipcRenderer.invoke('get-schedule-creator-command'),
@@ -57,9 +108,15 @@ contextBridge.exposeInMainWorld('api', {
   browseFolder: () => ipcRenderer.invoke('browse-folder'),
   addProject: (projectPath) => ipcRenderer.invoke('add-project', projectPath),
   removeProject: (projectPath) => ipcRenderer.invoke('remove-project', projectPath),
-  getProjectInfo: (projectPath) => ipcRenderer.invoke('get-project-info', projectPath),
+  // `{ force: true }` overrides every polling interval — see project-polling.js.
+  getProjectInfo: (projectPath, opts) => ipcRenderer.invoke('get-project-info', projectPath, opts),
   getProjectDetail: (projectPath) => ipcRenderer.invoke('get-project-detail', projectPath),
+  // Per-project flags: `{ hasCompose, composeCheckedAt, archived }` by path.
+  getProjectMeta: () => ipcRenderer.invoke('get-project-meta'),
+  setProjectArchived: (projectPath, archived) => ipcRenderer.invoke('set-project-archived', projectPath, archived),
   getProjectGitCache: (projectPath) => ipcRenderer.invoke('get-project-git-cache', projectPath),
+  // Working-tree diff only — cheap enough to poll. See main.js.
+  getProjectChanges: (projectPath) => ipcRenderer.invoke('get-project-changes', projectPath),
   getFileDiff: (projectPath, filePath) => ipcRenderer.invoke('get-file-diff', projectPath, filePath),
   gitBranches: (projectPath) => ipcRenderer.invoke('git-branches', projectPath),
   gitCheckout: (projectPath, branch) => ipcRenderer.invoke('git-checkout', projectPath, branch),
@@ -82,6 +139,7 @@ contextBridge.exposeInMainWorld('api', {
   getGitUserInfo: (projectPath) => ipcRenderer.invoke('get-git-user-info', projectPath),
   deleteWorktree: (projectPath, worktreePath) => ipcRenderer.invoke('delete-worktree', projectPath, worktreePath),
   getFileTree: (projectPath) => ipcRenderer.invoke('get-file-tree', projectPath),
+  listPathCompletions: (projectPath, token) => ipcRenderer.invoke('list-path-completions', projectPath, token),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
 
   // Send (fire-and-forget)
@@ -90,51 +148,36 @@ contextBridge.exposeInMainWorld('api', {
   closeTerminal: (id) => ipcRenderer.send('close-terminal', id),
 
   // Listeners (main → renderer)
-  onTerminalData: (callback) => {
-    ipcRenderer.on('terminal-data', (_event, sessionId, data) => callback(sessionId, data));
-  },
-  onSessionDetected: (callback) => {
-    ipcRenderer.on('session-detected', (_event, tempId, realId) => callback(tempId, realId));
-  },
-  onProcessExited: (callback) => {
-    ipcRenderer.on('process-exited', (_event, sessionId, exitCode) => callback(sessionId, exitCode));
-  },
-  onTerminalNotification: (callback) => {
-    ipcRenderer.on('terminal-notification', (_event, sessionId, message) => callback(sessionId, message));
-  },
-  onSessionStatus: (callback) => {
-    ipcRenderer.on('session-status', (_event, sessionId, status) => callback(sessionId, status));
-  },
-  onWindowFullscreen: (callback) => {
-    ipcRenderer.on('window-fullscreen', (_event, isFullscreen) => callback(isFullscreen));
-  },
+  //
+  // Every one of these returns its own unsubscribe. A component that mounts
+  // once per session — SessionSdkApp is keyed by session id — would otherwise
+  // leave a live listener behind on every switch, and those stale closures do
+  // not go quiet: they read the session id off the shared store, so the guard
+  // at the top of each handler still passes and the whole render runs again
+  // for every message, once per mount the app has ever made.
+  onTerminalData: (callback) => subscribe('terminal-data', callback),
+  onSessionDetected: (callback) => subscribe('session-detected', callback),
+  onProcessExited: (callback) => subscribe('process-exited', callback),
+  onTerminalNotification: (callback) => subscribe('terminal-notification', callback),
+  onSessionStatus: (callback) => subscribe('session-status', callback),
+  onWindowFullscreen: (callback) => subscribe('window-fullscreen', callback),
   // SDK-backed sessions: the conversation as structured messages, where a PTY
   // session sends terminal bytes over `terminal-data`.
-  onSdkMessage: (callback) => {
-    ipcRenderer.on('sdk-message', (_event, sessionId, message) => callback(sessionId, message));
-  },
-  onSdkPermissionRequest: (callback) => {
-    ipcRenderer.on('sdk-permission-request', (_event, sessionId, request) => callback(sessionId, request));
-  },
-  onSdkPermissionCancelled: (callback) => {
-    ipcRenderer.on('sdk-permission-cancelled', (_event, sessionId, requestId) => callback(sessionId, requestId));
-  },
+  onSdkMessage: (callback) => subscribe('sdk-message', callback),
+  onSdkPermissionRequest: (callback) => subscribe('sdk-permission-request', callback),
+  onSdkPermissionCancelled: (callback) => subscribe('sdk-permission-cancelled', callback),
   sdkPermissionResponse: (requestId, decision) => {
     ipcRenderer.send('sdk-permission-response', requestId, decision);
   },
   // An MCP server asking the user directly — a form or a sign-in link. Same
   // pause as a permission prompt, a different reply shape.
-  onSdkElicitationRequest: (callback) => {
-    ipcRenderer.on('sdk-elicitation-request', (_event, sessionId, request) => callback(sessionId, request));
-  },
+  onSdkElicitationRequest: (callback) => subscribe('sdk-elicitation-request', callback),
   sdkElicitationResponse: (requestId, decision) => {
     ipcRenderer.send('sdk-elicitation-response', requestId, decision);
   },
   // A blocking dialog the CLI asked this app to draw — today the offer to
   // retry a refused turn on the fallback model.
-  onSdkDialogRequest: (callback) => {
-    ipcRenderer.on('sdk-dialog-request', (_event, sessionId, request) => callback(sessionId, request));
-  },
+  onSdkDialogRequest: (callback) => subscribe('sdk-dialog-request', callback),
   sdkDialogResponse: (requestId, decision) => {
     ipcRenderer.send('sdk-dialog-response', requestId, decision);
   },
@@ -143,6 +186,10 @@ contextBridge.exposeInMainWorld('api', {
   // How many sessions want something, for the dock badge — and which ones are
   // blocked, so a newly blocked one can bounce the icon. See main.js.
   reportAttention: (summary) => ipcRenderer.send('attention-summary', summary),
+  // A whole prompt for an SDK session. `content` is a string, or the Messages
+  // API content blocks a prompt with a pasted image needs — see
+  // composer-attachments.js. `sendInput` above stays the PTY's channel.
+  sdkSendPrompt: (sessionId, content) => ipcRenderer.invoke('sdk-send-prompt', sessionId, content),
   sdkInterrupt: (sessionId) => ipcRenderer.invoke('sdk-interrupt', sessionId),
   sdkSetPermissionMode: (sessionId, mode) => ipcRenderer.invoke('sdk-set-permission-mode', sessionId, mode),
   sdkCommands: (sessionId) => ipcRenderer.invoke('sdk-commands', sessionId),
@@ -179,9 +226,7 @@ contextBridge.exposeInMainWorld('api', {
   updaterCheck: () => ipcRenderer.invoke('updater-check'),
   updaterDownload: () => ipcRenderer.invoke('updater-download'),
   updaterInstall: () => ipcRenderer.invoke('updater-install'),
-  onUpdaterEvent: (callback) => {
-    ipcRenderer.on('updater-event', (_event, type, data) => callback(type, data));
-  },
+  onUpdaterEvent: (callback) => subscribe('updater-event', callback),
 
   // MCP bridge (main → renderer)
   onMcpOpenDiff: (callback) => {
@@ -205,9 +250,7 @@ contextBridge.exposeInMainWorld('api', {
   saveFileForPanel: (filePath, content) => ipcRenderer.invoke('save-file-for-panel', filePath, content),
   watchFile: (filePath) => ipcRenderer.invoke('watch-file', filePath),
   unwatchFile: (filePath) => ipcRenderer.invoke('unwatch-file', filePath),
-  onFileChanged: (callback) => {
-    ipcRenderer.on('file-changed', (_event, filePath) => callback(filePath));
-  },
+  onFileChanged: (callback) => subscribe('file-changed', callback),
   onLaunchProjectSession: (callback) => {
     ipcRenderer.on('launch-project-session', (_event, projectPath, continueSession) => callback(projectPath, continueSession));
   },

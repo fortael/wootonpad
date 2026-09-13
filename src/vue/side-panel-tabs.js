@@ -1,11 +1,15 @@
-// The session side panel's three panes, in one place so the rail that opens
-// them and the panel that renders them cannot drift apart.
+// The session side panel's panes, in one place so the rail that opens them
+// and the panel that renders them cannot drift apart.
 import { store } from './store.js';
 
 export const TAB_KEY = 'sessionSidePanelTab';
 
 export const TABS = [
   { id: 'changes', label: 'Uncommitted changes', icon: 'file-diff' },
+  { id: 'todos', label: 'TODOs and plans', icon: 'list-todo' },
+  // Sub-agents have transcripts but no session rows, so this rail is the only
+  // place in the app they are visible at all.
+  { id: 'tasks', label: 'Background tasks', icon: 'bot' },
   { id: 'containers', label: 'Containers', icon: 'container' },
   { id: 'shell', label: 'Shell', icon: 'terminal' },
 ];
@@ -21,6 +25,20 @@ export function loadSidePanelTab() {
   if (saved && IDS.has(saved)) return saved;
   if (!saved && legacy === '1') return TABS[0].id;
   return null;
+}
+
+/**
+ * Show a file in the panel, read-only, over whatever pane is open.
+ *
+ * Opens the panel if it is closed — the pane behind is arbitrary at that point,
+ * and closing the file lands on it, which is the same place the diff overlay
+ * lands. `path` is absolute; the chat resolves a mention against the session's
+ * own project before calling this.
+ */
+export function openSidePanelFile(path) {
+  if (!path) return;
+  store.sidePanelFile = path;
+  if (!store.sidePanelTab) setSidePanelTab(TABS[0].id);
 }
 
 /** @param {string|null} id */

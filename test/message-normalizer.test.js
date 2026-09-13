@@ -38,6 +38,27 @@ test('string content is accepted as well as blocks', () => {
   assert.deepEqual(normalize(assistant('plain')), [{ kind: 'text', role: 'assistant', text: 'plain' }]);
 });
 
+// A screenshot a tool returned and one the user pasted into the composer are
+// the same block; only the message they arrive in says which side of the
+// transcript they belong on.
+test('an image carries the role of the message it came in', () => {
+  const block = {
+    type: 'image',
+    source: { type: 'base64', media_type: 'image/png', data: 'QUJD' },
+  };
+  assert.deepEqual(normalize(assistant([block])), [
+    { kind: 'image', role: 'assistant', mediaType: 'image/png', data: 'QUJD' },
+  ]);
+  const pasted = normalize({ type: 'user', message: { role: 'user', content: [block] }, session_id: 's' });
+  assert.deepEqual(pasted, [
+    { kind: 'image', role: 'user', mediaType: 'image/png', data: 'QUJD' },
+  ]);
+});
+
+test('an image block with no data is dropped rather than drawn broken', () => {
+  assert.deepEqual(normalize(assistant([{ type: 'image', source: { type: 'url', url: 'x' } }])), []);
+});
+
 // Content blocks are an open set with no exhaustive type to check against, so
 // the runtime card is the only thing standing between a new block and silence.
 test('an unrecognised content block becomes a visible unknown item', () => {
@@ -77,6 +98,33 @@ test('every other stream frame is a delta with no text', () => {
     assert.deepEqual(normalize({ type: 'stream_event', session_id: 's', event }),
       [{ kind: 'delta', target: 'other', text: '' }]);
   }
+});
+
+// What a turn has cost so far, for the working row. The delta is kept
+// alongside it — it is what says the turn is still alive.
+test('message_start reports the prompt the request went out with', () => {
+  assert.deepEqual(normalize({
+    type: 'stream_event',
+    session_id: 's',
+    event: {
+      type: 'message_start',
+      message: { usage: { input_tokens: 12, cache_read_input_tokens: 400, output_tokens: 1 } },
+    },
+  }), [
+    { kind: 'usage', phase: 'start', inputTokens: 412, outputTokens: 1 },
+    { kind: 'delta', target: 'other', text: '' },
+  ]);
+});
+
+test('message_delta reports the answer so far', () => {
+  assert.deepEqual(normalize({
+    type: 'stream_event',
+    session_id: 's',
+    event: { type: 'message_delta', usage: { output_tokens: 87 } },
+  }), [
+    { kind: 'usage', phase: 'delta', inputTokens: 0, outputTokens: 87 },
+    { kind: 'delta', target: 'other', text: '' },
+  ]);
 });
 
 test('session bookkeeping is silent, with the reason recorded', () => {
@@ -135,4 +183,114 @@ test('labels read the way the logs and the card both need', () => {
   assert.equal(messageLabel({ type: 'system', subtype: 'init' }), 'system:init');
   assert.equal(messageLabel({ type: 'assistant' }), 'assistant');
   assert.equal(messageLabel(null), 'malformed');
+});
+
+// ── Recalled memory ───────────────────────────────────────────────
+//
+// The one thing that shapes an answer without appearing in the conversation.
+// The CLI emits it so a renderer can show it; silencing it meant the reply
+// simply knew something, with nothing on screen saying where from.
+
+test('recalled memories become one item carrying every entry', () => {
+  const items = normalize({
+    type: 'system', subtype: 'memory_recall', mode: 'select', session_id: 's', uuid: 'u',
+    memories: [
+      { path: '/home/me/.claude/memory/prefers-tabs.md', scope: 'personal' },
+      { path: 'https://example.test/org.md', scope: 'organization', content: 'Ship on Fridays.' },
+    ],
+  });
+  assert.deepEqual(items, [{
+    kind: 'memory',
+    mode: 'select',
+    memories: [
+      { path: '/home/me/.claude/memory/prefers-tabs.md', scope: 'personal', content: '' },
+      { path: 'https://example.test/org.md', scope: 'organization', content: 'Ship on Fridays.' },
+    ],
+  }]);
+});
+
+// A file-backed entry has no body — the renderer lazy-loads from the path — so
+// an absent `content` must not become the string "undefined".
+test('a memory with no body carries an empty one, not undefined', () => {
+  const [item] = normalize({
+    type: 'system', subtype: 'memory_recall', mode: 'select', session_id: 's', uuid: 'u',
+    memories: [{ path: '/a.md', scope: 'personal' }],
+  });
+  assert.equal(item.memories[0].content, '');
+});
+
+test('a recall that surfaced nothing stays silent', () => {
+  assert.deepEqual(
+    normalize({ type: 'system', subtype: 'memory_recall', mode: 'select', memories: [], session_id: 's', uuid: 'u' }),
+    [{ kind: 'silent', reason: 'memory_recall' }]);
+});
+
+// A slash command's output is not Claude talking. Live it arrives bare — the
+// `<local-command-stdout>` envelope is only ever written to the transcript —
+// so the type is the only thing that can tell the two apart.
+test('local command output is its own kind, not assistant prose', () => {
+  assert.deepEqual(
+    normalize({ type: 'system', subtype: 'local_command_output', content: '  0% used\n', session_id: 's' }),
+    [{ kind: 'command_output', text: '0% used', isError: false }]);
+});
+
+test('a command that printed nothing is silent', () => {
+  assert.deepEqual(
+    normalize({ type: 'system', subtype: 'local_command_output', content: '   ', session_id: 's' }),
+    [{ kind: 'silent', reason: 'local_command_output' }]);
+});
+
+// A local command's output is delivered as an assistant message the CLI wrote
+// itself. There is no local_command_output on that path and no
+// <local-command-stdout> envelope — both are transcript-only — so the synthetic
+// model id is the only thing separating "the CLI printed this" from "Claude
+// said this". Without it, /usage read as Claude reciting your usage.
+const synthetic = (content) => ({
+  type: 'assistant', session_id: 's',
+  message: { role: 'assistant', model: '<synthetic>', content },
+});
+
+test('a synthetic assistant message is command output, not Claude talking', () => {
+  assert.deepEqual(normalize(synthetic([{ type: 'text', text: '  0% used  ' }])),
+    [{ kind: 'command_output', text: '0% used', isError: false }]);
+});
+
+test('a real assistant message with the same words stays prose', () => {
+  assert.deepEqual(normalize(assistant([{ type: 'text', text: '0% used' }])),
+    [{ kind: 'text', role: 'assistant', text: '0% used' }]);
+});
+
+// Only the prose is re-labelled; a synthetic message carrying anything else
+// keeps it as whatever it is.
+test('non-text blocks on a synthetic message are left alone', () => {
+  const items = normalize(synthetic([
+    { type: 'text', text: 'ran it' },
+    { type: 'tool_use', id: 't1', name: 'Read', input: {} },
+  ]));
+  assert.deepEqual(kinds(items), ['command_output', 'tool_use']);
+});
+
+// `system:error` is how a session says it could not start or could not go on.
+// It is not in the shipped types, so it lands in the undeclared handler — and
+// as an "unknown message" card it was the one thing in the transcript that
+// mattered most, drawn as the thing that looks most like a glitch.
+test('a session error is a notice, not an unknown card', () => {
+  assert.deepEqual(normalize({
+    type: 'system', subtype: 'error', session_id: 's',
+    error: 'Claude Code native binary at /usr/local/bin/claude exists but failed to launch.',
+  }), [{
+    kind: 'notice', level: 'error',
+    text: 'Claude Code native binary at /usr/local/bin/claude exists but failed to launch.',
+  }]);
+});
+
+// Without a message there is nothing to show but the shape, and the unknown
+// card is still the honest answer for that.
+test('an error with no message stays an unknown card', () => {
+  for (const message of [
+    { type: 'system', subtype: 'error', session_id: 's' },
+    { type: 'system', subtype: 'error', session_id: 's', error: '   ' },
+  ]) {
+    assert.equal(normalize(message)[0].kind, 'unknown');
+  }
 });

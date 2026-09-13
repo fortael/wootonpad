@@ -13,7 +13,7 @@
             {{ ' ' + timeStr }}
           </div>
         </div>
-        <button class="slug-group-archive-btn" data-tooltip="Archive all sessions in group" @click.stop="archiveAll" v-html="archiveSvg"></button>
+        <button class="slug-group-archive-btn" data-tooltip="Archive all sessions in group" @click.stop="archiveAll"><SbIcon name="archive" :size="13" tone="muted" /></button>
       </div>
     </div>
 
@@ -57,6 +57,7 @@
 <script setup>
 import { computed, ref } from 'vue';
 import SessionItem from './SessionItem.vue';
+import SbIcon from './SbIcon.vue';
 
 const props = defineProps({
   slug: { type: String, required: true },
@@ -129,5 +130,4 @@ async function archiveAll() {
   emit('archive-all', props.sessions);
 }
 
-const archiveSvg = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>';
 </script>

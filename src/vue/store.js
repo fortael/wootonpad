@@ -60,7 +60,14 @@ export const store = reactive({
   loadingStatus: '',
   accountSwitching: false,
   searchQuery: '',
-  searchTitlesOnly: false,
+  // ⌘K palette — SpotlightApp.vue. Toggled from the shell (the + beside the
+  // search field, the ⌘K chip) as well as by the shortcut itself.
+  spotlightOpen: false,
+
+  // The plan's 5-hour and 7-day meters, as last reported by a `rate_limit_event`
+  // — see rate-limits.js. Per account rather than per session, which is why it
+  // lives here and not in the chat component that receives the event.
+  rateLimits: null,
 
   // Settings panel
   settingsOpen: false,
@@ -78,13 +85,29 @@ export const store = reactive({
   // different answers for it would only ever read as a bug. Persisted into
   // `ui_state` — see the watcher in App.vue.
   highlightFresh: true,
+  // sessionId → 1..3, from the last Summarize run: where the model says the
+  // work is worth looking at next. The board draws a flag and an outline off
+  // it. Deliberately not persisted — it describes a set of transcripts as they
+  // were at one moment, and a stale flag is worse than none.
+  boardFocus: new Map(),
   boardSplitHeight: 380,          // px, height of the session pane under the board
   // projectPath the board is scoped to, or null for every project. It lives
   // here rather than in SessionBoardApp because the control is in the board's
   // sidebar and the rendering is in the board — two siblings, one truth.
   boardProjectFilter: null,
   showJsonl: false,
+  // A sub-agent's transcript, open in the main area. It is not a session — it
+  // has no row and no card — so this is its only presence in the app's state.
+  subagentViewOpen: false,
+  // sessionId → number of sub-agents still working, for the sidebar rows and
+  // the board cards. Only running sessions are ever polled: an agent cannot
+  // outlive the CLI process that spawned it.
+  subagentCounts: new Map(),
   planViewerOpen: false,
+  // What the Markdown pane is currently showing: 'plan' or 'note'. The two
+  // come from different directories with different write guards, so the save
+  // needs to know which one it is looking at.
+  planViewerKind: 'plan',
   gridViewActive: false,
   gridViewerCount: '',
   accountViewerOpen: false,      // Accounts tab detail panel in the main area
@@ -104,6 +127,10 @@ export const store = reactive({
   // its buttons without issuing a second call — get-project-detail broadcasts
   // `projects-changed`, which re-renders the whole sidebar, so it is not free.
   sidePanelDetail: null,
+  // An absolute path the panel is showing read-only, over whatever pane is
+  // open. Set by clicking an `@file` mention in the chat — the answer to "what
+  // is in that file" belongs beside the conversation, not in place of it.
+  sidePanelFile: null,
 
   // Project avatars: projectPath → data: URL string
   avatarDataUrls: {},

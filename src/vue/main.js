@@ -2,9 +2,25 @@ import { createApp } from 'vue';
 import { store } from './store.js';
 import App from './components/App.vue';
 import ViewerContentApp from './components/ViewerContentApp.vue';
+import SdkGridCard from './components/SdkGridCard.vue';
+import { matchProjectPaths } from './project-search.js';
 
 // Expose store for direct mutation from app.js
 window.vueStore = store;
+
+// app.js runs the sessions-tab search and needs the same project matcher the
+// board uses — it is not a module, so it reads this.
+window.sbMatchProjectPaths = matchProjectPaths;
+
+// Status writes go straight in, and deliberately so.
+//
+// They were briefly queued to the next frame, on the theory that a burst of
+// status messages was a burst of board re-renders. Measured, it is not: the
+// extra renders are a couple of milliseconds of JS, and the layout and paint
+// that actually cost something happen once per frame no matter how many
+// mutations landed in it. Batching changed nothing — 11.8 against 12.1 layouts
+// a second on the same churn — and cost a frame of latency plus an invariant
+// that every writer had to respect. Left direct.
 
 // Stub bridge objects — populated by App.vue onMounted (via template refs).
 // These run synchronously during app.mount(), before any other script executes.
@@ -12,7 +28,22 @@ window.vueSidebar = {
   store,
   setProjects(projects) { store.projects = projects.map(p => ({ ...p })); },
   setAllProjects(projects) { store.allProjects = projects.map(p => ({ ...p })); },
-  setActivePtyIds(ids) { store.activePtyIds = new Set(ids); },
+  // Assigned only when the set actually changed. app.js polls the live PTYs
+  // every three seconds and the answer is usually the same one as last time;
+  // a fresh Set every poll is a fresh identity, and that alone re-ran the
+  // board's column pass and the sidebar's filters on a timer, for nothing.
+  setActivePtyIds(ids) {
+    const next = ids instanceof Set ? ids : new Set(ids);
+    const current = store.activePtyIds;
+    if (current.size === next.size) {
+      let same = true;
+      for (const id of next) {
+        if (!current.has(id)) { same = false; break; }
+      }
+      if (same) return;
+    }
+    store.activePtyIds = next;
+  },
   setActiveSession(id) { store.activeSessionId = id; },
   setBusy(sessionId, busy) {
     if (busy) store.sessionBusyState.set(sessionId, true);
@@ -31,6 +62,12 @@ window.vueSidebar = {
   // session clears the unread mark; if the session is also sitting on a dialog
   // it is still sitting on it, and the board must keep saying so.
   clearResponseReady(sessionId) { store.responseReadySessions.delete(sessionId); },
+  // The board's DONE column, mirrored from app.js's own set. Here rather than
+  // written into the store from app.js, so one module owns these collections.
+  setReadPending(sessionId, pending) {
+    if (pending) store.readPendingSessions.add(sessionId);
+    else store.readPendingSessions.delete(sessionId);
+  },
   setFilters({ showStarredOnly, showRunningOnly, showTodayOnly, showArchived }) {
     if (showStarredOnly !== undefined) store.showStarredOnly = showStarredOnly;
     if (showRunningOnly !== undefined) store.showRunningOnly = showRunningOnly;
@@ -73,6 +110,17 @@ window.createViewerPanel = function(container, opts = {}) {
     destroy: () => instance.destroy(),
     getContent: () => instance.getContent(),
   };
+};
+
+// The transcript of one SDK-backed session, mounted into a grid card.
+//
+// grid-view.js builds the grid imperatively out of plain DOM, so the card is
+// handed a container and gets back the way to take it down again — the same
+// shape createViewerPanel above uses for the file viewer.
+window.createSdkGridCard = function(container, sessionId) {
+  const app = createApp(SdkGridCard, { sessionId });
+  app.mount(container);
+  return { destroy: () => app.unmount() };
 };
 
 // Stubs for component bridge APIs — App.vue onMounted fills these in

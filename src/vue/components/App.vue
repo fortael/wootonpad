@@ -36,10 +36,10 @@
     <CommandBar
       :model-value="store.searchQuery"
       :placeholder="searchPlaceholder"
-      add-title="Add project"
+      :add-title="`Quick open (${modLabel}K)`"
       @update:model-value="onSearchValue"
-      @add="onAddProject"
-      @spotlight="focusSearch"
+      @add="openSpotlight"
+      @spotlight="openSpotlight"
     >
       <template #field-actions>
         <button
@@ -49,14 +49,6 @@
           aria-label="Clear search"
           @click="doClearSearch"
         >&times;</button>
-        <button
-          type="button"
-          class="sbx-commandbar__chip"
-          :class="{ 'is-active': store.searchTitlesOnly }"
-          data-tooltip="Search titles only"
-          aria-label="Search titles only"
-          @click="toggleTitlesOnly"
-        >Tt</button>
       </template>
     </CommandBar>
 
@@ -64,11 +56,11 @@
          wherever you are. Renders nothing when nothing is running. The board
          is the exception — it already shows every live session as a card, so
          a rail of the same projects above it is noise. -->
-    <AttentionRail
+    <UnreadRail
       v-if="store.activeTab !== 'board'"
-      :items="attentionProjects"
-      :active-name="attentionActiveName"
-      @select="onSelectAttentionName"
+      :items="unreadRows"
+      :active-session-id="store.activeSessionId || ''"
+      @select="openUnread"
     />
 
     <!-- Shared with the board: its cards are the same sessions under the same
@@ -99,24 +91,22 @@
     </FilterTabs>
 
     <!-- Sidebar content panels (v-show keeps DOM alive for vanilla JS queries) -->
-    <div id="sidebar-content" class="sbx-sidebar-panel" v-show="sessionListVisible && !store.accountSwitching">
+    <div id="sidebar-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="sessionListVisible && !store.accountSwitching">
       <SidebarApp :callbacks="sidebarCallbacks" />
     </div>
     <div v-if="store.accountSwitching && sessionListVisible" id="account-switch-overlay" class="account-switch-preloader">
       <div class="acct-spinner"></div><span>Switching account…</span>
     </div>
-    <div id="plans-content" class="sbx-sidebar-panel" v-show="store.activeTab === 'plans'">
+    <div id="plans-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'plans'">
       <PlansApp ref="plansRef" :callbacks="planCallbacks" />
     </div>
-    <div id="accounts-content" class="sbx-sidebar-panel" v-show="store.activeTab === 'accounts'">
+    <div id="accounts-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'accounts'">
       <AccountsApp ref="accountsRef" :callbacks="accountsCallbacks" />
     </div>
-    <div id="projects-content" class="sbx-sidebar-panel" v-show="store.activeTab === 'projects'">
+    <div id="projects-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'projects'">
       <ProjectsApp ref="projectsRef" :callbacks="projectsCallbacks" />
     </div>
-    <!-- Not a .sbx-sidebar-panel: this one owns two bounded scroll boxes of
-         its own instead of being a single scrolling column. -->
-    <div id="board-sidebar-content" class="sbx-boardside-panel" v-show="store.activeTab === 'board'">
+    <div id="board-sidebar-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'board'">
       <BoardSidebarApp :callbacks="boardSidebarCallbacks" />
     </div>
   </div>
@@ -155,6 +145,7 @@
         :show-copy-path="true"
         :show-copy-content="true"
         :on-save="planOnSave"
+        :on-close="closePlanViewer"
       />
     </div>
     <SettingsPanelApp v-if="store.settingsOpen" />
@@ -163,6 +154,9 @@
     </div>
     <div id="jsonl-viewer" v-show="store.showJsonl">
       <JsonlViewerApp ref="jsonlRef" />
+    </div>
+    <div id="subagent-viewer" v-show="store.subagentViewOpen">
+      <SubagentViewApp ref="subagentRef" />
     </div>
     <div id="account-viewer" v-show="store.accountViewerOpen">
       <AccountViewerApp ref="accountViewerRef" />
@@ -223,24 +217,29 @@
 
   <!-- Dialogs (overlays + popover, rendered via Teleport to body inside the component) -->
   <DialogsApp ref="dialogsRef" />
+
+  <SpotlightApp />
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { store } from '../store.js';
 import SbIcon from './SbIcon.vue';
 import TopNavApp from './TopNavApp.vue';
 import CollapsedRailApp from './CollapsedRailApp.vue';
 import CommandBar from './CommandBar.vue';
 import FilterTabs from './FilterTabs.vue';
-import AttentionRail from './AttentionRail.vue';
+import UnreadRail from './UnreadRail.vue';
 import SidebarApp from './SidebarApp.vue';
 import SessionHeaderApp from './SessionHeaderApp.vue';
 import SessionSidePanelApp from './SessionSidePanelApp.vue';
 import SessionPanelRail from './SessionPanelRail.vue';
 import SessionSdkApp from './SessionSdkApp.vue';
 import { loadSidePanelTab } from '../side-panel-tabs.js';
-import { OPEN_ORDER, mostUrgent, worstColumn, stateFromStore } from '../session-column.js';
+import { isPlainTerminal } from '../session-filter.js';
+import { matchProjectPaths } from '../project-search.js';
+import { OPEN_ORDER, mostUrgent, worstColumn, wantsAttention, unreadSessions, stateFromStore } from '../session-column.js';
+import { parseRateLimitEvent } from '../rate-limits.js';
 import PlansApp from './PlansApp.vue';
 import AccountsApp from './AccountsApp.vue';
 import AccountDropdownApp from './AccountDropdownApp.vue';
@@ -250,11 +249,13 @@ import GridCardsApp from './GridCardsApp.vue';
 import SettingsPanelApp from './SettingsPanelApp.vue';
 import ProjectViewerApp from './ProjectViewerApp.vue';
 import JsonlViewerApp from './JsonlViewerApp.vue';
+import SubagentViewApp from './SubagentViewApp.vue';
 import AccountViewerApp from './AccountViewerApp.vue';
 import SessionBoardApp from './SessionBoardApp.vue';
 import BoardSidebarApp from './BoardSidebarApp.vue';
 import ViewerContentApp from './ViewerContentApp.vue';
 import DialogsApp from './DialogsApp.vue';
+import SpotlightApp from './SpotlightApp.vue';
 
 // ── Template refs ────────────────────────────────────────────────
 const plansRef = ref(null);
@@ -265,12 +266,41 @@ const statusBarRef = ref(null);
 const gridCardsRef = ref(null);
 const projectViewerRef = ref(null);
 const jsonlRef = ref(null);
+const subagentRef = ref(null);
 const accountViewerRef = ref(null);
 const planViewerRef = ref(null);
 const dialogsRef = ref(null);
 const boardRef = ref(null);
 
-const planOnSave = (filePath, content) => window.api.savePlan(filePath, content);
+// One Markdown pane serves plans and account notes, and each has its own
+// path-guarded write in the main process — so the save has to go to the one
+// that owns whatever is open, not to whichever guard is more forgiving.
+// The way out of the full-screen Markdown pane: back to whatever the main
+// area was showing before it — the board, the open session, or the empty
+// placeholder. Without it a plan opened from a session was a room with no
+// door: the pane covers the session view and its own controls are all about
+// the file.
+function closePlanViewer() {
+  store.planViewerOpen = false;
+  window.vuePlans?.clearActive?.();
+  const terminalArea = document.getElementById('terminal-area');
+  const placeholder = document.getElementById('placeholder');
+  if (store.activeTab === 'board') store.showBoard = true;
+  if (store.headerSession) {
+    if (terminalArea) terminalArea.style.display = '';
+    if (placeholder) placeholder.style.display = 'none';
+  } else if (!store.showBoard && placeholder) {
+    placeholder.style.display = '';
+  }
+}
+
+const planOnSave = async (filePath, content) => {
+  if (store.planViewerKind !== 'note') return window.api.savePlan(filePath, content);
+  const result = await window.api.saveNote(filePath, content);
+  // Ticking a box in the editor has to move the count in the sidebar.
+  window.vuePlans?.refreshNotes?.();
+  return result;
+};
 
 // ── Tab config ───────────────────────────────────────────────────
 const TABS = [
@@ -323,18 +353,31 @@ function startBoardResize(event) {
 }
 
 // Board with a session previewed below it: both panes are visible at once.
+// Anything that fills the main area — a document, a transcript, an account,
+// the settings — is showing *instead of* the board and its preview, so the
+// seam between them has nothing left to drag and must not be painted over
+// the top of it.
+const mainViewerOpen = computed(() =>
+  store.planViewerOpen || store.showJsonl || store.subagentViewOpen
+  || store.accountViewerOpen || store.settingsOpen
+);
+
 const boardSplitActive = computed(() =>
-  store.activeTab === 'board' && !!store.boardPreviewId
+  store.activeTab === 'board' && !!store.boardPreviewId && !mainViewerOpen.value
 );
 
 const sessionListVisible = computed(() => store.activeTab === 'sessions');
 
+// Each tab searches what it shows, and the placeholder says which fields —
+// there is no modifier on the field any more, so the rule has to be readable
+// from the bar itself.
 const searchPlaceholder = computed(() => {
   switch (store.activeTab) {
-    case 'plans': return 'Search plans...';
-    case 'projects': return 'Search projects…';
-    case 'board': return 'Search the board...';
-    default: return 'Search sessions...';
+    case 'plans': return 'Search plans by title or text…';
+    case 'projects': return 'Search projects by name or folder…';
+    case 'accounts': return 'Search accounts by name or folder…';
+    case 'board': return 'Search the board by session or project…';
+    default: return 'Search sessions by title or project…';
   }
 });
 
@@ -348,7 +391,7 @@ function onSearchValue(value) {
     const query = store.searchQuery.trim();
     if (!query) { doClearSearch(); return; }
     if (store.activeTab === 'board') { runBoardSearch(query); return; }
-    window.__sb?.search?.(query, store.searchTitlesOnly);
+    window.__sb?.search?.(query);
   }, 200);
 }
 
@@ -358,15 +401,21 @@ function onSearchValue(value) {
 // store.searchMatchIds through the same bridge app.js uses, which is what the
 // board's filterSessions() call already reads.
 let boardSearchIds = null;
+let boardSearchProjectPaths = null;
 
 async function runBoardSearch(query) {
+  // Session titles only: the board is a set of cards labelled by title, and a
+  // hit somewhere in a transcript leaves a card on screen with nothing on it
+  // to say why. Project names come from the list, which the index has no rows
+  // for — see project-search.js.
   try {
-    const results = await window.api.search('session', query, store.searchTitlesOnly);
+    const results = await window.api.search('session', query, true);
     boardSearchIds = new Set(results.map(r => r.id));
   } catch {
     boardSearchIds = null;
   }
-  window.vueSidebar?.setSearch(boardSearchIds, null);
+  boardSearchProjectPaths = matchProjectPaths(store.projects, query);
+  window.vueSidebar?.setSearch(boardSearchIds, boardSearchProjectPaths);
 }
 
 // app.js re-asserts its own (null) search set on every refreshSidebar, and
@@ -376,29 +425,22 @@ async function runBoardSearch(query) {
 watch(() => store.searchMatchIds, (ids) => {
   if (ids === null && boardSearchIds && store.activeTab === 'board' && store.searchQuery.trim()) {
     store.searchMatchIds = boardSearchIds;
+    store.searchMatchProjectPaths = boardSearchProjectPaths;
   }
 });
 
 function doClearSearch() {
   store.searchQuery = '';
   boardSearchIds = null;
+  boardSearchProjectPaths = null;
   if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
   window.__sb?.clearSearch?.();
 }
 
-// No command palette yet — the ⌘K chip parks focus in the search field.
-function focusSearch() {
-  document.querySelector('.sbx-commandbar__input')?.focus();
-}
-
-async function toggleTitlesOnly() {
-  store.searchTitlesOnly = !store.searchTitlesOnly;
-  await window.api?.setSetting('searchTitlesOnly', store.searchTitlesOnly);
-  const query = store.searchQuery.trim();
-  if (!query) return;
-  if (store.activeTab === 'board') runBoardSearch(query);
-  else window.__sb?.search?.(query, store.searchTitlesOnly);
-}
+// The command palette. The sidebar field filters the tab you are on; this
+// crosses all of them — see SpotlightApp.vue.
+const modLabel = /Mac|iPhone|iPad/.test(navigator.platform) ? '\u2318' : 'Ctrl+';
+function openSpotlight() { store.spotlightOpen = true; }
 
 // ── Theme ────────────────────────────────────────────────────────
 // Mirrored onto <html data-theme> — public/css/theme-light.css keys off it.
@@ -416,7 +458,7 @@ function toggleTheme() {
 // One entry per project that currently has a live session, worst status first
 // so the projects wanting an answer sit at the front of the rail.
 const REASONS = {
-  waiting: 'needs input', done: 'response ready', running: 'working', idle: 'running',
+  waiting: 'needs input', done: 'response ready', running: 'working', idle: 'active',
 };
 
 const attentionProjects = computed(() => {
@@ -430,7 +472,7 @@ const attentionProjects = computed(() => {
       projectPath: p.projectPath,
       name: p.projectPath.split('/').filter(Boolean).pop() || p.projectPath,
       status,
-      // Everything in this list is live, so 'idle' still reads as running —
+      // Everything in this list is live, so 'idle' still reads as active —
       // saying otherwise would contradict the session header.
       reason: REASONS[status],
       count: live.length,
@@ -443,35 +485,88 @@ const attentionProjects = computed(() => {
     OPEN_ORDER[a.status] - OPEN_ORDER[b.status] || b.recency - a.recency);
 });
 
+// ── Plan meters ──────────────────────────────────────────────────
+//
+// The 5-hour and 7-day limits belong to the account, not to any one chat, so
+// they are kept here and drawn on the account chip. A terminal session shows
+// them in the CLI's own status line; an SDK session has no status line, which
+// is what `rate_limit_event` is read for — see rate-limits.js.
+//
+// Persisted per account because the event only arrives during a turn: without
+// it, the chip would be blank until something ran.
+
+let limitsKey = '';
+
+async function loadRateLimits() {
+  try {
+    const accountId = await window.api.getActiveAccountId();
+    limitsKey = `rateLimits:${accountId || 'default'}`;
+    store.rateLimits = (await window.api.getSetting(limitsKey)) || null;
+  } catch {
+    store.rateLimits = null;
+  }
+}
+
+window.api.onSdkMessage?.((_sessionId, message) => {
+  if (message?.type !== 'rate_limit_event') return;
+  const limits = parseRateLimitEvent(message.rate_limit_info);
+  if (!limits) return;
+  store.rateLimits = limits;
+  if (limitsKey) window.api.setSetting(limitsKey, limits).catch(() => {});
+});
+
+onMounted(loadRateLimits);
+
 // ── Dock badge ───────────────────────────────────────────────────
 // The two board columns that mean "this wants you": WAITING INPUT and DONE.
-// Sent as ids rather than a count for the waiting half, because main.js has to
+// A session that is working wants nothing and is deliberately not counted —
+// which is why this goes through the board's own precedence rather than
+// reading the collections, since a session can sit in more than one of them.
+//
+// The waiting half is sent as ids rather than a count, because main.js has to
 // tell a session that has *just* become blocked from one that has been blocked
 // for a while — only the first should bounce the icon.
-const attentionSummary = computed(() => ({
-  waiting: [...store.attentionSessions],
-  done: new Set([...store.responseReadySessions, ...store.readPendingSessions]).size,
-}));
+const attentionSummary = computed(() => {
+  const { waiting, done } = wantsAttention(stateFromStore(store));
+  // Sorted so the key below means the same thing twice. The ids come out of a
+  // Set in insertion order, and two runs that agree on which sessions are
+  // waiting can still list them differently.
+  waiting.sort();
+  return { waiting, done: done.length };
+});
 
-watch(attentionSummary, (summary) => window.api?.reportAttention?.(summary),
-  { immediate: true });
+// Watched by value, not by the object.
+//
+// The computed builds a fresh object on every invalidation and `watch`
+// compares by identity, so this used to fire on every status change anywhere —
+// an IPC message and a dock API call each time, usually carrying the number
+// already on the icon. Four status flips a second produced four of them.
+watch(
+  () => {
+    const summary = attentionSummary.value;
+    return `${summary.waiting.join(',')}|${summary.done}`;
+  },
+  () => window.api?.reportAttention?.(attentionSummary.value),
+  { immediate: true },
+);
 
 // Two buttons write this flag — the board's and a project's Sessions tab —
 // so it is persisted here, once, rather than in each of them. app.js owns
 // `ui_state` and the round trip to SQLite; this only reports the change.
 watch(() => store.highlightFresh, (on) => window.__sb?.setHighlightFresh?.(on));
 
-// AttentionRail addresses entries by display name; the rail and the store
-// speak projectPath.
-const attentionActiveName = computed(() =>
-  attentionProjects.value.find(p => p.projectPath === store.attentionProject)?.name || ''
-);
+// ── Unread rail ──────────────────────────────────────────────────
+//
+// The same set the dock badge counts — see unreadSessions() — so a badge
+// reading 1 always has exactly one avatar on the rail explaining it.
+const unreadRows = computed(() => unreadSessions(store.projects, stateFromStore(store)));
 
-function onSelectAttentionName(name) {
-  const hit = attentionProjects.value.find(p => p.name === name);
-  if (hit) onSelectAttentionProject(hit.projectPath);
+function openUnread(session) {
+  if (session) window.__sb?.openSession?.(session);
 }
 
+// The collapsed rail still addresses entries by display name; it and the store
+// speak projectPath.
 function onSelectAttentionProject(projectPath) {
   store.attentionProject = projectPath;
   // The rail is on every tab, so a click from Plans or Projects has to take
@@ -506,7 +601,7 @@ function setTab(tabId) {
 // picking a tab is the same as setting exactly one of the store's filter flags.
 const FILTER_TABS = [
   { id: 'recent', label: 'Recent' },
-  { id: 'running', label: 'Running' },
+  { id: 'active', label: 'Active' },
   { id: 'pinned', label: 'Pinned' },
   { id: 'today', label: 'Today' },
   { id: 'archived', label: 'Archived' },
@@ -514,7 +609,7 @@ const FILTER_TABS = [
 
 function onFilterTab(id) {
   store.sessionFilterTab = id;
-  store.showRunningOnly = id === 'running';
+  store.showRunningOnly = id === 'active';
   store.showStarredOnly = id === 'pinned';
   store.showTodayOnly = id === 'today';
   store.showArchived = id === 'archived';
@@ -539,15 +634,31 @@ function onViewMode(mode) {
 // and xterm keeps its own cols/rows, so every transition ends in a refit.
 // The board's bottom split gets it too: one pane at a time is narrow enough to
 // share that space, and the shell in particular is worth having there.
+//
+// Never over a plain terminal. Changes, containers and a scratch shell are
+// things you want beside a session doing work in a project; a terminal already
+// is a shell in that project, and the rail offering to open a second one next
+// to it is the panel answering a question its own subject already answered.
+// `store.sidePanelTab` is left alone, so the panel comes back by itself on the
+// next real session.
+const headerIsTerminal = computed(() => isPlainTerminal(store.headerSession));
+
 const sidePanelVisible = computed(() =>
-  !!store.sidePanelTab && !!store.headerSession
+  !!store.sidePanelTab && !!store.headerSession && !headerIsTerminal.value
 );
 
 // An SDK-backed session has no xterm to show. Keyed by session id in the
 // template so switching sessions rebuilds the transcript rather than appending
 // one conversation onto another.
+//
+// Not in the grid. This sits inside #terminal-area, where the grid also lives,
+// and it covers the whole of it — so the one chat for the session in the header
+// would be drawn over the grid of all of them. In the grid each session gets its
+// own read-only card instead; see mountChatBody in grid-view.js.
 const sdkSessionVisible = computed(() =>
-  !!store.headerSession && store.sdkSessionIds.has(store.headerSession.sessionId)
+  !!store.headerSession
+  && !store.gridViewActive
+  && store.sdkSessionIds.has(store.headerSession.sessionId)
 );
 
 watch(sidePanelVisible, () => {
@@ -557,7 +668,8 @@ watch(sidePanelVisible, () => {
 // ── Sidebar action callbacks ──────────────────────────────────────
 function onGlobalSettings() { window.__sb?.openGlobalSettings?.(); }
 function onResort() { window.__sb?.resort?.(); }
-function onAddProject() { window.__sb?.addProject?.(); }
+// The command bar's + is parked (see CommandBar.vue) — adding a project is the
+// projects tab's own button now.
 
 // ── Component callbacks ───────────────────────────────────────────
 // Per-session actions are not here: SessionMenu calls window.__sb directly, so
@@ -572,6 +684,7 @@ const sidebarCallbacks = {
 
 const planCallbacks = {
   openPlan: (plan) => window.__sb?.openPlan?.(plan),
+  openNote: (note) => window.openNote?.(note),
 };
 
 // A summary's link has to land exactly where a card click lands, so it goes
@@ -592,7 +705,12 @@ const accountsCallbacks = {
 };
 
 const accountDropdownCallbacks = {
-  switchAccount: (id) => window.__sb?.switchAccount?.(id),
+  switchAccount: async (id) => {
+    await window.__sb?.switchAccount?.(id);
+    // Limits are per account; the ones on screen belong to the old one.
+    store.rateLimits = null;
+    loadRateLimits();
+  },
 };
 
 const projectsCallbacks = {
@@ -611,17 +729,49 @@ const projectViewerCallbacks = {
 };
 
 // ── Mount lifecycle ───────────────────────────────────────────────
+// ── Background tasks ──────────────────────────────────────────────
+// How many sub-agents each running session has out working, for the badge on
+// its sidebar row and its board card. Only running sessions are asked about:
+// a sub-agent lives inside the CLI process that spawned it, so a session that
+// is not running has none. When nothing is running, nothing is polled.
+const SUBAGENT_COUNT_MS = 6000;
+let subagentCountTimer = null;
+
+async function pollSubagentCounts() {
+  const ids = [...new Set([
+    ...store.activePtyIds,
+    ...store.sdkSessionIds,
+    ...[...store.sessionBusyState.entries()].filter(([, busy]) => busy).map(([id]) => id),
+  ])].filter(Boolean);
+
+  if (!ids.length) {
+    if (store.subagentCounts.size) store.subagentCounts.clear();
+    return;
+  }
+  const counts = await window.api.getSubagentCounts(ids).catch(() => null);
+  if (!counts) return;
+  // Rebuilt rather than merged: a session that finished its agents has to lose
+  // the badge, and it says so by being absent from the answer.
+  store.subagentCounts.clear();
+  for (const [id, n] of Object.entries(counts)) store.subagentCounts.set(id, n);
+}
+
 onMounted(async () => {
+  subagentCountTimer = setInterval(pollSubagentCounts, SUBAGENT_COUNT_MS);
+  pollSubagentCounts();
+
   // Re-export component bridge APIs so app.js can call them
   Object.assign(window.vuePlans, {
     setPlans: (list) => plansRef.value?.setPlans(list),
     setActive: (f) => plansRef.value?.setActive(f),
     clearActive: () => plansRef.value?.clearActive(),
+    refreshNotes: () => plansRef.value?.refreshNotes(),
   });
   Object.assign(window.vueAccounts, {
     setAccounts: (list, id) => accountsRef.value?.setAccounts(list, id),
     setActiveAccount: (id) => accountsRef.value?.setActiveAccount(id),
     setUsage: (usage) => accountsRef.value?.setUsage(usage),
+    setSearch: (q) => accountsRef.value?.setSearch(q),
   });
   Object.assign(window.vueAccountDropdown, {
     setAccounts: (list, id, usage) => accountDropdownRef.value?.setAccounts(list, id, usage),
@@ -653,9 +803,29 @@ onMounted(async () => {
     },
     close: () => projectViewerRef.value?.close(),
     setTab: (tab) => projectViewerRef.value?.setTab(tab),
+    // The hand-off from the session side panel's read-only view of a file.
+    openFile: (relPath) => projectViewerRef.value?.openFile(relPath),
   };
   window.vueApp = { setTab };
-  window.vueJsonlViewer = { open: (s) => jsonlRef.value?.open(s) };
+  window.vueJsonlViewer = {
+    open: (s) => jsonlRef.value?.open(s),
+    openSubagent: (sessionId, agent) => jsonlRef.value?.openSubagent(sessionId, agent),
+  };
+
+  // A sub-agent is not a session, so it has no row to click anywhere else —
+  // the side panel's Background tasks pane hands it here. It takes the main
+  // area the way a session does, and renders through the same chat renderer,
+  // with a bar saying which session it belongs to.
+  window.openSubagentTranscript = (sessionId, agent) => {
+    if (!sessionId || !agent) return;
+    window.hideAllViewers?.();
+    const terminalArea = document.getElementById('terminal-area');
+    if (terminalArea) terminalArea.style.display = 'none';
+    const placeholder = document.getElementById('placeholder');
+    if (placeholder) placeholder.style.display = 'none';
+    store.subagentViewOpen = true;
+    subagentRef.value?.open(sessionId, agent);
+  };
   window.vueAccountViewer = {
     load: (id) => accountViewerRef.value?.load(id),
     reload: () => accountViewerRef.value?.reload(),
@@ -699,23 +869,22 @@ onMounted(async () => {
     window._restoreAfterSettings?.();
   };
 
-  // Restore persisted settings
-  const savedTitlesOnly = await window.api?.getSetting('searchTitlesOnly');
-  if (savedTitlesOnly) store.searchTitlesOnly = true;
-
   // Restore theme before anything paints a colour
   applyTheme(localStorage.getItem('theme'));
 
   // Restore filter preferences from localStorage. Older builds persisted four
   // independent flags; fold whichever was on into the matching tab.
-  const savedTab = localStorage.getItem('sessionFilterTab')
-    || (localStorage.getItem('showRunningOnly') === '1' && 'running')
+  // 'running' is what this tab was called before; a stored id from an older
+  // build must not silently fall back to Recent.
+  const storedTab = localStorage.getItem('sessionFilterTab');
+  const savedTab = (storedTab === 'running' ? 'active' : storedTab)
+    || (localStorage.getItem('showRunningOnly') === '1' && 'active')
     || (localStorage.getItem('showStarredOnly') === '1' && 'pinned')
     || (localStorage.getItem('showTodayOnly') === '1' && 'today')
     || (localStorage.getItem('showArchived') === '1' && 'archived')
     || 'recent';
   store.sessionFilterTab = FILTER_TABS.some(t => t.id === savedTab) ? savedTab : 'recent';
-  store.showRunningOnly = store.sessionFilterTab === 'running';
+  store.showRunningOnly = store.sessionFilterTab === 'active';
   store.showStarredOnly = store.sessionFilterTab === 'pinned';
   store.showTodayOnly = store.sessionFilterTab === 'today';
   store.showArchived = store.sessionFilterTab === 'archived';
@@ -738,9 +907,9 @@ onMounted(async () => {
   window.renderPlans = (plans) => {
     window.vuePlans?.setPlans(plans || window.cachedPlans);
   };
-  window.openPlan = async (plan) => {
-    window.vuePlans?.setActive(plan.filename);
-    const result = await window.api.readPlan(plan.filename);
+  // Clear the main area and hand it to the Markdown pane. `kind` is what the
+  // pane's save goes through — see planOnSave.
+  const showMarkdown = (kind, title, filePath, content) => {
     document.getElementById('placeholder').style.display = 'none';
     document.getElementById('terminal-area').style.display = 'none';
     document.getElementById('project-viewer').style.display = 'none';
@@ -748,21 +917,46 @@ onMounted(async () => {
     if (window.vueStore) {
       window.vueStore.settingsOpen = false;
       window.vueStore.showJsonl = false;
+      window.vueStore.planViewerKind = kind;
       window.vueStore.planViewerOpen = true;
     }
-    window.vuePlanViewer?.open(plan.title || plan.filename, result.filePath, result.content);
+    window.vuePlanViewer?.open(title, filePath, content);
   };
-  window.hideAllViewers = () => {
+
+  window.openPlan = async (plan) => {
+    window.vuePlans?.setActive(plan.filename);
+    const result = await window.api.readPlan(plan.filename);
+    showMarkdown('plan', plan.title || plan.filename, result.filePath, result.content);
+  };
+
+  // Notes open in the same pane as plans — same Markdown, same editor, same
+  // preview toggle. Only the directory behind them differs.
+  window.openNote = async (note) => {
+    const result = await window.api.readNote(note.filename);
+    if (!result?.ok) return;
+    showMarkdown('note', note.title || note.filename, result.filePath, result.content);
+  };
+  /**
+   * Clear the main area for whatever is about to take it over.
+   *
+   * `keepBoard` is for the one caller that is *not* taking it over: showing a
+   * session the board itself asked for, in the board's own preview pane. That
+   * exemption used to apply to every caller, so a project — or an account, or
+   * the plans list — opened from the board left the board up and rendered on
+   * top of it.
+   */
+  window.hideAllViewers = (opts) => {
     if (window.vueStore) {
       window.vueStore.planViewerOpen = false;
       window.vueStore.settingsOpen = false;
-      // Opening a session calls through here; that must not close the board
-      // when the board is the thing showing that session.
-      if (!(window.vueStore.activeTab === 'board' && window.vueStore.boardPreviewId)) {
+      if (!(opts?.keepBoard
+        && window.vueStore.activeTab === 'board'
+        && window.vueStore.boardPreviewId)) {
         window.vueStore.showBoard = false;
       }
       window.vueStore.showJsonl = false;
       window.vueStore.accountViewerOpen = false;
+      window.vueStore.subagentViewOpen = false;
     }
     const pv = document.getElementById('project-viewer');
     if (pv) pv.style.display = 'none';
@@ -770,6 +964,10 @@ onMounted(async () => {
     const ta = document.getElementById('terminal-area');
     if (ta) ta.style.display = '';
   };
-  window.hidePlanViewer = window.hideAllViewers;
+  // showSession's way in. The name is historical — it is the board-preview
+  // path, and the only one allowed to leave the board standing.
+  window.hidePlanViewer = () => window.hideAllViewers({ keepBoard: true });
 });
+
+onBeforeUnmount(() => clearInterval(subagentCountTimer));
 </script>

@@ -1,5 +1,32 @@
 <template>
-  <div class="sbx-sdk" :class="{ 'is-asking': !!request }">
+  <!-- A file dropped anywhere on the chat is meant for the next prompt; the
+       composer is a thin strip at the bottom and aiming at it is work. -->
+  <div
+    class="sbx-sdk"
+    :class="{ 'is-asking': !!request, 'is-dropping': dropActive }"
+    @dragenter="onDragEnter"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
+  >
+    <!-- The shape of a long session is mostly where its context was thrown
+         away, and that is the one thing a scrollbar cannot show: the records
+         above a compact are not loaded and have no height to scroll through.
+         So the rail measures the file, not the viewport. -->
+    <div v-if="compactMarks.length" class="sbx-timeline">
+      <div class="sbx-timeline__thumb" :style="viewBand"></div>
+      <button
+        v-for="mark in compactMarks"
+        :key="mark.index"
+        type="button"
+        class="sbx-timeline__notch"
+        :style="{ top: mark.at }"
+        :data-tooltip="mark.label"
+        :aria-label="mark.label"
+        @click="revealRecord(mark.index)"
+      ></button>
+    </div>
+
     <div ref="bodyRef" class="sbx-sdk__body"></div>
     <div v-if="loadingHistory" class="sbx-sdk__loading">Loading history…</div>
 
@@ -21,22 +48,67 @@
       <!-- The session's own commands, not a list this build shipped with.
            A CLI that gains a command, a plugin that adds one, a project with
            its own — all of them appear here without WootonPad knowing. -->
-      <div v-if="menuItems.length" class="sbx-sdk__commands">
+      <div v-if="menuItems.length" ref="menuRef" class="sbx-sdk__commands">
         <button
           v-for="(item, i) in menuItems"
           :key="item.key"
           type="button"
           class="sbx-sdk__command"
-          :class="{ 'is-active': i === commandIndex }"
+          :class="[{ 'is-active': i === commandIndex }, item.scope ? `is-${item.scope}` : '']"
           @mousedown.prevent="pick(item)"
         >
-          <span class="sbx-sdk__command-name">{{ item.label }}</span>
-          <span v-if="item.hint" class="sbx-sdk__command-hint">{{ item.hint }}</span>
+          <span class="sbx-sdk__command-head">
+            <span class="sbx-sdk__command-name">{{ item.label }}</span>
+            <span v-if="item.hint" class="sbx-sdk__command-hint">{{ item.hint }}</span>
+            <span v-if="item.tag" class="sbx-sdk__command-tag">{{ item.tag }}</span>
+          </span>
           <span v-if="item.description" class="sbx-sdk__command-desc">{{ item.description }}</span>
         </button>
       </div>
 
+      <!-- What will ride along with the next prompt. Images go as image blocks;
+           everything else goes as the `@path` mention shown on the chip. -->
+      <div v-if="attachments.length" class="sbx-sdk__chips">
+        <div
+          v-for="item in attachments"
+          :key="item.id"
+          class="sbx-chip"
+          :title="item.mention || item.path || item.name"
+        >
+          <img v-if="item.kind === 'image'" class="sbx-chip__thumb" :src="item.url" alt="" />
+          <SbIcon v-else name="file" :size="13" class="sbx-chip__icon" />
+          <span class="sbx-chip__name">{{ item.name }}</span>
+          <span v-if="item.bytes" class="sbx-chip__size">{{ shortBytes(item.bytes) }}</span>
+          <button
+            type="button"
+            class="sbx-chip__drop"
+            :aria-label="`Remove ${item.name}`"
+            @click="removeAttachment(item.id)"
+          >
+            <SbIcon name="x" :size="11" />
+          </button>
+        </div>
+      </div>
+
       <div class="sbx-sdk__field">
+        <!-- The keyboard path is paste and drop; this is for the times the file
+             is neither on the clipboard nor draggable from where it lives. -->
+        <button
+          type="button"
+          class="sbx-sdk__attach"
+          data-tooltip="Attach a file"
+          aria-label="Attach a file"
+          @click="pickFiles"
+        >
+          <SbIcon name="paperclip" :size="13" />
+        </button>
+        <input
+          ref="fileInputRef"
+          type="file"
+          multiple
+          class="sbx-sdk__filepick"
+          @change="onFilePicked"
+        />
         <textarea
           ref="inputRef"
           v-model="draft"
@@ -45,6 +117,7 @@
           :placeholder="busy ? 'Claude is working — your message will go next' : 'Message Claude…'"
           @keydown="onKey"
           @input="autoGrow"
+          @paste="onPaste"
         ></textarea>
         <!-- Enter sends; nothing else needs saying. The glyph is an
              affordance, not an instruction, and it is the only thing in the
@@ -65,28 +138,42 @@
       <!-- Everything that changes how the next turn runs, on one line under
            the field: what Claude may do on the left, what it runs as on the
            right, and how full the window is at the end. -->
-      <div class="sbx-sdk__controls">
-        <select class="sbx-sdk__select" :value="permissionMode" @change="onPermissionMode">
-          <option v-for="m in PERMISSION_MODES" :key="m.value" :value="m.value">{{ m.label }}</option>
+      <!-- All three are locked while a turn runs. Changing them mid-turn was
+           observed to wedge the session — the prompt never landed and the
+           conversation was gone on reopen — and none of them can affect a turn
+           that has already started anyway. -->
+      <div class="sbx-sdk__controls" :class="{ 'is-locked': busy }">
+        <select
+          class="sbx-sdk__select" :value="permissionMode" :disabled="busy"
+          :title="busy ? LOCKED_HINT : ''" @change="onPermissionMode"
+        >
+          <option v-for="m in modeOptions" :key="m.value" :value="m.value">{{ m.label }}</option>
         </select>
 
         <span class="sbx-sdk__spacer"></span>
 
-        <select class="sbx-sdk__select sbx-sdk__select--model" :value="model" @change="onModel" :title="modelTitle">
+        <select
+          class="sbx-sdk__select sbx-sdk__select--model" :value="model" :disabled="busy"
+          :title="busy ? LOCKED_HINT : modelTitle" @change="onModel"
+        >
           <option v-for="m in models" :key="m.value" :value="m.value">{{ modelLabel(m) }}</option>
         </select>
 
         <select
           v-if="effortLevels.length"
-          class="sbx-sdk__select" :value="effort" @change="onEffort"
+          class="sbx-sdk__select" :value="effort" :disabled="busy"
+          :title="busy ? LOCKED_HINT : ''" @change="onEffort"
         >
           <option v-for="e in effortLevels" :key="e" :value="e">{{ e }}</option>
         </select>
 
         <span
           v-if="context"
+          ref="contextChipRef"
           class="sbx-sdk__context"
-          :title="`${context.totalTokens.toLocaleString()} of ${context.maxTokens.toLocaleString()} tokens`"
+          :title="breakdownOpen ? null : `${context.totalTokens.toLocaleString()} of ${context.maxTokens.toLocaleString()} tokens`"
+          @mouseenter="openBreakdown"
+          @mouseleave="closeBreakdown"
         >
           <UsageRing :value="context.percentage" :size="14" />
           {{ Math.round(context.percentage) }}%
@@ -95,6 +182,20 @@
         <span v-if="init" class="sbx-sdk__about" :title="aboutTitle">v{{ init.claude_code_version }}</span>
       </div>
     </div>
+
+    <!-- Hover breakdown for the ring above. Teleported: the control bar clips
+         its overflow, and this is taller than the bar by design. -->
+    <Teleport to="body">
+      <div
+        v-if="breakdownOpen && context"
+        class="sbx-ctxpop__anchor"
+        :style="breakdownPos"
+        @mouseenter="holdBreakdown"
+        @mouseleave="closeBreakdown"
+      >
+        <ContextBreakdown :usage="context" />
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -103,15 +204,30 @@ import { ref, computed, watch, markRaw, onMounted, onBeforeUnmount, nextTick } f
 import { store } from '../store.js';
 import SbIcon from './SbIcon.vue';
 import UsageRing from './UsageRing.vue';
+import ContextBreakdown from './ContextBreakdown.vue';
+import { placePopover } from '../context-breakdown.js';
 import RequestDialog from './RequestDialog.vue';
 import { normalize } from '../message-normalizer.ts';
 import { modelLabels, defaultModelValue } from '../model-name.js';
+import { controlsFromTranscript } from '../session-controls.js';
 import {
   renderViewItems, renderJsonlEntry, renderJsonlText, mergeLocalCommandEntries,
+  refreshWhen, toolContent, mergeToolGroups, groupOfEntry, markToolDuration,
+  renderToolResult, collapseToolBlock, refreshDayMarkers, refreshStamps, dayKey,
+  mergeSlashOutput, renderUserPrompt,
 } from '../message-render.js';
+import {
+  isImageType, mentionFor, baseName, shortBytes,
+  promptText, promptContent, MAX_IMAGE_BYTES,
+} from '../composer-attachments.js';
+import { prepareImage } from '../composer-image.js';
+import { railBand, viewSpanOf, isPainted } from '../transcript-rail.js';
+import { isExternalPathToken, relativeTime } from '../chat-text.js';
+import { openSidePanelFile } from '../side-panel-tabs.js';
 
 const bodyRef = ref(null);
 const inputRef = ref(null);
+const menuRef = ref(null);
 const draft = ref('');
 const busy = ref(false);
 const unknownCount = ref(0);
@@ -122,13 +238,23 @@ const unknownCount = ref(0);
 const request = ref(null);
 
 // The CLI's own permission modes, in the order they escalate. `bypassPermissions`
-// is deliberately absent: turning off every check is not a dropdown item.
+// and `dontAsk` are deliberately absent: neither is something to reach for from
+// a dropdown mid-conversation.
 const PERMISSION_MODES = [
   { value: 'auto', label: 'Auto' },
   { value: 'default', label: 'Manual' },
   { value: 'acceptEdits', label: 'Accept edits' },
   { value: 'plan', label: 'Plan' },
 ];
+
+// …but a session already running on one of them must not read as Manual, so
+// the mode in force is always an option — it just stops being offered once the
+// session is off it.
+const OTHER_MODES = {
+  dontAsk: "Don't ask",
+  bypassPermissions: 'Bypass',
+};
+const LOCKED_HINT = 'Wait for the turn to finish — this cannot change mid-answer';
 const permissionMode = ref('default');
 const model = ref('');
 // Set once the user picks a row by hand. Until then the picker is only ever
@@ -159,6 +285,13 @@ const modelLabel = (m) => labels.value.get(m.value) || m.displayName;
 const selectedModel = computed(() =>
   models.value.find(m => m.value === model.value) || models.value[0] || null);
 
+const modeOptions = computed(() => {
+  const extra = OTHER_MODES[permissionMode.value];
+  return extra
+    ? [...PERMISSION_MODES, { value: permissionMode.value, label: extra }]
+    : PERMISSION_MODES;
+});
+
 // Effort is per model — Haiku offers none at all, and the picker should not
 // promise a setting the model will ignore.
 const effortLevels = computed(() => selectedModel.value?.supportedEffortLevels || []);
@@ -177,36 +310,101 @@ const sessionId = computed(() => store.headerSession?.sessionId || '');
 // to, exactly as the transcript viewer does when it reads a finished .jsonl.
 let toolResults = new Map();
 
+// tool_use_id → the block already on screen, for the turn currently running.
+// Cleared at the end of every turn, so it holds one turn's calls and not a
+// session's worth of detached DOM.
+let toolNodes = new Map();
+
 // ── Rendering ─────────────────────────────────────────────────────
+//
+// Whether the view is following the bottom is tracked from the scroll event
+// rather than measured when something is about to be written. Reading
+// `scrollHeight` forces the browser to lay out the whole transcript first, and
+// the streaming path used to do it twice per token: on a real transcript that
+// single measurement costs tens of milliseconds, which is more than a frame.
+// A scroll handler reads the same numbers after layout has already happened,
+// so it costs nothing.
 
-function atBottom() {
+/** Is the view parked at the bottom, i.e. should new output be chased? */
+let pinned = true;
+
+/**
+ * The viewport as fractions of the painted transcript — top edge and bottom
+ * edge. The rail's thumb is placed off this; see transcript-rail.js.
+ *
+ * Reactive where `pinned` is not, because it drives something on screen. It is
+ * still only written from the scroll handler, which is the same free read: the
+ * three numbers are taken together, after layout has already happened.
+ */
+const viewSpan = ref({ start: 0, end: 1 });
+
+function readScroll() {
   const el = bodyRef.value;
-  if (!el) return true;
-  return el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+  if (!el) return;
+  pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+  viewSpan.value = viewSpanOf(el);
 }
 
-function stickBottom(stick) {
+function stickBottom() {
   const el = bodyRef.value;
-  if (stick && el) el.scrollTop = el.scrollHeight;
+  if (pinned && el) el.scrollTop = el.scrollHeight;
 }
 
-// The working indicator and the paragraph being streamed both live at the end
-// of the transcript, so finished messages have to go in front of them rather
-// than after.
+// The working indicator and the two paragraphs being streamed all live at the
+// end of the transcript, in this order, so finished messages have to go in
+// front of them rather than after.
+function tailOrder() {
+  return [thinkEl, liveEl, workingEl];
+}
+
+/** The first tail element still in the transcript — where finished work ends. */
 function tail() {
-  return liveEl || workingEl || null;
+  const el = bodyRef.value;
+  return tailOrder().find(node => node && node.parentNode === el) || null;
 }
+
+/** Put a tail element back in its own slot, in front of the ones after it. */
+function insertTail(node, index) {
+  const el = bodyRef.value;
+  if (!el) return;
+  const order = tailOrder();
+  for (let i = index + 1; i < order.length; i++) {
+    const next = order[i];
+    if (next && next.parentNode === el) { el.insertBefore(node, next); return; }
+  }
+  el.appendChild(node);
+}
+
+/** The calendar day the last separator on screen was for. */
+let shownDay = '';
 
 function append(nodes) {
   const el = bodyRef.value;
   if (!el || !nodes.childNodes.length) return;
-  // Only chase the bottom if the user was already there — otherwise reading
-  // back through a long turn would be yanked away on every message.
-  const stick = atBottom();
   const before = tail();
+  // A turn's calls arrive one message at a time; without this each would open
+  // its own frame and the grouping would only ever apply to history.
+  const last = before ? before.previousElementSibling : el.lastElementChild;
+  mergeToolGroups(last, nodes);
+  // A command prints after it runs, so its output is a later message than the
+  // invocation — without this it lands as an orphan under a command that looks
+  // like it did nothing.
+  mergeSlashOutput(last, nodes);
+  if (!nodes.childNodes.length) { stickBottom(); return; }
   if (before && before.parentNode === el) el.insertBefore(nodes, before);
   else el.appendChild(nodes);
-  stickBottom(stick);
+  // Live messages are always today's, so the separators only have to be redrawn
+  // when the day turns over — or on the first message after history that ended
+  // on an earlier one. Anything else would rebuild them per message.
+  const today = dayKey(Date.now());
+  if (today !== shownDay) shownDay = refreshDayMarkers(el);
+  // Whether a message is followed by the calls it led to changes with every
+  // message, so this is re-read rather than gated: it is attribute reads over
+  // the transcript's own children, and it writes only where the answer moved.
+  refreshStamps(el);
+  // Only chase the bottom if the user was already there — otherwise reading
+  // back through a long turn would be yanked away on every message.
+  stickBottom();
 }
 
 // ── Streaming ─────────────────────────────────────────────────────
@@ -220,102 +418,515 @@ function append(nodes) {
 /** @type {HTMLElement|null} the paragraph currently being written into */
 let liveEl = null;
 let liveText = '';
+/** @type {HTMLElement|null} the reasoning being written, above the answer */
+let thinkEl = null;
+let thinkText = '';
 /** @type {HTMLElement|null} the "working" row, last child while a turn runs */
 let workingEl = null;
 
-function streamDelta(text) {
-  const el = bodyRef.value;
-  if (!el || !text) return;
-  const stick = atBottom();
+// Painting is throttled, not done per token.
+//
+// A delta carries a few characters, and the paragraph is re-rendered from the
+// whole accumulated answer each time — so painting per delta is quadratic in
+// the length of the answer, and measurably so: the same paint costs 2.7ms at
+// 3k characters and 6.8ms at 23k. At the rate the SDK emits partial messages
+// that is more than a core, and it gets worse the longer Claude talks.
+//
+// A leading paint keeps the first token instant; everything after it lands on
+// a fixed cadence, which is well under the rate anyone reads at.
+const LIVE_PAINT_MS = 80;
+let livePaintTimer = 0;
+let livePending = false;
 
-  if (!liveEl || liveEl.parentNode !== el) {
-    liveEl = document.createElement('div');
-    liveEl.className = 'jsonl-entry jsonl-assistant sbx-streaming';
-    const body = document.createElement('div');
-    body.className = 'jsonl-text';
-    liveEl.appendChild(body);
-    if (workingEl && workingEl.parentNode === el) el.insertBefore(liveEl, workingEl);
-    else el.appendChild(liveEl);
-    liveText = '';
+function schedulePaint() {
+  livePending = true;
+  if (livePaintTimer) return;
+  paintLive();
+  livePaintTimer = setTimeout(() => {
+    livePaintTimer = 0;
+    // Re-arm only while tokens are still arriving, so a finished turn stops
+    // the timer rather than leaving it ticking for the life of the session.
+    if (livePending) schedulePaint();
+  }, LIVE_PAINT_MS);
+}
+
+function paintLive() {
+  livePending = false;
+  const el = bodyRef.value;
+  if (!el) return;
+
+  // Reasoning first, because that is the order it is written in — and it is
+  // the half of a turn worth watching: it is where you find out Claude has
+  // misread the task, early enough to stop it.
+  if (thinkText) {
+    if (!thinkEl || thinkEl.parentNode !== el) {
+      thinkEl = document.createElement('div');
+      thinkEl.className = 'jsonl-entry jsonl-assistant sbx-think';
+      thinkEl.innerHTML = '<div class="sbx-think__head">'
+        + '<span class="sbx-think__spark"></span>Thinking</div>'
+        + '<div class="sbx-think__text"></div>';
+      insertTail(thinkEl, 0);
+    }
+    const body = thinkEl.lastElementChild;
+    body.textContent = thinkText;
+    // The box is capped, so the tail of the reasoning is what should show.
+    body.scrollTop = body.scrollHeight;
   }
 
+  if (liveText) {
+    if (!liveEl || liveEl.parentNode !== el) {
+      liveEl = document.createElement('div');
+      liveEl.className = 'jsonl-entry jsonl-assistant sbx-streaming';
+      const body = document.createElement('div');
+      body.className = 'jsonl-text';
+      liveEl.appendChild(body);
+      insertTail(liveEl, 1);
+    }
+    liveEl.firstChild.innerHTML = renderJsonlText(liveText);
+  }
+  stickBottom();
+}
+
+function streamDelta(text) {
+  if (!text || !bodyRef.value) return;
+  // A paragraph that is no longer in the transcript belonged to a turn that has
+  // ended, so the next delta starts a new answer rather than continuing its text.
+  if (!liveEl || liveEl.parentNode !== bodyRef.value) liveText = '';
   liveText += text;
-  liveEl.firstChild.innerHTML = renderJsonlText(liveText);
-  stickBottom(stick);
+  schedulePaint();
+}
+
+function streamThinking(text) {
+  if (!text || !bodyRef.value) return;
+  if (!thinkEl || thinkEl.parentNode !== bodyRef.value) thinkText = '';
+  thinkText += text;
+  schedulePaint();
 }
 
 function endStream() {
+  clearTimeout(livePaintTimer);
+  livePaintTimer = 0;
+  livePending = false;
   liveEl?.remove();
   liveEl = null;
   liveText = '';
+  // The finished `assistant` message carries the same reasoning as a block that
+  // can be folded; leaving this up as well would print it twice.
+  thinkEl?.remove();
+  thinkEl = null;
+  thinkText = '';
+}
+
+// ── The working row ───────────────────────────────────────────────
+//
+// Present from before the first token to the end of the turn, including every
+// silent stretch — a tool running, a long think. Those are exactly the moments
+// that look like nothing is happening, so the row answers the three questions
+// asked during one: how long has this been going, what is it doing, what has it
+// cost so far.
+
+/** When the current turn started, for the elapsed count. */
+let turnStartedAt = 0;
+let workingTimer = 0;
+/** What Claude is doing right now — the last tool called and not yet answered. */
+const activity = ref('');
+/** Tokens this turn, as the stream reports them. Reset when a turn opens. */
+const turnTokens = ref({ input: 0, output: 0 });
+
+function shortCount(n) {
+  if (!n) return '0';
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(n >= 10_000 ? 0 : 1) + 'k';
+  return String(n);
+}
+
+function elapsedLabel(ms) {
+  const total = Math.max(0, Math.round(ms / 1000));
+  if (total < 60) return `${total}s`;
+  const mins = Math.floor(total / 60);
+  if (mins < 60) return `${mins}m ${total % 60}s`;
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
+function paintWorking() {
+  if (!workingEl) return;
+  const { input, output } = turnTokens.value;
+  const tokens = input + output;
+  workingEl.querySelector('.sbx-working__label').textContent = activity.value || 'Working';
+  workingEl.querySelector('.sbx-working__meta').textContent = [
+    turnStartedAt ? elapsedLabel(Date.now() - turnStartedAt) : '',
+    tokens ? `${shortCount(tokens)} tokens` : '',
+  ].filter(Boolean).join(' · ');
 }
 
 function setWorking(on) {
   const el = bodyRef.value;
+  if (!on) {
+    clearInterval(workingTimer);
+    workingTimer = 0;
+    workingEl?.remove();
+    workingEl = null;
+    activity.value = '';
+    turnStartedAt = 0;
+    return;
+  }
   if (!el) return;
-  if (!on) { workingEl?.remove(); workingEl = null; return; }
   if (workingEl && workingEl.parentNode === el) return;
-  const stick = atBottom();
+  // A turn opening is the only moment the count means anything: it is what this
+  // run has cost, not what the session has.
+  if (!turnStartedAt) { turnStartedAt = Date.now(); resetTokens(); }
   workingEl = document.createElement('div');
   workingEl.className = 'jsonl-entry jsonl-assistant sbx-working';
-  workingEl.innerHTML = '<span class="sbx-working__dots"><i></i><i></i><i></i></span>'
-    + '<span class="sbx-working__label">Working</span>';
+  workingEl.innerHTML = '<span class="sbx-working__orb"></span>'
+    + '<span class="sbx-working__label">Working</span>'
+    + '<span class="sbx-working__meta"></span>';
   el.appendChild(workingEl);
-  stickBottom(stick);
+  paintWorking();
+  // One second, because the elapsed count is in seconds. Cleared the moment the
+  // turn ends, so an idle session ticks nothing.
+  workingTimer = setInterval(paintWorking, 1000);
+  stickBottom();
 }
 
 watch(busy, setWorking);
+watch([activity, turnTokens], paintWorking);
+
+// ── Tokens spent on the current turn ──────────────────────────────
+//
+// One turn is several API requests — one per tool round trip — and each bills
+// its own prompt. So finished requests are added up, and the one in flight is
+// replaced on every frame, because `message_delta` reports the answer so far
+// rather than an increment.
+let tokensDone = { input: 0, output: 0 };
+let tokensNow = { input: 0, output: 0 };
+
+function resetTokens() {
+  tokensDone = { input: 0, output: 0 };
+  tokensNow = { input: 0, output: 0 };
+  turnTokens.value = { input: 0, output: 0 };
+}
+
+function noteUsage(item) {
+  if (item.phase === 'start') {
+    tokensDone = {
+      input: tokensDone.input + tokensNow.input,
+      output: tokensDone.output + tokensNow.output,
+    };
+    tokensNow = { input: item.inputTokens, output: item.outputTokens };
+  } else {
+    tokensNow = {
+      input: Math.max(tokensNow.input, item.inputTokens),
+      output: Math.max(tokensNow.output, item.outputTokens),
+    };
+  }
+  turnTokens.value = {
+    input: tokensDone.input + tokensNow.input,
+    output: tokensDone.output + tokensNow.output,
+  };
+}
+
+/** `mcp__browser__navigate` → `navigate`; the prefix is plumbing. */
+function shortToolName(name) {
+  return String(name || 'tool').replace(/^mcp__/, '').split('__').pop();
+}
+
+/**
+ * A call already on screen, answered.
+ *
+ * The result arrives as its own message, usually seconds after the call. Folded
+ * into the block it belongs to it is one row that can be opened; rendered on
+ * its own — which is what used to happen — it is an anonymous "Tool Result"
+ * some distance below the call it answers.
+ */
+function settleTool(id, content) {
+  const node = toolNodes.get(id);
+  if (!node) return false;
+  toolNodes.delete(id);
+  renderToolResult(content, toolContent(node));
+  // A call with nothing to show was not foldable when it was drawn; now it has
+  // a result, it is.
+  if (!node.classList.contains('jsonl-tool-block--foldable')) collapseToolBlock(node);
+  const started = Number(node.dataset.startedAt);
+  if (Number.isFinite(started)) markToolDuration(node, Date.now() - started);
+  return true;
+}
 
 function handle(message) {
   if (message?.type === 'system' && message.subtype === 'init') {
     init.value = message;
     if (message.model) liveModel.value = message.model;
   }
+  // Nothing below this writes anywhere but the transcript, and building the
+  // nodes is the expensive half — so a view with no transcript to write into
+  // stops here rather than after the work is already done.
+  if (!bodyRef.value) return;
   const items = normalize(message);
 
   for (const item of items) {
     if (item.kind === 'unknown') unknownCount.value++;
+    if (item.kind === 'usage') { noteUsage(item); continue; }
     // Remember results before rendering, so a call in the same batch can claim
-    // one; a late result renders on its own.
+    // one. A result for a call already drawn folds straight into it.
     if (item.kind === 'tool_result' && item.toolUseId) {
-      toolResults.set(item.toolUseId, item.content);
+      activity.value = '';
+      if (!settleTool(item.toolUseId, item.content)) {
+        toolResults.set(item.toolUseId, item.content);
+      }
     }
     if (item.kind === 'turn_end') {
       endStream();
+      noteTurnActivity();
       busy.value = false;
+      toolNodes.clear();
       refreshContext();
+      // A turn can have compacted the context; the rail is drawn from the file.
+      loadCompacts();
     } else if (item.kind === 'delta') {
+      noteTurnActivity();
       // Any frame at all means the turn is alive — including one carrying no
       // text, which is what a long thinking block looks like from here. That
       // also covers a session driven from somewhere else: nothing was typed
       // into this composer, so nothing set busy.
       busy.value = true;
-      if (item.target === 'text') streamDelta(item.text);
+      if (item.target === 'text') { activity.value = 'Responding'; streamDelta(item.text); }
+      if (item.target === 'thinking') { activity.value = 'Thinking'; streamThinking(item.text); }
     } else if (item.kind !== 'silent') {
       // A real message closes the streamed draft: either it is the finished
       // version of it, or the model has moved on to a tool call.
       endStream();
+      if (item.kind === 'tool_use') activity.value = `Running ${shortToolName(item.name)}`;
       if (item.kind === 'text' || item.kind === 'tool_use' || item.kind === 'thinking') {
         busy.value = true;
       }
     }
   }
 
-  append(renderViewItems(items, toolResults, { foldTools: true }));
+  const frag = renderViewItems(items, toolResults, { foldTools: true, at: Date.now() });
+  // Held so a result arriving later folds into its call rather than landing as
+  // a loose block, and so the call can be told how long it took.
+  const startedAt = String(Date.now());
+  for (const node of frag.querySelectorAll('[data-tool-use-id]')) {
+    node.dataset.startedAt = startedAt;
+    toolNodes.set(node.dataset.toolUseId, node);
+  }
+  append(frag);
 }
 
 // ── Input ─────────────────────────────────────────────────────────
 
-function send() {
-  const text = draft.value.trim();
-  if (!text || !sessionId.value) return;
+// ── Whether a turn is running ─────────────────────────────────────
+//
+// `busy` starts as this view's own optimism: something was sent, so a turn is
+// presumably about to run. That is a guess, and when it is wrong — a prompt
+// that never reached the CLI — the chat said "Working" for the rest of the
+// session while the board, which reads the status tracker, correctly said
+// idle. The two must not be able to disagree indefinitely.
+//
+// So the tracker in the main process is the authority, with one concession:
+// for a few seconds after sending it has not heard about the prompt yet, and
+// its `idle` is stale rather than wrong.
+
+const TURN_GRACE_MS = 20000;
+/** While set, an `idle` from the tracker is too early to believe. */
+let turnGraceUntil = 0;
+let turnWatchdog = null;
+
+function noteTurnActivity() {
+  turnGraceUntil = 0;
+  if (turnWatchdog) { clearTimeout(turnWatchdog); turnWatchdog = null; }
+}
+
+/** Nothing came back at all — say so rather than spin forever. */
+function startTurnWatchdog() {
+  if (turnWatchdog) clearTimeout(turnWatchdog);
+  turnWatchdog = setTimeout(() => {
+    turnWatchdog = null;
+    turnGraceUntil = 0;
+    if (!busy.value) return;
+    busy.value = false;
+    append(renderViewItems([{
+      kind: 'notice', level: 'warn',
+      text: 'That prompt never started a turn. Send it again.',
+    }]));
+  }, TURN_GRACE_MS);
+}
+
+/**
+ * What the echo of a prompt looks like.
+ *
+ * A slash command is not a message, and the transcript already knows that: read
+ * back off disk it is a framed block with its output inside it. Live, the CLI
+ * writes the `<command-name>` envelope to the file but never streams it, so
+ * this echo is the only record the command was run — and echoing it as a chat
+ * bubble is what made the same command look like two different things before
+ * and after reopening the chat.
+ *
+ * Checked against the session's own command list rather than the shape alone:
+ * "/usr/local is wrong" is a sentence, not an invocation.
+ */
+function echoOf(text) {
+  const slash = /^\/([a-zA-Z][\w:.-]*)(?:\s+([\s\S]*))?$/.exec(text);
+  if (slash && availableCommands.value.includes(slash[1])) {
+    return { kind: 'command_call', name: slash[1], args: (slash[2] || '').trim() };
+  }
+  return { kind: 'text', role: 'user', text };
+}
+
+/**
+ * The prompt as it will look in the transcript once the CLI has written it.
+ *
+ * With an image it is one entry — blocks above the sentence — because that is
+ * the record the `.jsonl` will hold, and the echo is replaced by nothing: it
+ * has to be right the first time or the same message reads two ways before and
+ * after the chat is reopened.
+ */
+function echoFragment(text, list, at) {
+  const images = list.filter(item => item.kind === 'image');
+  if (images.length) return renderUserPrompt({ text, images, at });
+  return renderViewItems([echoOf(text)], null, { at });
+}
+
+async function send() {
+  const list = attachments.value;
+  const text = promptText(draft.value, list);
+  if ((!text && !list.length) || !sessionId.value) return;
+  const content = promptContent(draft.value, list);
+
   // Echoed locally: the CLI does not send the prompt back, and a message that
   // vanishes on submit reads as a dropped one.
-  append(renderViewItems([{ kind: 'text', role: 'user', text }]));
-  window.api.sendInput(sessionId.value, text);
+  append(echoFragment(text, list, Date.now()));
   draft.value = '';
+  attachments.value = [];
   busy.value = true;
+  turnGraceUntil = Date.now() + TURN_GRACE_MS;
+  startTurnWatchdog();
   nextTick(() => { autoGrow(); inputRef.value?.focus(); });
+
+  const res = await window.api.sdkSendPrompt(sessionId.value, content);
+  // The echo is already on screen, so a refusal has to say so out loud rather
+  // than leave a message sitting there that nothing will ever answer.
+  if (res?.ok) return;
+  noteTurnActivity();
+  busy.value = false;
+  append(renderViewItems([{
+    kind: 'notice', level: 'error',
+    text: `That prompt was not accepted: ${res?.error || 'the session is gone'}.`,
+  }], null, { at: Date.now() }));
+}
+
+// ── Attachments ───────────────────────────────────────────────────
+//
+// What the CLI's own composer accepts: an image on the clipboard, and a file.
+// They leave by different doors — see composer-attachments.js — and both are
+// held as chips until the prompt is sent, so a paste can be taken back.
+
+/** @type {import('vue').Ref<Array<object>>} images and files for the next prompt */
+const attachments = ref([]);
+const fileInputRef = ref(null);
+const dropActive = ref(false);
+let attachmentSeq = 0;
+
+function removeAttachment(id) {
+  attachments.value = attachments.value.filter(item => item.id !== id);
+  nextTick(() => inputRef.value?.focus());
+}
+
+/** Why a file could not be attached, in the transcript rather than a swallowed log. */
+function refuseAttachment(text) {
+  append(renderViewItems([{ kind: 'notice', level: 'warn', text }], null, { at: Date.now() }));
+}
+
+async function attachFiles(files) {
+  for (const file of files) {
+    if (!file) continue;
+
+    if (isImageType(file.type)) {
+      const image = await prepareImage(file).catch(() => null);
+      if (!image) {
+        refuseAttachment(`${file.name || 'That image'} is still over ${shortBytes(MAX_IMAGE_BYTES)} after resizing — it cannot be sent.`);
+        continue;
+      }
+      attachments.value = [...attachments.value, {
+        id: `a${++attachmentSeq}`,
+        kind: 'image',
+        name: file.name || 'pasted image',
+        ...image,
+      }];
+      continue;
+    }
+
+    // Not an image, so it goes as a reference — which needs somewhere to point.
+    // A blob pasted out of a web page has no path and nothing to fall back on:
+    // the API takes images, not arbitrary bytes.
+    const path = window.api.getPathForFile?.(file) || '';
+    if (!path) {
+      refuseAttachment(`${file.name || 'That file'} is not a file on disk — save it somewhere first, then attach it.`);
+      continue;
+    }
+    const mention = mentionFor(path, store.headerSession?.projectPath || '');
+    if (attachments.value.some(item => item.path === path)) continue;
+    attachments.value = [...attachments.value, {
+      id: `a${++attachmentSeq}`,
+      kind: 'file',
+      name: baseName(path),
+      path,
+      mention,
+      bytes: file.size,
+    }];
+  }
+  nextTick(() => { autoGrow(); inputRef.value?.focus(); });
+}
+
+function onPaste(event) {
+  const files = [...(event.clipboardData?.files || [])];
+  if (!files.length) return;           // ordinary text paste, nothing to do
+  event.preventDefault();
+  attachFiles(files);
+}
+
+function pickFiles() {
+  fileInputRef.value?.click();
+}
+
+function onFilePicked(event) {
+  const files = [...(event.target.files || [])];
+  // Cleared so picking the same file twice in a row still fires `change`.
+  event.target.value = '';
+  if (files.length) attachFiles(files);
+}
+
+// Dragging text inside the composer is a selection, not an attachment; only a
+// drag carrying files gets the highlight and the drop.
+const carriesFiles = (event) => [...(event.dataTransfer?.types || [])].includes('Files');
+
+// `dragleave` fires on every child the pointer crosses, so the highlight is
+// held by a depth count rather than by the last event to arrive.
+let dragDepth = 0;
+
+function onDragEnter(event) {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  dragDepth++;
+  dropActive.value = true;
+}
+
+function onDragOver(event) {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'copy';
+}
+
+function onDragLeave() {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) dropActive.value = false;
+}
+
+function onDrop(event) {
+  if (!carriesFiles(event)) return;
+  event.preventDefault();
+  dragDepth = 0;
+  dropActive.value = false;
+  attachFiles([...(event.dataTransfer.files || [])]);
 }
 
 // One row until there is more to show. Reset to auto first so the box can
@@ -386,12 +997,19 @@ function respond(decision) {
 // ── Session controls ──────────────────────────────────────────────
 
 async function onPermissionMode(event) {
+  // The select is disabled while busy; this is the same rule for anything
+  // that reaches the handler another way.
+  if (busy.value) { event.target.value = permissionMode.value; return; }
   const value = event.target.value;
   const res = await window.api.sdkSetPermissionMode(sessionId.value, value);
-  if (res?.ok) permissionMode.value = value;
+  if (!res?.ok) return;
+  permissionMode.value = value;
 }
 
 async function onModel(event) {
+  // The select is disabled while busy; this is the same rule for anything
+  // that reaches the handler another way.
+  if (busy.value) { event.target.value = model.value; return; }
   const value = event.target.value;
   const res = await window.api.sdkSetModel(sessionId.value, value);
   if (!res?.ok) return;
@@ -406,10 +1024,121 @@ async function onModel(event) {
 }
 
 async function onEffort(event) {
+  // The select is disabled while busy; this is the same rule for anything
+  // that reaches the handler another way.
+  if (busy.value) { event.target.value = effort.value; return; }
   const value = event.target.value;
   const res = await window.api.sdkSetEffort(sessionId.value, value);
-  if (res?.ok) effort.value = value;
+  if (!res?.ok) return;
+  effort.value = value;
 }
+
+// ── Remembered controls ───────────────────────────────────────────
+//
+// Read back out of the session's own transcript rather than stored separately
+// — the CLI already records all three (see session-controls.js). Applied after
+// the session is up, so the picker and the live session agree.
+//
+// A session with nothing to read back — a new one, which is every session at
+// its first turn — falls through to the settings it was launched with. Those
+// are the project's, then the global ones behind them, resolved by main.js;
+// see resolveDefaultSessionOptions in public/dialogs.js for the other half.
+
+/** What main.js started this session on: `{ permissionMode, effort }`. */
+async function launchDefaults() {
+  const projectPath = store.headerSession?.projectPath || '';
+  if (!projectPath) return {};
+  try {
+    const effective = await window.api.getEffectiveSettings(projectPath) || {};
+    return {
+      permissionMode: effective.dangerouslySkipPermissions
+        ? 'bypassPermissions'
+        : (effective.permissionMode || null),
+      effort: effective.effort || null,
+    };
+  } catch {
+    return {};
+  }
+}
+
+/** A mode the picker can show — anything else is not worth guessing at. */
+const isKnownMode = (mode) =>
+  !!mode && (PERMISSION_MODES.some(m => m.value === mode) || mode in OTHER_MODES);
+
+async function applyStoredControls(entries) {
+  const id = sessionId.value;
+  const found = controlsFromTranscript(entries);
+  if (!id) return;
+
+  const defaults = await launchDefaults();
+  if (sessionId.value !== id) return;             // switched away mid-read
+
+  // The transcript is asked for, because it can disagree with the settings: it
+  // records what the session was last actually running, which may be a mode
+  // changed by hand three turns ago. The launch defaults are only shown — the
+  // session is already on them, and a control request before its first turn
+  // opens would fail and leave the picker back on its own hardcoded guess.
+  if (isKnownMode(found.permissionMode)) {
+    const res = await window.api.sdkSetPermissionMode(id, found.permissionMode);
+    if (res?.ok && sessionId.value === id) permissionMode.value = found.permissionMode;
+  } else if (isKnownMode(defaults.permissionMode)) {
+    permissionMode.value = defaults.permissionMode;
+  }
+  if (found.effort) {
+    const res = await window.api.sdkSetEffort(id, found.effort);
+    if (res?.ok && sessionId.value === id) effort.value = found.effort;
+  } else if (defaults.effort) {
+    effort.value = defaults.effort;
+  }
+  // The model is matched by wire id against the picker's rows, the same way a
+  // live `system/init` is — the transcript names the model, not the alias row.
+  if (found.model && !modelPinned) {
+    liveModel.value = found.model;
+    syncSelectedModel();
+  }
+}
+
+// ── Context breakdown popover ─────────────────────────────────────
+//
+// Hover, not click: it answers "what is in there" while you are already
+// looking at the ring, and nothing in it is actionable. It stays open while
+// the pointer is inside it, so the lists can be read.
+const contextChipRef = ref(null);
+const breakdownOpen = ref(false);
+const breakdownPos = ref({});
+let breakdownTimer = null;
+
+function openBreakdown() {
+  clearTimeout(breakdownTimer);
+  const rect = contextChipRef.value?.getBoundingClientRect();
+  if (!rect) return;
+  breakdownPos.value = placePopover(rect, {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  });
+  breakdownOpen.value = true;
+  // Resizing moves the chip out from under a panel placed against the old
+  // viewport; re-placing on every frame of a drag is not worth it.
+  window.addEventListener('resize', hideBreakdown, { once: true });
+}
+
+function hideBreakdown() {
+  clearTimeout(breakdownTimer);
+  breakdownOpen.value = false;
+}
+
+function holdBreakdown() { clearTimeout(breakdownTimer); }
+
+function closeBreakdown() {
+  clearTimeout(breakdownTimer);
+  // Long enough to cross the gap between the chip and the panel.
+  breakdownTimer = setTimeout(() => { breakdownOpen.value = false; }, 160);
+}
+
+onBeforeUnmount(() => {
+  clearTimeout(breakdownTimer);
+  window.removeEventListener('resize', hideBreakdown);
+});
 
 // Read after a turn ends rather than on a timer: the number only moves when
 // the conversation does, and this is a control request the session has to
@@ -431,7 +1160,10 @@ async function loadModels() {
 // before that it comes back empty — leaving the picker blank for the rest of
 // the session. `system/init` is the first thing that proves the CLI is
 // answering, so it is also the moment to ask again.
-watch(init, () => { if (!models.value.length) loadModels(); });
+watch(init, () => {
+  if (!models.value.length) loadModels();
+  if (!commandInfo.value.length) loadCommands();
+});
 
 /**
  * Point the picker at the row the session is actually running, matched by the
@@ -475,7 +1207,12 @@ const files = ref([]);         // relative paths, flattened from the file tree
 // The SDK's own docs say remote surfaces should hide them, and a chat has no
 // terminal for them to act on.
 const availableCommands = computed(() => {
-  const all = init.value?.slash_commands || [];
+  // `supportedCommands()` answers as soon as the session is up; the list on
+  // `system/init` only arrives with the first turn. Reading init first meant a
+  // chat you had just opened — the one place you are most likely to reach for
+  // a command — offered none at all.
+  const named = commandInfo.value.map(c => c?.name).filter(Boolean);
+  const all = named.length ? named : (init.value?.slash_commands || []);
   const terminalOnly = new Set(init.value?.terminal_slash_commands || []);
   return all.filter(c => !terminalOnly.has(c));
 });
@@ -487,24 +1224,53 @@ const commandDetail = computed(() => {
   return map;
 });
 
+// Which commands are skills rather than plain commands. `system/init` lists
+// them separately — the same SlashCommand shape, so the name is what joins the
+// two lists.
+const skillNames = computed(() =>
+  new Set((init.value?.skills || []).map(s => s?.name).filter(Boolean)));
+
+/**
+ * Where a command comes from, and the description without it.
+ *
+ * `SlashCommand` has no scope field; the CLI writes it into the tail of the
+ * description as "(project)" or "(user)", which is the only place it exists.
+ * Parsing it out means it can be a chip instead of five characters of prose at
+ * the end of a line that is already being clamped.
+ */
+function splitScope(description) {
+  const text = String(description || '').trim();
+  const match = /\(([a-z][a-z -]*)\)\s*$/i.exec(text);
+  if (!match) return { scope: '', description: text };
+  return { scope: match[1].toLowerCase(), description: text.slice(0, match.index).trim() };
+}
+
 const commandMatches = computed(() => {
   const text = draft.value;
   // Only while typing the command itself: a slash inside a sentence, or a
   // command already followed by its argument, is not a menu.
   if (!text.startsWith('/') || text.includes(' ') || text.includes('\n')) return [];
   const prefix = text.slice(1).toLowerCase();
+  // Uncapped. A menu that showed the first eight of forty-nine answered "which
+  // commands start with what I have typed" but never "what can this session
+  // do", which is the question a bare `/` is asking — and the one nothing else
+  // in the app answers. The strip scrolls; the arrows walk it.
   return availableCommands.value
     .filter(c => c.toLowerCase().startsWith(prefix))
-    .slice(0, 8)
     .map((name) => {
       const detail = commandDetail.value.get(name);
+      const { scope, description } = splitScope(detail?.description);
       return {
         key: `cmd:${name}`,
         kind: 'command',
         value: name,
         label: `/${name}`,
         hint: detail?.argumentHint || '',
-        description: detail?.description || '',
+        description,
+        scope,
+        // "project skill" rather than two chips: it is one fact about where
+        // this command came from and what kind of thing it is.
+        tag: [scope, skillNames.value.has(name) ? 'skill' : ''].filter(Boolean).join(' '),
       };
     });
 });
@@ -521,9 +1287,49 @@ const fileToken = computed(() => {
   return { at, token };
 });
 
+// ── Paths outside the project ─────────────────────────────────────
+//
+// The flattened project tree answers everything typed as a bare name, and it
+// answers instantly. It cannot answer `@../other-checkout/` — and the CLI's own
+// composer can, which is where a sibling repository or a file in ~ gets
+// referenced from. Those tokens are read off the disk instead, one directory at
+// a time, which is also how they have to be walked.
+
+/** Entries for the directory the current `@../`-style token names. */
+const pathEntries = ref([]);
+
+const externalToken = computed(() => {
+  const found = fileToken.value;
+  return found && isExternalPathToken(found.token) ? found.token : null;
+});
+
+watch(externalToken, async (token) => {
+  pathEntries.value = [];
+  const projectPath = store.headerSession?.projectPath;
+  if (!token || !projectPath) return;
+  const res = await window.api.listPathCompletions?.(projectPath, token).catch(() => null);
+  // The token may have moved on while the read was in flight; a menu for a
+  // directory that is no longer being typed is worse than none.
+  if (res?.ok && externalToken.value === token) pathEntries.value = res.entries;
+});
+
 const fileMatches = computed(() => {
   const found = fileToken.value;
-  if (!found || !files.value.length) return [];
+  if (!found) return [];
+
+  if (externalToken.value) {
+    return pathEntries.value.map(entry => ({
+      key: `path:${entry.value}`,
+      kind: 'file',
+      value: entry.value,
+      isDir: entry.isDir,
+      label: entry.name + (entry.isDir ? '/' : ''),
+      hint: '',
+      description: entry.value,
+    }));
+  }
+
+  if (!files.value.length) return [];
   const needle = found.token.toLowerCase();
   const scored = [];
   for (const path of files.value) {
@@ -538,10 +1344,11 @@ const fileMatches = computed(() => {
     if (scored.length > 400) break;
   }
   scored.sort((a, b) => a.rank - b.rank || a.index - b.index || a.path.length - b.path.length);
-  return scored.slice(0, 8).map(({ path }) => ({
+  return scored.slice(0, 60).map(({ path }) => ({
     key: `file:${path}`,
     kind: 'file',
     value: path,
+    isDir: false,
     label: path.split('/').pop(),
     hint: '',
     description: path,
@@ -554,6 +1361,12 @@ const menuItems = computed(() =>
 
 watch(menuItems, () => { commandIndex.value = 0; });
 
+// The strip scrolls now that it is uncapped, so walking past its edge has to
+// bring the row with it — otherwise the arrows move a selection nobody can see.
+watch(commandIndex, () => nextTick(() => {
+  menuRef.value?.children[commandIndex.value]?.scrollIntoView({ block: 'nearest' });
+}));
+
 function pick(item) {
   if (!item) return;
   if (item.kind === 'command') {
@@ -561,7 +1374,9 @@ function pick(item) {
   } else {
     const found = fileToken.value;
     if (!found) return;
-    draft.value = `${draft.value.slice(0, found.at)}@${item.value} `;
+    // A directory is a step, not an answer: no trailing space, so the menu
+    // stays up and lists what is inside it.
+    draft.value = `${draft.value.slice(0, found.at)}@${item.value}${item.isDir ? '' : ' '}`;
   }
   nextTick(() => { autoGrow(); inputRef.value?.focus(); });
 }
@@ -617,86 +1432,474 @@ async function interrupt() {
   await window.api.sdkInterrupt(sessionId.value);
 }
 
+// ── Mentions in the transcript ────────────────────────────────────
+//
+// message-render.js marks `@path` and a leading `/command` in the messages the
+// user wrote; it cannot act on them, because only this view knows which project
+// a relative path is relative to. One delegated listener rather than a handler
+// per chip: a long transcript has hundreds.
+
+/** `../a/b` against the project, `~` against the home directory, `/a` as-is. */
+function resolveMention(value) {
+  const projectPath = store.headerSession?.projectPath || '';
+  if (value.startsWith('/') || value.startsWith('~')) return value;
+  if (!projectPath) return value;
+  return `${projectPath.replace(/\/$/, '')}/${value}`;
+}
+
+function onBodyClick(event) {
+  const chip = event.target?.closest?.('.jsonl-mention');
+  if (!chip) return;
+  event.preventDefault();
+  if (chip.dataset.mentionCommand) {
+    // Put it back in the composer rather than running it: re-running a command
+    // is a decision, and a stray click on the transcript is not one.
+    draft.value = `/${chip.dataset.mentionCommand} `;
+    nextTick(() => { autoGrow(); inputRef.value?.focus(); });
+    return;
+  }
+  const file = chip.dataset.mentionFile;
+  // The side panel, not the MCP file panel: this is a reference while you read
+  // the conversation, so it belongs in the island beside it — same place the
+  // uncommitted-changes diff and the scratch shell open.
+  if (file) openSidePanelFile(resolveMention(file));
+}
+
 // ── Wiring ────────────────────────────────────────────────────────
 
-let detach = null;
+/** @type {Array<(() => void)|undefined>} one disposer per IPC subscription */
+const subscriptions = [];
+
+/** The clock that re-reads the relative timestamps already on screen. */
+let whenTimer = 0;
 
 // A session opened in this view did not necessarily start in it. The transcript
 // on disk is the same file either way, so the history is read back and painted
 // with the same renderer the transcript viewer uses — a session started in a
 // terminal months ago opens here as a chat, and carries on as one.
+//
+// It is read a page at a time rather than whole. A long session's transcript is
+// tens of megabytes and paints tens of thousands of nodes, and a document that
+// size costs ~39ms per layout against ~0.7ms empty — which is more than a frame
+// for every scroll, every spinner tick and every streamed token, in this view
+// and in every other one sharing the document. Fifty messages is what fits on
+// screen; the rest arrives by scrolling up.
 const loadingHistory = ref(true);
+const HISTORY_PAGE = 50;
+
+// ── The compact rail ──────────────────────────────────────────────
+//
+// Where this session's context was thrown away, down the left edge. A compact
+// is the one event in a session's history that a scrollbar cannot show: the
+// records above one are not loaded and have no height to scroll through, so
+// the rail is measured against the file's record count rather than the DOM.
+
+/** Every compact boundary in the file — see readCompactBoundaries. */
+const compacts = ref([]);
+/** Records in the file. */
+const historyTotal = ref(0);
+/**
+ * The runs of records currently painted, oldest first.
+ *
+ * Usually one — the tail of the file. Stepping over a compact adds a second,
+ * with everything the compact dropped in between, and the two scroll as one
+ * column: that gap is why the thumb is placed by walking these rather than by
+ * interpolating between the oldest and newest record on screen.
+ */
+const paintedRuns = ref([]);
+
+const compactMarks = computed(() => {
+  const total = historyTotal.value;
+  if (!total || !compacts.value.length) return [];
+  return compacts.value.map(c => ({
+    index: c.index,
+    // Clamped off both ends: a notch flush with the edge reads as the rail's
+    // own cap rather than as a mark on it.
+    at: `${Math.min(97, Math.max(3, (c.index / total) * 100))}%`,
+    label: [
+      c.trigger === 'auto' ? 'Auto-compacted' : 'Compacted',
+      c.timestamp ? relativeTime(c.timestamp) : '',
+      c.preTokens ? `${shortTokens(c.preTokens)} → ${shortTokens(c.postTokens)} tokens` : '',
+    ].filter(Boolean).join(' · '),
+  }));
+});
+
+/**
+ * Where the reader is in the session — the thumb, in the rail's own file
+ * coordinates so it reads against the notches rather than beside them.
+ *
+ * It moves both ways. The band used to show how much of the file was painted,
+ * which grew as you scrolled up into history and then never moved again: it
+ * answered "how much have I loaded", and the question a rail beside a
+ * conversation is asked is "where am I".
+ */
+const viewBand = computed(() => {
+  const band = railBand(paintedRuns.value, historyTotal.value, viewSpan.value);
+  if (!band) return { display: 'none' };
+  return { top: `${band.top}%`, height: `${band.height}%` };
+});
+
+/**
+ * Fold new records at the end of the file into the newest painted run.
+ *
+ * Live messages are appended to the transcript and to the file at the same
+ * time, and nothing is ever paged downward — so the painted tail always reaches
+ * the end. Without this the thumb stopped a little short of the bottom in a
+ * session that was still talking.
+ */
+function growToTotal(total) {
+  if (!total) return;
+  historyTotal.value = total;
+  const runs = paintedRuns.value;
+  const last = runs[runs.length - 1];
+  if (!last || last.to >= total) return;
+  paintedRuns.value = [...runs.slice(0, -1), { from: last.from, to: total }];
+}
+
+async function loadCompacts() {
+  const id = sessionId.value;
+  if (!id) return;
+  const res = await window.api.sessionCompacts?.(id).catch(() => null);
+  if (!res?.ok || sessionId.value !== id) return;
+  compacts.value = res.compacts || [];
+  growToTotal(res.total);
+}
+
+/** Record index of the oldest entry on screen — where the next page ends. */
+let historyFrom = null;
+/** Is there anything above what is loaded, including a compact marker? */
+let historyHasMore = false;
+/** The `/compact` boundary directly above the loaded range, if the page hit one. */
+let historyCompact = null;
+let loadingEarlier = false;
+/** @type {IntersectionObserver|null} watches the top sentinel for an upward scroll */
+let topObserver = null;
+/** @type {HTMLElement|null} the marker or sentinel currently at the top */
+let topEl = null;
+
+/** 936783 → "937k". The exact figure is noise at this scale. */
+function shortTokens(n) {
+  if (!n) return '0';
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1) + 'M';
+  if (n >= 1000) return Math.round(n / 1000) + 'k';
+  return String(n);
+}
+
+function compactWhen(timestamp) {
+  if (!timestamp) return '';
+  const d = new Date(timestamp);
+  if (Number.isNaN(d.getTime())) return '';
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay
+    ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+/**
+ * The line across the transcript where the context was compacted.
+ *
+ * Everything above it was dropped from the model's own context, so it is drawn
+ * as a boundary rather than as more messages — and crossing it is a click, not
+ * something an upward scroll does on its own. The earlier segment is usually
+ * the larger half of the file, and loading it is the thing this view exists to
+ * avoid doing by default.
+ */
+function makeCompactMarker(compact) {
+  const el = document.createElement('div');
+  el.className = 'sbx-compact';
+
+  const label = document.createElement('div');
+  label.className = 'sbx-compact__label';
+  label.textContent = compact.trigger === 'auto'
+    ? 'Context automatically compacted'
+    : 'Conversation compacted';
+
+  const meta = document.createElement('div');
+  meta.className = 'sbx-compact__meta';
+  const when = compactWhen(compact.timestamp);
+  const tokens = compact.preTokens
+    ? `${shortTokens(compact.preTokens)} → ${shortTokens(compact.postTokens)} tokens`
+    : '';
+  meta.textContent = [when, tokens].filter(Boolean).join(' · ');
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'sbx-compact__more';
+  button.textContent = 'Load earlier messages';
+  button.addEventListener('click', () => {
+    button.disabled = true;
+    button.textContent = 'Loading…';
+    // `compact.index` is the marker's own record, so asking for everything
+    // before it steps over the boundary and lands in the previous segment.
+    loadEarlier(compact.index);
+  });
+
+  const text = document.createElement('div');
+  text.className = 'sbx-compact__text';
+  text.append(label, meta);
+  el.append(text, button);
+  return el;
+}
+
+/** Plain "there is more above" marker — the observer loads it on approach. */
+function makeTopSentinel() {
+  const el = document.createElement('div');
+  el.className = 'sbx-history-top';
+  el.innerHTML = '<span class="sbx-history-top__dots"><i></i><i></i><i></i></span>';
+  return el;
+}
+
+/** Put the right thing at the top of the transcript for the current range. */
+function refreshTopAffordance() {
+  const body = bodyRef.value;
+  if (!body) return;
+  topObserver?.disconnect();
+  topEl?.remove();
+  topEl = null;
+  if (!historyHasMore) return;
+
+  topEl = historyCompact ? makeCompactMarker(historyCompact) : makeTopSentinel();
+  body.insertBefore(topEl, body.firstChild);
+
+  // A compact marker is answered by hand; only the plain sentinel auto-loads.
+  if (historyCompact) return;
+  topObserver = new IntersectionObserver((entries) => {
+    if (entries.some(e => e.isIntersecting)) loadEarlier(historyFrom);
+  }, { root: body, rootMargin: '400px 0px 0px 0px' });
+  topObserver.observe(topEl);
+}
+
+/** Render one window into a fragment, newest last. Returns null if empty. */
+function renderWindow(rawEntries) {
+  const entries = mergeLocalCommandEntries(rawEntries || []);
+  // A tool's result lands in a later entry than its call. Collect them first
+  // so each call renders with its own result folded in, as the transcript
+  // viewer does — and with it the entry's own timestamp, which is the only
+  // record of how long the call took once the session is over.
+  const results = new Map();
+  const toolTimes = new Map();
+  for (const entry of entries) {
+    const blocks = entry.message?.content || entry.content;
+    if (!Array.isArray(blocks)) continue;
+    for (const block of blocks) {
+      if (block.type === 'tool_result' && block.tool_use_id) {
+        results.set(block.tool_use_id, block.content || block.output || '');
+        if (entry.timestamp) toolTimes.set(block.tool_use_id, entry.timestamp);
+      }
+    }
+  }
+  const frag = document.createDocumentFragment();
+  const opts = { foldTools: true, timestamps: true, toolTimes };
+  for (const entry of entries) {
+    const el = renderJsonlEntry(entry, results, opts);
+    if (!el) continue;
+    // Calls from consecutive entries are still one run of calls.
+    const incoming = groupOfEntry(el);
+    const open = groupOfEntry(frag.lastElementChild);
+    if (incoming && open) {
+      while (incoming.firstChild) open.appendChild(incoming.firstChild);
+      // The block is dated by its last call, so folding one in moves its time.
+      if (el.dataset.ts) frag.lastElementChild.dataset.ts = el.dataset.ts;
+      continue;
+    }
+    frag.appendChild(el);
+  }
+  return frag;
+}
 
 async function loadHistory() {
   const id = sessionId.value;
   if (!id) { loadingHistory.value = false; return; }
+  // The controls are set from whatever the read turns up, and a read that
+  // turns up nothing — a new session, whose .jsonl does not exist yet — still
+  // has to set them from the launch settings. Tracked, so the paths that
+  // return early below still go through applyStoredControls once.
+  let controlsApplied = false;
+  const applyControls = (entries) => {
+    if (controlsApplied || sessionId.value !== id) return;
+    controlsApplied = true;
+    applyStoredControls(entries);
+  };
   try {
-    const result = await window.api.readSessionJsonl(id);
+    const result = await window.api.readSessionTranscript(id, { limit: HISTORY_PAGE });
     if (sessionId.value !== id) return;          // switched away mid-read
-    const entries = mergeLocalCommandEntries(result?.entries || []);
+    if (result?.error) return;
 
-    // A tool's result lands in a later entry than its call. Collect them first
-    // so each call renders with its own result folded in, as the transcript
-    // viewer does.
-    const results = new Map();
-    for (const entry of entries) {
-      const blocks = entry.message?.content || entry.content;
-      if (!Array.isArray(blocks)) continue;
-      for (const block of blocks) {
-        if (block.type === 'tool_result' && block.tool_use_id) {
-          results.set(block.tool_use_id, block.content || block.output || '');
-        }
-      }
-    }
+    historyFrom = result.from;
+    historyHasMore = !!result.hasMore;
+    historyCompact = result.compact || null;
+    historyTotal.value = result.total || 0;
+    paintedRuns.value = result.to > result.from ? [{ from: result.from, to: result.to }] : [];
 
-    const frag = document.createDocumentFragment();
-    for (const entry of entries) {
-      const el = renderJsonlEntry(entry, results, { foldTools: true });
-      if (el) frag.appendChild(el);
-    }
+    // The same entries carry what the session was last running as.
+    applyControls(result.entries || []);
+
     const body = bodyRef.value;
-    if (body && frag.childNodes.length) {
-      body.appendChild(frag);
-      body.scrollTop = body.scrollHeight;
-    }
+    if (!body) return;
+    const frag = renderWindow(result.entries);
+    if (frag.childNodes.length) body.appendChild(frag);
+    refreshTopAffordance();
+    shownDay = refreshDayMarkers(body);
+    refreshStamps(body);
+    body.scrollTop = body.scrollHeight;
+    readScroll();
   } catch {
     /* A session with no transcript yet is the normal case for a new one. */
   } finally {
     loadingHistory.value = false;
+    applyControls([]);
+  }
+}
+
+/**
+ * Prepend the page ending at `before`, holding the reading position still.
+ *
+ * Inserting above the viewport moves everything under it down by the height of
+ * what was inserted, so the scroll offset is corrected by exactly that much —
+ * otherwise loading a page would throw the reader back to where they had
+ * already been.
+ */
+/** Where the next page up ends: the loaded top, or the compact just above it. */
+function nextPageStart() {
+  if (historyFrom === null || historyFrom <= 0) return null;
+  // Sitting on a boundary, a window ending at it holds nothing — the floor and
+  // the ceiling are the same record. Step over it instead.
+  if (historyCompact && historyCompact.index === historyFrom - 1) return historyCompact.index;
+  return historyFrom;
+}
+
+/** Pages to walk for one notch click. "Show me the whole session" is not what
+ *  a click on a 2px mark is asking for. */
+const REVEAL_MAX_PAGES = 12;
+
+/**
+ * Walk the transcript up until `index` is on screen, then go there.
+ *
+ * A notch names a compact anywhere in the file, and loading its segment
+ * directly would paint records a thousand apart as neighbours with nothing
+ * between them to say so. So it is walked a page at a time — the same path an
+ * upward scroll takes — and each step is the one `loadEarlier` would have taken
+ * on its own.
+ */
+async function revealRecord(index) {
+  for (let page = 0; page < REVEAL_MAX_PAGES; page++) {
+    if (historyFrom === null || historyFrom <= index) break;
+    const start = nextPageStart();
+    if (start === null) break;
+    const wasAt = historyFrom;
+    // eslint-disable-next-line no-await-in-loop -- each page's floor is where the next one starts
+    await loadEarlier(start);
+    if (historyFrom === wasAt) break;       // nothing moved; stop rather than spin
+  }
+  bodyRef.value?.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+async function loadEarlier(before) {
+  const id = sessionId.value;
+  if (loadingEarlier || !id || before === null || before <= 0) return;
+  // Already on screen — see isPainted. This is what a notch clicked twice hits.
+  if (isPainted(paintedRuns.value, before)) return;
+  loadingEarlier = true;
+  try {
+    const result = await window.api.readSessionTranscript(id, { before, limit: HISTORY_PAGE });
+    if (sessionId.value !== id || result?.error) return;
+
+    const body = bodyRef.value;
+    if (!body) return;
+
+    historyFrom = result.from;
+    historyHasMore = !!result.hasMore;
+    historyCompact = result.compact || null;
+    if (result.total) historyTotal.value = result.total;
+    // Kept as its own run. It touches the one below it when the page was an
+    // ordinary scroll upward — railBand merges those — and does not when it was
+    // a step over a compact, which is the case the thumb has to walk.
+    if (result.to > result.from) {
+      paintedRuns.value = [{ from: result.from, to: result.to }, ...paintedRuns.value];
+    }
+
+    const heightBefore = body.scrollHeight;
+    const scrollBefore = body.scrollTop;
+    const frag = renderWindow(result.entries);
+
+    // The marker goes first so the new entries land under it, then the
+    // affordance for whatever is above *this* page replaces it.
+    topObserver?.disconnect();
+    const anchor = topEl;
+    if (frag.childNodes.length) {
+      if (anchor && anchor.parentNode === body) body.insertBefore(frag, anchor.nextSibling);
+      else body.insertBefore(frag, body.firstChild);
+    }
+    anchor?.remove();
+    topEl = null;
+    refreshTopAffordance();
+    // A prepended window can turn the day the old first message started into a
+    // day it no longer starts, so the separators are rebuilt rather than added to.
+    shownDay = refreshDayMarkers(body);
+    refreshStamps(body);
+
+    body.scrollTop = scrollBefore + (body.scrollHeight - heightBefore);
+    readScroll();
+  } catch {
+    /* A read that fails leaves the affordance in place to try again. */
+  } finally {
+    loadingEarlier = false;
   }
 }
 
 onMounted(() => {
-  const onMessage = (id, message) => {
-    if (id !== sessionId.value) return;
-    handle(message);
-  };
-  window.api.onSdkMessage(onMessage);
+  // This view is keyed by session id, so it is torn down and rebuilt on every
+  // switch. Each subscription's disposer is kept and called on unmount: a stale
+  // listener is not harmless here, because the id it guards on is read off the
+  // shared store and therefore always matches the *current* session — every
+  // past mount would go on rendering every message, invisibly.
+  subscriptions.push(
+    window.api.onSdkMessage((id, message) => {
+      if (id !== sessionId.value) return;
+      handle(message);
+    }),
 
-  // markRaw, because the request is read and never edited — and because the
-  // answer carries the tool input straight back over IPC. A reactive proxy
-  // cannot be structured-cloned, so making it reactive would break the reply.
-  window.api.onSdkPermissionRequest((id, incoming) => {
-    if (id !== sessionId.value) return;
-    request.value = markRaw(incoming);
-  });
-  window.api.onSdkElicitationRequest?.((id, incoming) => {
-    if (id !== sessionId.value) return;
-    request.value = markRaw({ ...incoming, kind: 'elicitation' });
-  });
-  window.api.onSdkDialogRequest?.((id, incoming) => {
-    if (id !== sessionId.value) return;
-    request.value = markRaw({ ...incoming, kind: 'dialog' });
-  });
-  // The CLI can withdraw the question — an interrupted turn. Take the dialog
-  // down rather than leave a button that answers nothing.
-  window.api.onSdkPermissionCancelled((id, requestId) => {
-    if (request.value?.requestId === requestId) request.value = null;
-  });
-  // preload exposes no unsubscribe; guard by id instead and drop the reference
-  // so a stale closure cannot keep rendering into a detached node.
-  detach = () => { bodyRef.value = null; };
+    // The same status the board draws from — see applySessionStatus in app.js.
+    window.api.onSessionStatus?.((id, status) => {
+      if (id !== sessionId.value || !status) return;
+      if (status.state === 'running') { noteTurnActivity(); busy.value = true; return; }
+      if (status.state !== 'idle' && status.state !== 'exited') return;
+      if (turnGraceUntil && Date.now() < turnGraceUntil) return;   // too early to believe
+      noteTurnActivity();
+      busy.value = false;
+    }),
+
+    // markRaw, because the request is read and never edited — and because the
+    // answer carries the tool input straight back over IPC. A reactive proxy
+    // cannot be structured-cloned, so making it reactive would break the reply.
+    window.api.onSdkPermissionRequest((id, incoming) => {
+      if (id !== sessionId.value) return;
+      request.value = markRaw(incoming);
+    }),
+    window.api.onSdkElicitationRequest?.((id, incoming) => {
+      if (id !== sessionId.value) return;
+      request.value = markRaw({ ...incoming, kind: 'elicitation' });
+    }),
+    window.api.onSdkDialogRequest?.((id, incoming) => {
+      if (id !== sessionId.value) return;
+      request.value = markRaw({ ...incoming, kind: 'dialog' });
+    }),
+    // The CLI can withdraw the question — an interrupted turn. Take the dialog
+    // down rather than leave a button that answers nothing.
+    window.api.onSdkPermissionCancelled((id, requestId) => {
+      if (request.value?.requestId === requestId) request.value = null;
+    }),
+  );
+
+  bodyRef.value?.addEventListener('scroll', readScroll, { passive: true });
+  bodyRef.value?.addEventListener('click', onBodyClick);
+
+  // "2 minutes ago" has to become "3 minutes ago" on its own. One clock for the
+  // whole transcript, at the resolution the coarsest unit needs.
+  whenTimer = setInterval(() => refreshWhen(bodyRef.value), 30000);
+
   loadHistory();
+  loadCompacts();
   loadPending();
   loadModels();
   loadCommands();
@@ -706,11 +1909,28 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  detach?.();
+  if (turnWatchdog) clearTimeout(turnWatchdog);
+  clearTimeout(livePaintTimer);
+  livePaintTimer = 0;
+  livePending = false;
+  clearInterval(workingTimer);
+  workingTimer = 0;
+  clearInterval(whenTimer);
+  whenTimer = 0;
+  for (const off of subscriptions) off?.();
+  subscriptions.length = 0;
+  topObserver?.disconnect();
+  topObserver = null;
+  topEl = null;
+  bodyRef.value?.removeEventListener('scroll', readScroll);
+  bodyRef.value?.removeEventListener('click', onBodyClick);
   toolResults = new Map();
+  toolNodes = new Map();
   liveEl = null;
   workingEl = null;
+  thinkEl = null;
   liveText = '';
+  thinkText = '';
 });
 
 defineExpose({ handle });
