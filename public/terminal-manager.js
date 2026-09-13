@@ -26,13 +26,13 @@ function reapplyTerminalTypography() {
   }
 }
 
-// Every live xterm instance: the session terminals plus the side panel's
-// scratch shell, which is deliberately not in openSessions (see below).
+// Every live xterm instance: the session terminals plus the scratch shells,
+// which are deliberately not in openSessions (see below).
 function* allTerminalEntries() {
   for (const [, entry] of openSessions) {
     if (!entry.closed) yield entry;
   }
-  if (panelTerm) yield panelTerm;
+  for (const entry of panelTerms.values()) yield entry;
 }
 
 // Something outside the terminal changed its width — the session side panel
@@ -393,38 +393,50 @@ function showSession(sessionId) {
   }
 }
 
-// --- Session side-panel scratch shell ---------------------------------------
+// --- Scratch shells ---------------------------------------------------------
 //
-// A plain login shell that lives exactly as long as the session side panel is
-// open. It is deliberately kept OUT of `openSessions`: nothing about it should
-// reach the sidebar, the session list or the grid view, and app.js's own
-// terminal-data / process-exited handlers therefore never match its id.
+// Plain login shells that live exactly as long as the pane holding them. They
+// are deliberately kept OUT of `openSessions`: nothing about them should reach
+// the sidebar, the session list or the grid view, and app.js's own
+// terminal-data / process-exited handlers therefore never match their ids.
 //
-// Ownership: created by SessionSidePanelApp.vue on mount (and whenever the open
-// session's project path changes), destroyed on unmount, on a project change,
-// and on renderer unload. main.js additionally reaps any earlier ephemeral PTY
-// when a new one is requested, which covers a renderer reload.
+// Two panes want one each — the session side panel and the project page's
+// Terminal tab — and they can be open at the same time on different projects,
+// so the shells are keyed by a slot name rather than there being one global.
+// Ownership stays with the pane: it creates its slot on mount (and whenever
+// the project path changes) and destroys it on unmount. main.js reaps stray
+// ephemeral PTYs, which covers a renderer reload.
 
-let panelTerm = null;
+const panelTerms = new Map();
+const DEFAULT_SLOT = 'panel';
 
 // Its own id namespace, so nothing can confuse it with a Claude session UUID.
 // Hyphen, not colon: session ids occasionally end up in file names.
 const PANEL_TERM_ID_PREFIX = 'sbx-panel-shell-';
 
+function panelTermById(sessionId) {
+  for (const entry of panelTerms.values()) {
+    if (entry.id === sessionId) return entry;
+  }
+  return null;
+}
+
 window.api.onTerminalData((sessionId, data) => {
-  if (panelTerm && sessionId === panelTerm.id) panelTerm.terminal.write(data);
+  panelTermById(sessionId)?.terminal.write(data);
 });
 
 window.api.onProcessExited((sessionId) => {
-  if (panelTerm && sessionId === panelTerm.id) {
-    panelTerm.exited = true;
-    panelTerm.terminal.write('\r\n\x1b[90m[shell exited]\x1b[0m\r\n');
-  }
+  const entry = panelTermById(sessionId);
+  if (!entry) return;
+  entry.exited = true;
+  entry.terminal.write('\r\n\x1b[90m[shell exited]\x1b[0m\r\n');
+  entry.onExit?.();
 });
 
 // Spawn the panel shell and attach it to `host`. Resolves once the PTY is up.
-window.createPanelTerminal = async function createPanelTerminal(host, projectPath) {
-  window.destroyPanelTerminal();
+window.createPanelTerminal = async function createPanelTerminal(host, projectPath, options = {}) {
+  const slot = options.slot || DEFAULT_SLOT;
+  window.destroyPanelTerminal(slot);
   if (!host || !projectPath) return null;
 
   const id = PANEL_TERM_ID_PREFIX + crypto.randomUUID();
@@ -450,8 +462,11 @@ window.createPanelTerminal = async function createPanelTerminal(host, projectPat
   terminal.open(host);
   host.style.backgroundColor = TERMINAL_THEME.background;
 
-  const entry = { id, terminal, fitAddon, element: host, projectPath, closed: false, exited: false };
-  panelTerm = entry;
+  const entry = {
+    id, slot, terminal, fitAddon, element: host, projectPath,
+    closed: false, exited: false, onExit: options.onExit || null,
+  };
+  panelTerms.set(slot, entry);
 
   terminal.onData(data => {
     if (data === '\x1b[I' || data === '\x1b[O') return;
@@ -467,13 +482,13 @@ window.createPanelTerminal = async function createPanelTerminal(host, projectPat
   let fitRaf = 0;
   entry.observer = new ResizeObserver(() => {
     cancelAnimationFrame(fitRaf);
-    fitRaf = requestAnimationFrame(() => { if (panelTerm === entry) safeFit(entry); });
+    fitRaf = requestAnimationFrame(() => { if (panelTerms.get(slot) === entry) safeFit(entry); });
   });
   entry.observer.observe(host);
 
   const result = await window.api.openTerminal(id, projectPath, true, { type: 'terminal', ephemeral: true });
-  // The panel may have been closed while the PTY was starting.
-  if (panelTerm !== entry) return null;
+  // The pane may have been closed while the PTY was starting.
+  if (panelTerms.get(slot) !== entry) return null;
   if (!result?.ok) {
     entry.exited = true;
     terminal.write(`\r\n\x1b[31mError: ${result?.error || 'could not start shell'}\x1b[0m\r\n`);
@@ -482,15 +497,15 @@ window.createPanelTerminal = async function createPanelTerminal(host, projectPat
   safeFit(entry);
   // xterm cannot size a cell before its font has actually loaded, and the
   // first fit can land on the fallback metrics. One deferred fit settles it.
-  setTimeout(() => { if (panelTerm === entry) safeFit(entry); }, 150);
+  setTimeout(() => { if (panelTerms.get(slot) === entry) safeFit(entry); }, 150);
   return entry;
 };
 
 // Kill the PTY and dispose the xterm instance. Safe to call when none exists.
-window.destroyPanelTerminal = function destroyPanelTerminal() {
-  const entry = panelTerm;
+window.destroyPanelTerminal = function destroyPanelTerminal(slot = DEFAULT_SLOT) {
+  const entry = panelTerms.get(slot);
   if (!entry) return;
-  panelTerm = null;
+  panelTerms.delete(slot);
   // close-terminal only detaches; the PTY has to be killed explicitly or it
   // outlives the panel that owns it.
   try { entry.observer?.disconnect(); } catch {}
@@ -499,22 +514,40 @@ window.destroyPanelTerminal = function destroyPanelTerminal() {
   try { entry.terminal.dispose(); } catch {}
 };
 
-window.fitPanelTerminal = function fitPanelTerminal() {
-  if (panelTerm) safeFit(panelTerm);
+window.fitPanelTerminal = function fitPanelTerminal(slot = DEFAULT_SLOT) {
+  const entry = panelTerms.get(slot);
+  if (entry) safeFit(entry);
 };
 
-window.focusPanelTerminal = function focusPanelTerminal() {
-  panelTerm?.terminal.focus();
+window.focusPanelTerminal = function focusPanelTerminal(slot = DEFAULT_SLOT) {
+  panelTerms.get(slot)?.terminal.focus();
+};
+
+// Send a line to a scratch shell, the way typing it would. The project page's
+// Terminal tab uses this for its one-click commands.
+window.writePanelTerminal = function writePanelTerminal(text, slot = DEFAULT_SLOT) {
+  const entry = panelTerms.get(slot);
+  if (!entry || entry.exited) return false;
+  window.api.sendInput(entry.id, text);
+  entry.terminal.focus();
+  return true;
+};
+
+window.clearPanelTerminal = function clearPanelTerminal(slot = DEFAULT_SLOT) {
+  panelTerms.get(slot)?.terminal.clear();
 };
 
 window._applyPanelTerminalTheme = (theme) => {
-  if (!panelTerm) return;
-  panelTerm.terminal.options.theme = theme;
-  panelTerm.element.style.backgroundColor = theme.background;
+  for (const entry of panelTerms.values()) {
+    entry.terminal.options.theme = theme;
+    entry.element.style.backgroundColor = theme.background;
+  }
 };
 
-// A renderer reload never reaches SessionSidePanelApp's unmount hook.
-window.addEventListener('beforeunload', () => window.destroyPanelTerminal());
+// A renderer reload never reaches the panes' unmount hooks.
+window.addEventListener('beforeunload', () => {
+  for (const slot of [...panelTerms.keys()]) window.destroyPanelTerminal(slot);
+});
 
 function setupDragAndDrop(container, getSessionId) {
   let dragCounter = 0;

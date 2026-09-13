@@ -36,10 +36,22 @@ watch(() => store.showJsonl, (showing) => {
 // ── Public API ────────────────────────────────────────────────────
 async function open(session) {
   const result = await window.api.readSessionJsonl(session.sessionId);
-
   const displayName = session.name || session.aiTitle || session.summary || session.sessionId;
+  await render(result, displayName, session.sessionId);
+}
+
+// A sub-agent's transcript is the same shape as a session's, written to its
+// own file — so it renders through the same path rather than a second, poorer
+// viewer. See subagent-tasks.js.
+async function openSubagent(parentSessionId, agent) {
+  const result = await window.api.readSubagentJsonl(parentSessionId, agent.agentId);
+  const displayName = `${agent.agentType || 'agent'} — ${agent.description || agent.agentId}`;
+  await render(result, displayName, `${parentSessionId} · agent-${agent.agentId}`);
+}
+
+async function render(result, displayName, idLabel) {
   title.value = displayName;
-  sessionId.value = session.sessionId;
+  sessionId.value = idLabel;
 
   // Wait for the DOM to update before writing into bodyRef
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -96,5 +108,5 @@ async function open(session) {
   body.scrollTop = body.scrollHeight;
 }
 
-defineExpose({ open });
+defineExpose({ open, openSubagent });
 </script>

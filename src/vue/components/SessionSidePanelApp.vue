@@ -82,6 +82,43 @@
         </button>
       </header>
 
+      <!-- A note or plan open for editing. Same overlay shape as the diff: at
+           this width a second bar is a row the editor does not get. -->
+      <header v-else-if="editingDoc" class="sbx-sidepanel__head">
+        <button
+          type="button"
+          class="sbx-sidepanel__backbtn"
+          :data-tooltip="docDirty ? 'Discard changes and go back' : 'Back'"
+          aria-label="Close editor"
+          @click="closeDoc"
+        >
+          <SbIcon name="chevron-down" :size="13" class="sbx-sidepanel__backchev" />
+          Back
+        </button>
+        <span class="sbx-sidepanel__difffile" :title="editingDoc.filePath">{{ editingDoc.title }}</span>
+        <span v-if="docDirty" class="sbx-sidepanel__dot" title="Unsaved changes"></span>
+        <span class="sbx-sidepanel__spacer"></span>
+        <button
+          type="button"
+          class="sbx-sidepanel__iconbtn"
+          data-tooltip="Open in the main view"
+          aria-label="Open in the main view"
+          @click="expandDoc"
+        >
+          <SbIcon name="maximize-2" :size="12" />
+        </button>
+        <button
+          type="button"
+          class="sbx-sidepanel__iconbtn"
+          :disabled="!docDirty || docSaving"
+          data-tooltip="Save (⌘S)"
+          aria-label="Save"
+          @click="saveDoc"
+        >
+          <SbIcon name="check" :size="13" />
+        </button>
+      </header>
+
       <header v-else class="sbx-sidepanel__head">
         <span class="sbx-sidepanel__title">{{ activeTab?.label }}</span>
         <span v-if="tab === 'changes' && detail?.totalAdded" class="pv-added">+{{ detail.totalAdded }}</span>
@@ -121,6 +158,20 @@
       <!-- ── Diff overlay ────────────────────────────────────────────── -->
       <div v-else-if="activeDiff" class="sbx-sidepanel__pane sbx-sidepanel__pane--diff">
         <div ref="diffHostRef" class="sbx-sidepanel__diffhost"></div>
+      </div>
+
+      <!-- ── Note / plan editor ──────────────────────────────────────
+           Markdown source, because that is what these files are and what the
+           main view edits too. A note is rarely only checkboxes — the prose
+           around them is half the point. -->
+      <div v-else-if="editingDoc" class="sbx-sidepanel__pane sbx-sidepanel__pane--doc">
+        <!-- The app's own Markdown editor, the same CodeMirror the main view
+             and the Projects tab use — highlighting, folding, ⌘F, ⌘S. -->
+        <div ref="docHostRef" class="sbx-doc__editor" @keydown="onDocKey"></div>
+        <div class="sbx-doc__foot">
+          <span class="sbx-doc__hint">{{ docError || (docDirty ? 'Unsaved — ⌘S' : docSavedNote) }}</span>
+          <button type="button" class="sbx-sidepanel__linkbtn" @click="expandDoc">Open full view</button>
+        </div>
       </div>
 
       <!-- ── Changes: working tree / commits ─────────────────────────── -->
@@ -277,6 +328,147 @@
         </template>
         <div v-else class="pv-empty">{{ loading && !detail ? 'Loading…' : 'No compose services' }}</div>
       </div>
+
+      <!-- ── TODOs and plans ─────────────────────────────────────────
+           The account's notes that name this project, and the plans that
+           mention it. Both are Markdown in the account's Claude home, and both
+           open in the same editor the Plans tab uses. -->
+      <template v-else-if="tab === 'todos'">
+        <div class="sbx-sidepanel__pane">
+          <div class="sbx-sidepanel__seclabel">
+            Notes
+            <button
+              type="button"
+              class="sbx-sidepanel__linkbtn"
+              :data-tooltip="creatingNote ? 'Cancel' : 'New note related to this project'"
+              @click="toggleNewNote"
+            >{{ creatingNote ? 'Cancel' : '+ New' }}</button>
+          </div>
+
+          <!-- An inline field rather than a dialog: window.prompt does not
+               exist in Electron, and a one-field dialog for a title would be
+               heavier than the note it creates. -->
+          <div v-if="creatingNote" class="sbx-doc__newrow">
+            <input
+              ref="newNoteInput"
+              v-model="newNoteTitle"
+              class="sbx-doc__input"
+              placeholder="Note title"
+              @keydown.enter.prevent="createNote"
+              @keydown.escape="toggleNewNote"
+            />
+            <button type="button" class="sbx-sidepanel__linkbtn" @click="createNote">Create</button>
+          </div>
+
+          <div v-if="!projectNotes.length" class="pv-empty">
+            No notes for this project yet.
+          </div>
+
+          <div v-for="note in projectNotes" :key="note.filename" class="sbx-todo">
+            <div class="sbx-todo__head" @click="editNote(note)">
+              <span class="sbx-todo__title">{{ note.title }}</span>
+              <span v-if="note.total" class="sbx-todo__count" :class="{ 'is-done': note.done === note.total }">
+                {{ note.done }}/{{ note.total }}
+              </span>
+              <button
+                type="button"
+                class="sbx-todo__act"
+                data-tooltip="Edit note"
+                aria-label="Edit note"
+                @click.stop="editNote(note)"
+              ><SbIcon name="pencil" :size="11" tone="muted" /></button>
+              <button
+                type="button"
+                class="sbx-todo__act"
+                data-tooltip="Open in the main view"
+                aria-label="Open in the main view"
+                @click.stop="openNote(note)"
+              ><SbIcon name="maximize-2" :size="11" tone="muted" /></button>
+            </div>
+            <!-- The whole note, prose and checkboxes in the order they were
+                 written: a list of boxes without the text around them loses
+                 the part that says why they are there. -->
+            <div v-if="note.blocks?.length" class="sbx-todo__list">
+              <template v-for="(block, i) in note.blocks" :key="i">
+                <div
+                  v-if="block.type === 'todo'"
+                  class="sbx-todo__item"
+                  :class="{ 'is-done': block.done }"
+                  @click="toggleNoteTodo(note, block)"
+                >
+                  <SbIcon :name="block.done ? 'square-check-big' : 'square'" :size="12" tone="muted" />
+                  <span>{{ block.text || '(empty)' }}</span>
+                </div>
+                <p v-else class="sbx-todo__text" @click="editNote(note)">{{ block.text }}</p>
+              </template>
+            </div>
+          </div>
+
+          <div class="sbx-sidepanel__seclabel">
+            Plans
+            <button
+              type="button"
+              class="sbx-sidepanel__linkbtn"
+              @click="allPlans = !allPlans"
+            >{{ allPlans ? 'Related only' : 'Show all' }}</button>
+          </div>
+
+          <div v-if="!visiblePlans.length" class="pv-empty">
+            {{ allPlans ? 'No plans on this account.' : 'No plans mention this project.' }}
+          </div>
+
+          <div
+            v-for="plan in visiblePlans"
+            :key="plan.filename"
+            class="sbx-todo sbx-todo--plan"
+            @click="editPlan(plan)"
+          >
+            <div class="sbx-todo__head">
+              <span class="sbx-todo__title">{{ plan.title || plan.filename }}</span>
+              <button
+                type="button"
+                class="sbx-todo__act"
+                data-tooltip="Open in the main view"
+                aria-label="Open in the main view"
+                @click.stop="openPlan(plan)"
+              ><SbIcon name="maximize-2" :size="11" tone="muted" /></button>
+            </div>
+            <span class="sbx-todo__meta">{{ plan.filename }}</span>
+          </div>
+        </div>
+      </template>
+
+      <!-- ── Background tasks ────────────────────────────────────────
+           Sub-agents this session spawned. Clicking one opens its transcript
+           in the main area — the same viewer a session's own history uses. -->
+      <template v-else-if="tab === 'tasks'">
+        <div class="sbx-sidepanel__pane">
+          <div v-if="!subagents.length" class="pv-empty">
+            This session has not spawned any sub-agents.
+          </div>
+
+          <button
+            v-for="agent in subagents"
+            :key="agent.agentId"
+            type="button"
+            class="sbx-agent"
+            :class="{ 'is-running': agent.running }"
+            @click="openSubagent(agent)"
+          >
+            <span class="sbx-agent__head">
+              <span class="sbx-agent__dot" :class="{ 'is-running': agent.running }"></span>
+              <span class="sbx-agent__type">{{ agent.agentType }}</span>
+              <span class="sbx-sidepanel__spacer"></span>
+              <span class="sbx-agent__state">{{ agent.running ? 'running' : 'finished' }}</span>
+            </span>
+            <span class="sbx-agent__desc">{{ agent.description || agent.agentId }}</span>
+            <span v-if="agent.lastText" class="sbx-agent__last">{{ agent.lastText }}</span>
+            <span class="sbx-agent__meta">
+              {{ agentWhen(agent) }} · {{ formatBytes(agent.bytes) }}
+            </span>
+          </button>
+        </div>
+      </template>
 
       <!-- ── Scratch shell ───────────────────────────────────────────── -->
       <!-- v-show, not v-if: the xterm instance is bound to this host element,
@@ -682,6 +874,279 @@ watch(tab, (next) => {
   if (next === 'shell') {
     ensureShell().then(() => requestAnimationFrame(() => window._refitOpenTerminals?.()));
   }
+});
+
+// ── TODOs and plans ───────────────────────────────────────────────
+// Notes live in the account's Claude home and name the projects they relate
+// to; plans live there too but record nothing, so main.js works out which
+// projects each one mentions. Both are read here rather than shared with the
+// Plans tab: that tab is account-wide, this pane is one project's slice.
+const notes = ref([]);
+const plans = ref([]);
+const allPlans = ref(false);
+
+const projectNotes = computed(() =>
+  notes.value.filter(n => (n.projects || []).includes(projectPath.value))
+);
+
+const visiblePlans = computed(() => (allPlans.value
+  ? plans.value
+  : plans.value.filter(p => (p.projects || []).includes(projectPath.value))));
+
+async function loadDocs() {
+  const [noteList, planList] = await Promise.all([
+    window.api.getNotes().catch(() => []),
+    window.api.getPlans().catch(() => []),
+  ]);
+  notes.value = noteList || [];
+  plans.value = planList || [];
+}
+
+const creatingNote = ref(false);
+const newNoteTitle = ref('');
+const newNoteInput = ref(null);
+
+async function toggleNewNote() {
+  creatingNote.value = !creatingNote.value;
+  if (!creatingNote.value) return;
+  newNoteTitle.value = '';
+  await nextTick();
+  newNoteInput.value?.focus();
+}
+
+async function createNote() {
+  const title = newNoteTitle.value.trim();
+  if (!title) return;
+  const res = await window.api.createNote({ title, projects: [projectPath.value] });
+  creatingNote.value = false;
+  newNoteTitle.value = '';
+  await loadDocs();
+  window.vuePlans?.refreshNotes?.();
+  if (res?.ok) {
+    const created = notes.value.find(n => n.filename === res.filename);
+    // Straight into the editor: a note created from a title is empty, and the
+    // reason for creating it is the thing you were about to write.
+    if (created) editNote(created);
+  }
+}
+
+// ── The panel's own Markdown editor ───────────────────────────────
+// Notes and plans are both Markdown in the account's Claude home, and both are
+// things you want to change *while* reading a session — which is the whole
+// argument for the side panel. The main view is one click away for anything
+// that deserves the width.
+const editingDoc = ref(null);
+// Which session the editor was opened beside, so switching sessions can put it
+// away — the note belongs to that session's project, not to the next one.
+let editingDocSession = null;
+const docOriginal = ref('');
+const docSaving = ref(false);
+const docError = ref('');
+const docSavedNote = ref('');
+const docHostRef = ref(null);
+const docDirty = ref(false);
+let docView = null;
+
+function docText() {
+  return docView ? docView.state.doc.toString() : (editingDoc.value?.content ?? '');
+}
+
+// CodeMirror owns the text, so "changed" is a comparison, not a bound value.
+// Cheap: these documents are notes and plans, tens of kilobytes at worst.
+function checkDirty() {
+  docDirty.value = !!editingDoc.value && docText() !== docOriginal.value;
+}
+
+function destroyDocView() {
+  if (!docView) return;
+  docView.destroy();
+  docView = null;
+}
+
+async function mountDocView(content, filename) {
+  await nextTick();
+  const host = docHostRef.value;
+  if (!host) return;
+  destroyDocView();
+  host.replaceChildren();
+  // Same factory the main Markdown pane and the Projects tab use, so a note
+  // is highlighted, foldable and searchable in both places rather than being
+  // a plain box here and an editor there.
+  docView = window.createEditableViewer?.(host, content, filename, { wrap: true }) || null;
+  if (!docView) return;
+  docView.focus();
+  // CodeMirror's own Mod-S binding fires this rather than a keydown we could
+  // catch — see cmSaveKeymap in codemirror-setup.js.
+  host.addEventListener('cm-save', saveDoc);
+  for (const event of ['input', 'keyup', 'paste', 'cut']) {
+    host.addEventListener(event, checkDirty);
+  }
+}
+
+async function openDoc(kind, doc, read) {
+  const result = await read();
+  // read-plan reports a failure as an empty path rather than an error, so the
+  // path is what decides here — an editor with nowhere to save to is worse
+  // than a message.
+  if (!result || result.error || result.ok === false || !result.filePath) {
+    docError.value = result?.error || 'Could not open the file.';
+    return;
+  }
+  editingDoc.value = {
+    kind,
+    filename: doc.filename,
+    filePath: result.filePath,
+    title: doc.title || doc.filename,
+    content: result.content,
+    source: doc,
+  };
+  docOriginal.value = result.content;
+  editingDocSession = sessionId.value;
+  docError.value = '';
+  docSavedNote.value = '';
+  docDirty.value = false;
+  await mountDocView(result.content, doc.filename);
+}
+
+function editNote(note) {
+  return openDoc('note', note, () => window.api.readNote(note.filename));
+}
+
+function editPlan(plan) {
+  return openDoc('plan', plan, () => window.api.readPlan(plan.filename));
+}
+
+async function saveDoc() {
+  const doc = editingDoc.value;
+  if (!doc || docSaving.value) return;
+  const content = docText();
+  if (content === docOriginal.value) { docDirty.value = false; return; }
+  docSaving.value = true;
+  docError.value = '';
+  try {
+    const res = doc.kind === 'note'
+      ? await window.api.saveNote(doc.filePath, content)
+      : await window.api.savePlan(doc.filePath, content);
+    if (!res?.ok) {
+      docError.value = res?.error || 'Could not save.';
+      return;
+    }
+    doc.content = content;
+    docOriginal.value = content;
+    docDirty.value = false;
+    docSavedNote.value = 'Saved';
+    // Ticking a box in here has to move the counts everywhere else.
+    await loadDocs();
+    window.vuePlans?.refreshNotes?.();
+  } finally {
+    docSaving.value = false;
+  }
+}
+
+function closeDoc() {
+  if (docDirty.value && !confirm('Discard unsaved changes?')) return;
+  destroyDocView();
+  editingDoc.value = null;
+  docOriginal.value = '';
+  docError.value = '';
+  docDirty.value = false;
+}
+
+// The same document, in the main Markdown pane — with the preview toggle and
+// the width a long plan wants. Unsaved work goes with it rather than being
+// silently dropped.
+async function expandDoc() {
+  const doc = editingDoc.value;
+  if (!doc) return;
+  if (docDirty.value) await saveDoc();
+  if (docDirty.value) return;   // the save failed; docError says why
+  destroyDocView();
+  editingDoc.value = null;
+  if (doc.kind === 'note') window.openNote?.(doc.source);
+  else window.openPlan?.(doc.source);
+}
+
+// ⌘S arrives as CodeMirror's own `cm-save` event (see mountDocView); this is
+// only the way out.
+function onDocKey(event) {
+  if (event.key === 'Escape') closeDoc();
+}
+
+function openNote(note) {
+  destroyDocView();
+  editingDoc.value = null;
+  window.openNote?.(note);
+}
+
+function openPlan(plan) {
+  destroyDocView();
+  editingDoc.value = null;
+  window.openPlan?.(plan);
+}
+
+async function toggleNoteTodo(note, todo) {
+  const res = await window.api.toggleNoteTodo(note.filename, todo.index);
+  if (!res?.ok) return;
+  await loadDocs();
+  window.vuePlans?.refreshNotes?.();
+}
+
+// ── Background tasks ──────────────────────────────────────────────
+// Sub-agents of the open session. Polled while the pane is showing and the
+// session is working — a Task that finishes while you watch should stop
+// saying "running" without a click.
+const SUBAGENT_POLL_MS = 5000;
+const subagents = ref([]);
+let subagentTimer = null;
+
+async function loadSubagents() {
+  const id = sessionId.value;
+  if (!id) { subagents.value = []; return; }
+  const list = await window.api.getSessionSubagents(id).catch(() => []);
+  if (sessionId.value === id) subagents.value = list || [];
+}
+
+function openSubagent(agent) {
+  window.openSubagentTranscript?.(sessionId.value, agent);
+}
+
+function agentWhen(agent) {
+  const when = agent.updatedAt || agent.startedAt;
+  if (!when) return '';
+  return window.formatDate ? window.formatDate(new Date(when)) : new Date(when).toLocaleString();
+}
+
+function formatBytes(n) {
+  if (!n) return '0 B';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
+  return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+// An open editor belongs to the pane it was opened from and to the session it
+// was opened beside. Leaving either one takes it away — after saving, because
+// silently dropping something the user typed is not a trade worth making.
+watch([tab, sessionId], async () => {
+  if (!editingDoc.value) return;
+  if (tab.value === 'todos' && sessionId.value === editingDocSession) return;
+  if (docDirty.value) await saveDoc();
+  destroyDocView();
+  editingDoc.value = null;
+});
+
+watch([tab, sessionId, sessionState], () => {
+  clearInterval(subagentTimer);
+  subagentTimer = null;
+  if (tab.value === 'tasks') {
+    loadSubagents();
+    if (sessionState.value === 'running') subagentTimer = setInterval(loadSubagents, SUBAGENT_POLL_MS);
+  }
+  if (tab.value === 'todos') loadDocs();
+}, { immediate: true });
+
+onBeforeUnmount(() => {
+  clearInterval(subagentTimer);
+  destroyDocView();
 });
 
 function close() { setSidePanelTab(null); }

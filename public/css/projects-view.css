@@ -191,3 +191,66 @@
 .project-open-btn:focus-visible .sb-icon {
   color: var(--text-secondary);
 }
+
+/* ── Terminal tab ────────────────────────────────────────────────────────
+   A scratch shell in the project directory. It fills the tab rather than
+   scrolling with it: a terminal that scrolls inside a scrolling page is two
+   scrollbars arguing, and xterm already owns one. */
+.pv-term {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 320px;
+  overflow: hidden;
+  border: var(--border-width-hairline) solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-panel-raised);
+}
+
+.pv-term__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--border-width-hairline) solid var(--border-subtle);
+}
+
+.pv-term__cwd {
+  min-width: 0;
+  font-family: var(--font-code);
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-term__state {
+  flex-shrink: 0;
+  font-size: var(--text-2xs);
+  color: var(--status-warning);
+}
+
+.pv-term__spacer { flex: 1; }
+
+.pv-term__btn {
+  flex-shrink: 0;
+  font-family: var(--font-ui);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  background: var(--surface-card);
+  border: var(--border-width-hairline) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+}
+.pv-term__btn:hover { background: var(--surface-card-hover); color: var(--text-primary); }
+.pv-term__btn:focus-visible { outline: none; box-shadow: var(--shadow-focus-ring); }
+
+.pv-term__host {
+  flex: 1;
+  min-height: 0;
+  padding: var(--space-2);
+}

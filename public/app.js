@@ -1584,6 +1584,13 @@ window.__sb = {
     window.vueJsonlViewer?.open(session);
   },
 
+  // By id, for callers holding one rather than the session object — the
+  // sub-agent view's way back to the session that spawned it.
+  openSessionById: (id) => {
+    const session = sessionMap.get(id);
+    if (session) openSession(session);
+  },
+
   launchConfig: (id) => {
     const session = sessionMap.get(id);
     if (session && typeof showResumeSessionDialog === 'function') showResumeSessionDialog(session);

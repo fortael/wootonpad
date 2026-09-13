@@ -96,7 +96,18 @@ export const store = reactive({
   // sidebar and the rendering is in the board — two siblings, one truth.
   boardProjectFilter: null,
   showJsonl: false,
+  // A sub-agent's transcript, open in the main area. It is not a session — it
+  // has no row and no card — so this is its only presence in the app's state.
+  subagentViewOpen: false,
+  // sessionId → number of sub-agents still working, for the sidebar rows and
+  // the board cards. Only running sessions are ever polled: an agent cannot
+  // outlive the CLI process that spawned it.
+  subagentCounts: new Map(),
   planViewerOpen: false,
+  // What the Markdown pane is currently showing: 'plan' or 'note'. The two
+  // come from different directories with different write guards, so the save
+  // needs to know which one it is looking at.
+  planViewerKind: 'plan',
   gridViewActive: false,
   gridViewerCount: '',
   accountViewerOpen: false,      // Accounts tab detail panel in the main area

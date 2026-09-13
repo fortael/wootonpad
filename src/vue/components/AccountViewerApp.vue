@@ -110,6 +110,285 @@
           </div>
         </section>
 
+        <!-- ── MCP servers ───────────────────────────────────────── -->
+        <section class="acct-section">
+          <h3 class="acct-section__title">
+            <SbIcon name="plug" :size="14" tone="muted" />
+            MCP servers
+            <span v-if="allServers.length" class="acct-chip">{{ allServers.length }}</span>
+            <span class="acct-viewer__spacer"></span>
+            <button
+              class="acct-btn"
+              :disabled="checkingAll || !accountServers.length"
+              data-tooltip="Run the MCP initialize handshake against every account-wide server"
+              @click="checkAll"
+            >{{ checkingAll ? 'Checking…' : 'Check all' }}</button>
+            <button class="acct-btn" @click="addOpen = !addOpen">
+              {{ addOpen ? 'Cancel' : 'Add MCP' }}
+            </button>
+          </h3>
+
+          <!-- Add form. Writes to settings.json — see the hint: it is the one
+               file in the config dir the app owns, and unlike .claude.json no
+               running CLI rewrites it underneath us. -->
+          <div v-if="addOpen" class="acct-form">
+            <div class="acct-form__row">
+              <input v-model="form.name" class="acct-input" placeholder="Server name (e.g. linear)" />
+              <select v-model="form.type" class="acct-input acct-input--select">
+                <option value="stdio">stdio (local command)</option>
+                <option value="http">http</option>
+                <option value="sse">sse</option>
+              </select>
+            </div>
+
+            <template v-if="form.type === 'stdio'">
+              <input v-model="form.command" class="acct-input" placeholder="Command, e.g. npx -y @acme/mcp-server --port 3000" />
+              <textarea
+                v-model="form.env"
+                class="acct-input acct-input--area"
+                rows="2"
+                placeholder="Environment, one KEY=value per line (optional)"
+              ></textarea>
+            </template>
+            <template v-else>
+              <input v-model="form.url" class="acct-input" placeholder="https://example.com/mcp" />
+              <textarea
+                v-model="form.headers"
+                class="acct-input acct-input--area"
+                rows="2"
+                placeholder="Headers, one Name: value per line (optional)"
+              ></textarea>
+            </template>
+
+            <div class="acct-form__row">
+              <p class="acct-section__hint acct-form__hint">
+                Saved to <code class="acct-code">settings.json</code> in this account's config
+                directory, so it applies to every project this account opens.
+              </p>
+              <button class="acct-btn" :disabled="saving" @click="saveServer">
+                {{ saving ? 'Saving…' : 'Save server' }}
+              </button>
+            </div>
+            <div v-if="formError" class="acct-file-error">{{ formError }}</div>
+          </div>
+
+          <p v-if="!allServers.length" class="acct-section__hint">
+            No MCP servers configured for this account. Add one here, or with
+            <code class="acct-code">claude mcp add</code>.
+          </p>
+
+          <div v-if="accountServers.length" class="acct-mcp-list">
+            <div v-for="s in accountServers" :key="s.id" class="acct-mcp">
+              <div class="acct-mcp__head">
+                <span class="acct-mcp__name">{{ s.name }}</span>
+                <span class="acct-chip">{{ s.transport }}</span>
+                <span class="acct-chip">{{ s.scopeLabel }}</span>
+                <span v-if="s.disabled" class="acct-chip acct-chip--warn">disabled</span>
+                <span class="acct-viewer__spacer"></span>
+                <span v-if="statuses[s.id]" class="acct-chip" :class="statusChip(statuses[s.id])">
+                  {{ MCP_LABELS[statuses[s.id].state] || statuses[s.id].state }}
+                </span>
+                <button class="acct-btn" :disabled="!!checking_[s.id]" @click="checkServer(s)">
+                  {{ checking_[s.id] ? 'Checking…' : 'Check' }}
+                </button>
+                <button
+                  v-if="s.writable"
+                  class="acct-icon-btn"
+                  data-tooltip="Remove from settings.json"
+                  aria-label="Remove server"
+                  @click="removeServer(s)"
+                ><SbIcon name="trash-2" :size="13" tone="muted" /></button>
+              </div>
+              <div class="acct-mcp__target" :title="serverTarget(s)">{{ serverTarget(s) }}</div>
+              <div v-if="s.env.length || s.headers.length" class="acct-mcp__meta">
+                <span v-for="p in [...s.headers, ...s.env]" :key="p.key" class="acct-mcp__pair">
+                  {{ p.key }}<span class="acct-mcp__pair-value">={{ p.value }}</span>
+                </span>
+              </div>
+              <div
+                v-if="statuses[s.id]"
+                class="acct-mcp__status"
+                :class="'acct-mcp__status--' + statusTone(statuses[s.id])"
+              >
+                {{ statuses[s.id].message }}
+                <span v-if="statuses[s.id].durationMs != null" class="acct-mcp__meta">
+                  · {{ statuses[s.id].durationMs }} ms
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Project-scoped servers (`claude mcp add -s local`) belong to one
+               checkout, not to the account, so they stay folded away. -->
+          <template v-if="projectServers.length">
+            <button class="acct-btn acct-btn--wide" @click="showProjectServers = !showProjectServers">
+              {{ showProjectServers ? 'Hide' : 'Show' }} {{ projectServers.length }} project-scoped
+              server{{ projectServers.length === 1 ? '' : 's' }}
+            </button>
+            <div v-if="showProjectServers" class="acct-mcp-list">
+              <div v-for="s in projectServers" :key="s.id" class="acct-mcp">
+                <div class="acct-mcp__head">
+                  <span class="acct-mcp__name">{{ s.name }}</span>
+                  <span class="acct-chip">{{ s.transport }}</span>
+                  <span class="acct-viewer__spacer"></span>
+                  <span v-if="statuses[s.id]" class="acct-chip" :class="statusChip(statuses[s.id])">
+                    {{ MCP_LABELS[statuses[s.id].state] || statuses[s.id].state }}
+                  </span>
+                  <button class="acct-btn" :disabled="!!checking_[s.id]" @click="checkServer(s)">
+                    {{ checking_[s.id] ? 'Checking…' : 'Check' }}
+                  </button>
+                </div>
+                <div class="acct-mcp__target" :title="serverTarget(s)">{{ serverTarget(s) }}</div>
+                <div class="acct-mcp__meta" :title="s.projectPath">{{ s.projectPath }}</div>
+                <div
+                  v-if="statuses[s.id]"
+                  class="acct-mcp__status"
+                  :class="'acct-mcp__status--' + statusTone(statuses[s.id])"
+                >{{ statuses[s.id].message }}</div>
+              </div>
+            </div>
+            <p v-if="mcp?.projectServersTruncated" class="acct-section__hint">
+              Only the first project-scoped servers are listed.
+            </p>
+          </template>
+        </section>
+
+        <!-- ── Plugins ───────────────────────────────────────────── -->
+        <section class="acct-section">
+          <h3 class="acct-section__title">
+            <SbIcon name="puzzle" :size="14" tone="muted" />
+            Plugins
+            <span v-if="plugins.length" class="acct-chip">{{ plugins.length }}</span>
+            <span class="acct-viewer__spacer"></span>
+            <button
+              class="acct-btn"
+              data-tooltip="Open Anthropic's plugin marketplace on GitHub"
+              @click="openMarketplace"
+            >
+              Browse marketplace
+              <SbIcon name="square-arrow-out-up-right" :size="11" />
+            </button>
+            <button class="acct-btn" @click="toggleCatalog">
+              {{ catalogOpen ? 'Cancel' : 'Add plugin' }}
+            </button>
+          </h3>
+
+          <!-- Catalogue: the marketplaces this account has already fetched,
+               read straight out of their checkouts. Installing shells out to
+               `claude plugin install` as this account — one installer, not
+               two. -->
+          <div v-if="catalogOpen" class="acct-form">
+            <div class="acct-form__row">
+              <input
+                v-model="catalogQuery"
+                class="acct-input"
+                placeholder="Search plugins by name, description or category"
+                @input="scheduleCatalogSearch"
+              />
+              <select v-model="catalogMarketplace" class="acct-input acct-input--select" @change="loadCatalog">
+                <option value="">All marketplaces</option>
+                <option v-for="m in marketplaces" :key="m.name" :value="m.name">
+                  {{ m.name }} ({{ m.pluginCount }})
+                </option>
+              </select>
+            </div>
+
+            <div class="acct-form__row">
+              <input
+                v-model="marketplaceSource"
+                class="acct-input"
+                placeholder="Add a marketplace: owner/repo, https:// URL or path"
+                @keydown.enter.prevent="addMarketplace"
+              />
+              <button class="acct-btn" :disabled="!!busy" @click="addMarketplace">
+                {{ busy === 'marketplace' ? 'Adding…' : 'Add marketplace' }}
+              </button>
+            </div>
+
+            <p v-if="!marketplaces.length" class="acct-section__hint">
+              This account has no marketplaces yet. Add
+              <code class="acct-code">{{ officialRepo }}</code> to get Anthropic's catalogue.
+            </p>
+
+            <div v-if="catalogLoading" class="acct-section__hint">Reading marketplaces…</div>
+
+            <div v-else-if="catalog.length" class="acct-mcp-list">
+              <div v-for="c in catalog" :key="c.key" class="acct-mcp">
+                <div class="acct-mcp__head">
+                  <span class="acct-mcp__name">{{ c.name }}</span>
+                  <span v-if="c.category" class="acct-chip">{{ c.category }}</span>
+                  <span class="acct-chip">{{ c.marketplace }}</span>
+                  <span class="acct-viewer__spacer"></span>
+                  <button
+                    v-if="c.sourceUrl"
+                    class="acct-icon-btn"
+                    data-tooltip="Open the plugin's source"
+                    aria-label="Open plugin source"
+                    @click="openUrl(c.sourceUrl)"
+                  ><SbIcon name="square-arrow-out-up-right" :size="12" tone="muted" /></button>
+                  <span v-if="c.installed" class="acct-chip acct-chip--ok">installed</span>
+                  <button
+                    v-else
+                    class="acct-btn"
+                    :disabled="!!busy"
+                    @click="installPlugin(c)"
+                  >{{ busy === c.key ? 'Installing…' : 'Install' }}</button>
+                </div>
+                <div v-if="c.description" class="acct-mcp__target acct-mcp__target--text">{{ c.description }}</div>
+                <div class="acct-mcp__meta">
+                  {{ c.author || 'unknown author' }}<template v-if="c.sourceLabel"> · {{ c.sourceLabel }}</template>
+                </div>
+              </div>
+            </div>
+
+            <p v-else class="acct-section__hint">Nothing matches “{{ catalogQuery }}”.</p>
+
+            <p v-if="catalogTruncated" class="acct-section__hint">
+              Showing {{ catalog.length }} of {{ catalogTotal }} matches — narrow the search to see the rest.
+            </p>
+          </div>
+
+          <div v-if="pluginResult" class="acct-mcp__status" :class="'acct-mcp__status--' + (pluginResult.ok ? 'ok' : 'bad')">
+            {{ pluginResult.message }}
+          </div>
+
+          <p v-if="!plugins.length" class="acct-section__hint">
+            No plugins installed for this account — add one above, or run
+            <code class="acct-code">claude plugin install</code>.
+          </p>
+
+          <div v-else class="acct-mcp-list">
+            <div v-for="p in plugins" :key="p.id" class="acct-mcp">
+              <div class="acct-mcp__head">
+                <span class="acct-mcp__name">{{ p.name }}</span>
+                <span class="acct-chip" :class="p.enabled ? 'acct-chip--ok' : ''">
+                  {{ p.enabled ? 'enabled' : 'disabled' }}
+                </span>
+                <span v-if="!p.installed" class="acct-chip acct-chip--warn">not on disk</span>
+                <span v-if="p.version" class="acct-chip">v{{ p.version }}</span>
+                <span class="acct-viewer__spacer"></span>
+                <span v-if="p.marketplace" class="acct-mcp__meta" :title="p.marketplaceSource || ''">
+                  {{ p.marketplace }}
+                </span>
+                <button class="acct-btn" :disabled="!!busy" @click="setPluginEnabled(p, !p.enabled)">
+                  {{ busy === p.key ? 'Working…' : (p.enabled ? 'Disable' : 'Enable') }}
+                </button>
+                <button
+                  class="acct-icon-btn"
+                  data-tooltip="Uninstall plugin"
+                  aria-label="Uninstall plugin"
+                  :disabled="!!busy"
+                  @click="uninstallPlugin(p)"
+                ><SbIcon name="trash-2" :size="13" tone="muted" /></button>
+              </div>
+              <div v-if="p.description" class="acct-mcp__target acct-mcp__target--text">{{ p.description }}</div>
+              <div class="acct-mcp__meta">
+                {{ providesText(p) }}<template v-if="p.projectPath"> · {{ p.projectPath }}</template>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- ── Usage ─────────────────────────────────────────────── -->
         <section v-if="usageCards.length" class="acct-section">
           <h3 class="acct-section__title">
@@ -286,6 +565,28 @@ const showAllJson = ref(false);
 
 const JSON_PREVIEW_LINES = 500;
 
+// MCP servers and plugins for this account, plus the per-server probe results.
+// `statuses` is keyed by inventory id, which is what the check IPC takes.
+const mcp = ref(null);
+const statuses = ref({});
+const checking_ = ref({});
+const checkingAll = ref(false);
+const showProjectServers = ref(false);
+const addOpen = ref(false);
+const saving = ref(false);
+const formError = ref('');
+const form = ref({ name: '', type: 'stdio', command: '', url: '', env: '', headers: '' });
+
+const MCP_LABELS = {
+  ok: 'Available',
+  auth: 'Needs auth',
+  unreachable: 'Unreachable',
+  'not-found': 'Not found',
+  timeout: 'Timed out',
+  error: 'Error',
+  unsupported: 'Not checkable',
+};
+
 const AUTH_LABELS = {
   authorized: 'Authorized',
   expired: 'Signed out',
@@ -322,6 +623,248 @@ const authTone = computed(() => {
 });
 
 const authIcon = computed(() => (authTone.value === 'ok' ? 'circle-check' : 'triangle-alert'));
+
+// ── MCP servers and plugins ───────────────────────────────────────
+const allServers = computed(() => mcp.value?.servers || []);
+// Account-wide first: those are the ones "connected to this account" means.
+const accountServers = computed(() => allServers.value.filter(s => s.scope !== 'project'));
+const projectServers = computed(() => allServers.value.filter(s => s.scope === 'project'));
+const plugins = computed(() => mcp.value?.plugins || []);
+
+function serverTarget(s) {
+  if (s.url) return s.url;
+  return [s.command, ...(s.args || [])].filter(Boolean).join(' ');
+}
+
+function statusTone(result) {
+  if (result?.state === 'ok') return 'ok';
+  if (result?.state === 'auth' || result?.state === 'timeout' || result?.state === 'unsupported') return 'warn';
+  return 'bad';
+}
+
+function statusChip(result) {
+  const tone = statusTone(result);
+  return tone === 'ok' ? 'acct-chip--ok' : tone === 'warn' ? 'acct-chip--warn' : 'acct-chip--bad';
+}
+
+function providesText(p) {
+  const parts = Object.entries(p.provides || {}).map(([what, n]) => `${n} ${what}`);
+  if (!parts.length) parts.push('no bundled components');
+  return `${p.scope} scope · ${parts.join(', ')}`;
+}
+
+async function checkServer(s) {
+  if (checking_.value[s.id]) return;
+  checking_.value = { ...checking_.value, [s.id]: true };
+  try {
+    const res = await window.api.checkAccountMcp(accountId.value, s.id);
+    statuses.value = { ...statuses.value, [s.id]: res || { state: 'error', message: 'No response.' } };
+  } catch (err) {
+    statuses.value = { ...statuses.value, [s.id]: { state: 'error', message: err?.message || 'Check failed.' } };
+  } finally {
+    const { [s.id]: _done, ...rest } = checking_.value;
+    checking_.value = rest;
+  }
+}
+
+// Account-wide servers only, and serially: a probe can spawn a process, and a
+// dozen at once on a laptop is a stampede for no gain.
+async function checkAll() {
+  if (checkingAll.value) return;
+  checkingAll.value = true;
+  try {
+    for (const s of accountServers.value) {
+      if (accountId.value == null) break;
+      await checkServer(s);
+    }
+  } finally {
+    checkingAll.value = false;
+  }
+}
+
+// KEY=value / Name: value, one per line — the two shapes people already have
+// in front of them when copying a server's setup instructions.
+function parsePairs(text, separator) {
+  const out = {};
+  for (const line of String(text || '').split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const at = trimmed.indexOf(separator);
+    if (at <= 0) throw new Error(`Expected "name${separator}value" — got "${trimmed}".`);
+    out[trimmed.slice(0, at).trim()] = trimmed.slice(at + 1).trim();
+  }
+  return out;
+}
+
+// Whitespace split, honouring quotes: `npx -y "@acme/mcp server"` is one flag
+// and one argument, not three. Nothing here reaches a shell — the parts become
+// argv entries.
+function splitCommand(text) {
+  const parts = String(text || '').match(/"[^"]*"|'[^']*'|\S+/g) || [];
+  return parts.map(p => (/^".*"$|^'.*'$/.test(p) ? p.slice(1, -1) : p));
+}
+
+async function saveServer() {
+  if (saving.value) return;
+  formError.value = '';
+  const f = form.value;
+  let definition;
+  try {
+    if (f.type === 'stdio') {
+      const [command, ...args] = splitCommand(f.command);
+      definition = { name: f.name.trim(), type: 'stdio', command: command || '', args, env: parsePairs(f.env, '=') };
+    } else {
+      definition = { name: f.name.trim(), type: f.type, url: f.url.trim(), headers: parsePairs(f.headers, ':') };
+    }
+  } catch (err) {
+    formError.value = err.message;
+    return;
+  }
+
+  saving.value = true;
+  try {
+    const res = await window.api.addAccountMcp(accountId.value, definition);
+    if (!res?.ok) {
+      formError.value = res?.error || 'Could not save the server.';
+      return;
+    }
+    addOpen.value = false;
+    form.value = { name: '', type: 'stdio', command: '', url: '', env: '', headers: '' };
+    await loadMcp(accountId.value);
+    const added = allServers.value.find(s => s.name === definition.name && s.scope === 'settings');
+    if (added) checkServer(added);
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function removeServer(s) {
+  if (!confirm(`Remove MCP server "${s.name}" from settings.json?`)) return;
+  const res = await window.api.removeAccountMcp(accountId.value, s.name);
+  if (!res?.ok) {
+    alert(res?.error || 'Could not remove the server.');
+    return;
+  }
+  const { [s.id]: _gone, ...rest } = statuses.value;
+  statuses.value = rest;
+  await loadMcp(accountId.value);
+}
+
+// ── Plugin marketplaces ───────────────────────────────────────────
+const catalogOpen = ref(false);
+const catalogLoading = ref(false);
+const catalog = ref([]);
+const catalogTotal = ref(0);
+const catalogTruncated = ref(false);
+const catalogQuery = ref('');
+const catalogMarketplace = ref('');
+const marketplaces = ref([]);
+const marketplaceSource = ref('');
+const officialRepo = ref('anthropics/claude-plugins-official');
+const officialUrl = ref('https://github.com/anthropics/claude-plugins-official');
+// One in flight at a time, keyed by what it is working on: an install clones a
+// repository, and two of them racing on the same Claude home is not a state
+// worth reasoning about.
+const busy = ref(null);
+const pluginResult = ref(null);
+let catalogTimer = null;
+
+function openUrl(url) {
+  if (url) window.api.openExternal(url);
+}
+
+function openMarketplace() {
+  openUrl(officialUrl.value);
+}
+
+async function toggleCatalog() {
+  catalogOpen.value = !catalogOpen.value;
+  if (catalogOpen.value && !catalog.value.length) await loadCatalog();
+}
+
+async function loadCatalog() {
+  if (!accountId.value) return;
+  catalogLoading.value = true;
+  try {
+    const res = await window.api.getPluginCatalog(accountId.value, {
+      query: catalogQuery.value.trim(),
+      marketplace: catalogMarketplace.value,
+    });
+    if (!res?.ok) return;
+    catalog.value = res.plugins || [];
+    catalogTotal.value = res.total || 0;
+    catalogTruncated.value = !!res.truncated;
+    marketplaces.value = res.marketplaces || [];
+    if (res.official) {
+      officialRepo.value = res.official.repo;
+      officialUrl.value = res.official.url;
+    }
+  } finally {
+    catalogLoading.value = false;
+  }
+}
+
+// Typing filters a couple of hundred entries per keystroke otherwise.
+function scheduleCatalogSearch() {
+  clearTimeout(catalogTimer);
+  catalogTimer = setTimeout(loadCatalog, 200);
+}
+
+async function runPluginCommand(key, action, options, describe) {
+  if (busy.value) return null;
+  busy.value = key;
+  pluginResult.value = null;
+  try {
+    const res = await window.api.pluginCommand(accountId.value, action, options);
+    pluginResult.value = res?.ok
+      ? { ok: true, message: `${describe} — restart Claude sessions to pick it up.` }
+      : { ok: false, message: res?.error || `${describe} failed.` };
+    await loadMcp(accountId.value);
+    if (catalogOpen.value) await loadCatalog();
+    return res;
+  } finally {
+    busy.value = null;
+  }
+}
+
+// An install clones a marketplace's source and can run a command the
+// marketplace declares, so the source is named before anything runs.
+function installPlugin(entry) {
+  const where = entry.sourceLabel || entry.marketplace;
+  if (!confirm(`Install "${entry.name}" from ${entry.marketplace}?\n\nSource: ${where}\n\nThe Claude CLI will fetch and install it for this account.`)) return;
+  return runPluginCommand(entry.key, 'install', { plugin: entry.key, scope: 'user' }, `Installed ${entry.name}`);
+}
+
+function uninstallPlugin(p) {
+  if (!confirm(`Uninstall "${p.name}" from this account?`)) return;
+  return runPluginCommand(p.key, 'uninstall', { plugin: p.key, scope: p.scope }, `Uninstalled ${p.name}`);
+}
+
+function setPluginEnabled(p, enabled) {
+  return runPluginCommand(
+    p.key,
+    enabled ? 'enable' : 'disable',
+    { plugin: p.key },
+    `${enabled ? 'Enabled' : 'Disabled'} ${p.name}`,
+  );
+}
+
+async function addMarketplace() {
+  const source = marketplaceSource.value.trim();
+  if (!source) return;
+  const res = await runPluginCommand('marketplace', 'add-marketplace', { source }, `Added ${source}`);
+  if (res?.ok) marketplaceSource.value = '';
+}
+
+async function loadMcp(id) {
+  try {
+    const res = await window.api.getAccountMcp(id);
+    if (accountId.value !== id) return;
+    mcp.value = res?.ok ? res : null;
+  } catch {
+    if (accountId.value === id) mcp.value = null;
+  }
+}
 
 // ── Usage ─────────────────────────────────────────────────────────
 const USAGE_ITEMS = [
@@ -562,12 +1105,25 @@ async function load(id) {
     activeFile.value = null;
     fileContent.value = null;
     fileError.value = '';
+    // Probe results belong to the account they were run against.
+    mcp.value = null;
+    statuses.value = {};
+    checking_.value = {};
+    addOpen.value = false;
+    formError.value = '';
+    showProjectServers.value = false;
+    // So does the catalogue: marketplaces are per Claude home.
+    catalogOpen.value = false;
+    catalog.value = [];
+    marketplaces.value = [];
+    pluginResult.value = null;
   }
   loading.value = true;
   try {
     const [d, s] = await Promise.all([
       window.api.getAccountDetail(id).catch(() => null),
       window.api.getAccountStats(id).catch(() => null),
+      loadMcp(id),
     ]);
     if (accountId.value !== id) return;
     detail.value = d?.ok ? d : null;

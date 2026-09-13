@@ -37,6 +37,15 @@
         :label="contextLabel"
       />
       <span class="sbx-board__metatext">{{ meta }}</span>
+      <!-- Sub-agents this card's session has out working. Same count as the
+           sidebar row's — see store.subagentCounts. -->
+      <span
+        v-if="runningAgents"
+        class="sbx-board__agents"
+        :data-tooltip="`${runningAgents} background task${runningAgents > 1 ? 's' : ''} running`"
+      >
+        <SbIcon name="bot" :size="10" />{{ runningAgents }}
+      </span>
     </div>
     <div v-if="churn" class="sbx-board__churn">
       <span class="sbx-board__added">+{{ churn.added }}</span>
@@ -93,6 +102,8 @@ const meta = computed(() => {
 
 // Shared with the sidebar's rows — see session-churn.js.
 const churn = computed(() => sessionChurn(props.session));
+
+const runningAgents = computed(() => store.subagentCounts.get(props.session.sessionId) || 0);
 
 const dim = computed(() =>
   props.highlightFresh ? { opacity: freshnessOpacity(time.value) } : null

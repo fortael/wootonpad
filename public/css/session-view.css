@@ -2111,3 +2111,115 @@
   font-family: var(--font-mono);
   color: var(--text-disabled);
 }
+
+/* ── Sub-agent view ──────────────────────────────────────────────────────
+   A background task's transcript, taking the main area the way a session
+   does. The chat body below the bar is the session chat's own — same
+   renderer, same .sbx-sdk__body rules — so a Task reads exactly like the
+   conversation that spawned it. */
+#subagent-viewer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-app);
+}
+
+.sbx-agentview {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* The bar is the whole reason this is a view and not a raw file dump: an
+   agent has no row in the sidebar and no card on the board, so the way back
+   to its session has to be here. */
+.sbx-agentview__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--bar-height, 46px);
+  padding: 0 var(--space-4);
+  background: var(--surface-panel-raised);
+  border-bottom: var(--border-width-hairline) solid var(--border-subtle);
+  flex-shrink: 0;
+}
+
+.sbx-agentview__back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-secondary);
+  background: none;
+  border: none;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.sbx-agentview__back:hover { background: var(--surface-card-hover); color: var(--text-primary); }
+.sbx-agentview__backchev { transform: rotate(90deg); }
+
+.sbx-agentview__sep { color: var(--text-disabled); }
+
+.sbx-agentview__type {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.sbx-agentview__desc {
+  flex: 0 1 auto;
+  min-width: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sbx-agentview__spacer { flex: 1; min-width: var(--space-2); }
+
+.sbx-agentview__state {
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-full);
+  border: var(--border-width-hairline) solid var(--border-subtle);
+}
+.sbx-agentview__state.is-running {
+  color: var(--status-running);
+  border-color: color-mix(in srgb, var(--status-running) 40%, transparent);
+  background: color-mix(in srgb, var(--status-running) 10%, transparent);
+}
+
+.sbx-agentview__iconbtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--hit-xs);
+  height: var(--hit-xs);
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.sbx-agentview__iconbtn:hover { background: var(--surface-card-hover); color: var(--text-primary); }
+.sbx-agentview__iconbtn.is-busy svg { animation: acct-spin 0.8s linear infinite; }
+
+.sbx-agentview__chat { flex: 1; min-height: 0; }
+
+/* ── Running background tasks, on a row and on a card ─────────────────── */
+.session-agents,
+.sbx-board__agents {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  color: var(--status-running);
+}

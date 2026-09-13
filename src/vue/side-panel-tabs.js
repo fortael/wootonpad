@@ -1,11 +1,15 @@
-// The session side panel's three panes, in one place so the rail that opens
-// them and the panel that renders them cannot drift apart.
+// The session side panel's panes, in one place so the rail that opens them
+// and the panel that renders them cannot drift apart.
 import { store } from './store.js';
 
 export const TAB_KEY = 'sessionSidePanelTab';
 
 export const TABS = [
   { id: 'changes', label: 'Uncommitted changes', icon: 'file-diff' },
+  { id: 'todos', label: 'TODOs and plans', icon: 'list-todo' },
+  // Sub-agents have transcripts but no session rows, so this rail is the only
+  // place in the app they are visible at all.
+  { id: 'tasks', label: 'Background tasks', icon: 'bot' },
   { id: 'containers', label: 'Containers', icon: 'container' },
   { id: 'shell', label: 'Shell', icon: 'terminal' },
 ];

@@ -91,11 +91,47 @@ function badgeFor(id) {
       .filter(c => (c.state || '').includes('running')).length;
     return running || 0;
   }
+  // Open items, not notes: "3" beside a checklist means three things left.
+  if (id === 'todos') return openTodos.value;
+  // Only what is still working — a finished sub-agent is history, and history
+  // does not belong on a badge.
+  if (id === 'tasks') return runningAgents.value;
   return 0;
 }
 
-onMounted(loadCounts);
-watch(projectPath, loadCounts);
+// Both counts are cheap reads the rail can afford without the panel open: the
+// notes list is a directory of small Markdown files, and the sub-agent list is
+// a directory listing plus one scan of the session's own transcript.
+const openTodos = ref(0);
+const runningAgents = ref(0);
+
+async function loadTodoBadge() {
+  const p = projectPath.value;
+  if (!p || isPlainTerminal(store.headerSession)) { openTodos.value = 0; return; }
+  const notes = await window.api.getNotes().catch(() => []);
+  if (projectPath.value !== p) return;
+  openTodos.value = (notes || [])
+    .filter(n => (n.projects || []).includes(p))
+    .reduce((sum, n) => sum + Math.max((n.total || 0) - (n.done || 0), 0), 0);
+}
+
+async function loadAgentBadge() {
+  const id = sessionId.value;
+  if (!id || isPlainTerminal(store.headerSession)) { runningAgents.value = 0; return; }
+  const agents = await window.api.getSessionSubagents(id).catch(() => []);
+  if (sessionId.value !== id) return;
+  runningAgents.value = (agents || []).filter(a => a.running).length;
+}
+
+function loadAll() {
+  loadCounts();
+  loadTodoBadge();
+  loadAgentBadge();
+}
+
+onMounted(loadAll);
+watch(projectPath, loadAll);
+watch(sessionId, loadAgentBadge);
 
 // Closing the panel drops store.sidePanelDetail, so re-read the row it just
 // refreshed rather than falling back to whatever this component loaded first.
@@ -106,6 +142,8 @@ watch(() => store.sidePanelTab, (tab) => { if (!tab) loadCounts(); });
 // panel or the Projects tab did while this session was busy.
 watch(() => !!store.sessionBusyState.get(sessionId.value), (busy, wasBusy) => {
   if (wasBusy && !busy) loadCounts();
+  // A turn starting or ending is when sub-agents appear and finish.
+  loadAgentBadge();
 });
 
 function select(id) {

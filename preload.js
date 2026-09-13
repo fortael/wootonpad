@@ -23,6 +23,17 @@ contextBridge.exposeInMainWorld('api', {
   getPlansDir: () => ipcRenderer.invoke('get-plans-dir'),
   readPlan: (filename) => ipcRenderer.invoke('read-plan', filename),
   savePlan: (filePath, content) => ipcRenderer.invoke('save-plan', filePath, content),
+  // Account notes / TODO lists — stored in the active account's Claude home,
+  // never in a project. Every call takes a bare filename; the main process
+  // resolves it inside that directory and refuses anything that escapes.
+  getNotes: () => ipcRenderer.invoke('get-notes'),
+  getNotesDir: () => ipcRenderer.invoke('get-notes-dir'),
+  readNote: (filename) => ipcRenderer.invoke('read-note', filename),
+  saveNote: (filePath, content) => ipcRenderer.invoke('save-note', filePath, content),
+  createNote: (options) => ipcRenderer.invoke('create-note', options),
+  deleteNote: (filename) => ipcRenderer.invoke('delete-note', filename),
+  toggleNoteTodo: (filename, index) => ipcRenderer.invoke('toggle-note-todo', filename, index),
+  setNoteProjects: (filename, projectPaths) => ipcRenderer.invoke('set-note-projects', filename, projectPaths),
   refreshStats: () => ipcRenderer.invoke('refresh-stats'),
   getMemories: () => ipcRenderer.invoke('get-memories'),
   // `{ visible, all }` — the archive-filtered tree and the unfiltered one, from
@@ -44,6 +55,11 @@ contextBridge.exposeInMainWorld('api', {
   openTerminal: (id, projectPath, isNew, sessionOptions) => ipcRenderer.invoke('open-terminal', id, projectPath, isNew, sessionOptions),
   search: (type, query, titleOnly) => ipcRenderer.invoke('search', type, query, titleOnly),
   readSessionJsonl: (sessionId) => ipcRenderer.invoke('read-session-jsonl', sessionId),
+  // Sub-agents a session spawned with the Task tool. They have transcripts but
+  // no session rows, so they appear only in the session's side panel.
+  getSessionSubagents: (sessionId) => ipcRenderer.invoke('get-session-subagents', sessionId),
+  readSubagentJsonl: (sessionId, agentId) => ipcRenderer.invoke('read-subagent-jsonl', sessionId, agentId),
+  getSubagentCounts: (sessionIds) => ipcRenderer.invoke('get-subagent-counts', sessionIds),
   // One window of a transcript, newest first. `before` pages upward; a window
   // never spans a `/compact` boundary — see transcript-window.js.
   readSessionTranscript: (sessionId, opts) => ipcRenderer.invoke('read-session-transcript', sessionId, opts),
@@ -71,6 +87,17 @@ contextBridge.exposeInMainWorld('api', {
   readAccountConfigFile: (id, name) => ipcRenderer.invoke('read-account-config-file', id, name),
   checkAccountAuth: (id) => ipcRenderer.invoke('check-account-auth', id),
   getAccountStats: (id) => ipcRenderer.invoke('get-account-stats', id),
+  // MCP servers and plugins configured in that account's Claude home.
+  // checkAccountMcp takes an inventory id, never a command: what runs is read
+  // back from the account's own files in the main process.
+  getAccountMcp: (id) => ipcRenderer.invoke('get-account-mcp', id),
+  checkAccountMcp: (id, serverId) => ipcRenderer.invoke('check-account-mcp', id, serverId),
+  addAccountMcp: (id, definition) => ipcRenderer.invoke('add-account-mcp', id, definition),
+  removeAccountMcp: (id, name) => ipcRenderer.invoke('remove-account-mcp', id, name),
+  // Plugin marketplaces. The catalogue is read from the marketplace checkouts
+  // already on disk; installing runs `claude plugin …` as that account.
+  getPluginCatalog: (id, options) => ipcRenderer.invoke('get-plugin-catalog', id, options),
+  pluginCommand: (id, action, options) => ipcRenderer.invoke('plugin-command', id, action, options),
   getHomedir: () => ipcRenderer.invoke('get-homedir'),
   getEffectiveSettings: (projectPath) => ipcRenderer.invoke('get-effective-settings', projectPath),
   getScheduleCreatorCommand: () => ipcRenderer.invoke('get-schedule-creator-command'),

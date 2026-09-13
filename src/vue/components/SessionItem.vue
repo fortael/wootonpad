@@ -34,6 +34,15 @@
             <span class="session-churn__added">+{{ churn.added }}</span>
             <span class="session-churn__removed">&minus;{{ churn.removed }}</span>
           </span>
+          <!-- Sub-agents this session has out working. They have no rows of
+               their own anywhere, so their only trace in the list is here. -->
+          <span
+            v-if="runningAgents"
+            class="session-agents"
+            :data-tooltip="`${runningAgents} background task${runningAgents > 1 ? 's' : ''} running`"
+          >
+            <SbIcon name="bot" :size="11" />{{ runningAgents }}
+          </span>
         </div>
       </div>
 
@@ -55,6 +64,7 @@ import UsageRing from './UsageRing.vue';
 import SessionMenu from './SessionMenu.vue';
 import { contextPercent, formatContextLabel } from '../context-window.js';
 import { sessionChurn } from '../session-churn.js';
+import { store } from '../store.js';
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -68,6 +78,9 @@ const props = defineProps({
 // Everything else a row can do lives in SessionMenu, which calls the app.js
 // bridge directly rather than emitting up through the list.
 defineEmits(['open']);
+
+// Kept in the store by App.vue's poller — see store.subagentCounts.
+const runningAgents = computed(() => store.subagentCounts.get(props.session.sessionId) || 0);
 
 const contextPct = computed(() => contextPercent(props.session.contextTokens, props.session));
 const contextLabel = computed(() => formatContextLabel(props.session.contextTokens, props.session));

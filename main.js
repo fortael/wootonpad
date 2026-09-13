@@ -32,6 +32,11 @@ const {
 } = require('./project-polling');
 const sdkSession = require('./sdk-session');
 const { fetchAndTransformUsage, getOAuthToken, probeUsage } = require('./claude-auth');
+const mcpInventory = require('./mcp-inventory');
+const { probeMcpServer } = require('./mcp-probe');
+const accountNotes = require('./account-notes');
+const pluginCatalog = require('./plugin-catalog');
+const subagentTasks = require('./subagent-tasks');
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
@@ -1912,6 +1917,12 @@ ipcMain.handle('get-plans', () => {
     const plansDir = activePlansDir();
     if (!fs.existsSync(plansDir)) return [];
     const files = fs.readdirSync(plansDir).filter(f => f.endsWith('.md'));
+    // A plan records no project of its own, so the projects it belongs to are
+    // the ones it names: a plan for a repository quotes paths inside it. Good
+    // enough to offer a session's own plans beside its notes, and wrong only
+    // in the direction of showing one plan in two places.
+    const projectPaths = [...new Set([...getAllFolderMeta().values()]
+      .map(m => m.projectPath).filter(Boolean))];
     const plans = [];
     for (const file of files) {
       const filePath = path.join(plansDir, file);
@@ -1922,7 +1933,12 @@ ipcMain.handle('get-plans', () => {
         const title = firstLine && firstLine.startsWith('# ')
           ? firstLine.slice(2).trim()
           : file.replace(/\.md$/, '');
-        plans.push({ filename: file, title, modified: stat.mtime.toISOString() });
+        plans.push({
+          filename: file,
+          title,
+          modified: stat.mtime.toISOString(),
+          projects: projectPaths.filter(p => content.includes(p)),
+        });
       } catch {}
     }
     plans.sort((a, b) => new Date(b.modified) - new Date(a.modified));
@@ -1979,6 +1995,42 @@ ipcMain.handle('save-plan', (_event, filePath, content) => {
     return { ok: false, error: err.message };
   }
 });
+
+// --- IPC: account notes ---
+// Free-form notes and TODO lists. They sit in the account's Claude home next
+// to its plans, so they follow the account rather than any one checkout — a
+// note can name a project without living inside it.
+function activeNotesDir() {
+  return path.join(activeConfigDir(), 'notes');
+}
+
+ipcMain.handle('get-notes', () => accountNotes.listNotes(activeNotesDir()));
+
+ipcMain.handle('get-notes-dir', () => {
+  const account = getActiveAccount();
+  const dir = activeNotesDir();
+  return { dir, exists: fs.existsSync(dir), accountName: account.name, accountId: account.id };
+});
+
+ipcMain.handle('read-note', (_event, filename) => accountNotes.readNote(activeNotesDir(), filename));
+
+ipcMain.handle('save-note', (_event, filePath, content) => accountNotes.saveNote(activeNotesDir(), filePath, content));
+
+ipcMain.handle('create-note', (_event, options) => {
+  try {
+    return accountNotes.createNote(activeNotesDir(), options || {});
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('delete-note', (_event, filename) => accountNotes.deleteNote(activeNotesDir(), filename));
+
+ipcMain.handle('toggle-note-todo', (_event, filename, index) =>
+  accountNotes.toggleTodo(activeNotesDir(), filename, index));
+
+ipcMain.handle('set-note-projects', (_event, filename, projectPaths) =>
+  accountNotes.setNoteProjects(activeNotesDir(), filename, projectPaths));
 
 // Stats for one account: its own rows in the session cache, enriched with the
 // stats-cache.json `claude /stats` wrote into that account's config dir. The
@@ -2669,6 +2721,175 @@ ipcMain.handle('get-account-stats', (_event, accountId) => {
   return buildStatsForAccount(account);
 });
 
+// --- Account MCP servers and plugins ---
+// Claude keeps user-scoped state in .claude.json, which for the default
+// account sits beside the config dir rather than inside it. mcp-inventory is
+// told which, instead of guessing from a path.
+function accountUserConfigPath(account) {
+  return account.configDir === DEFAULT_CLAUDE_DIR
+    ? path.join(os.homedir(), '.claude.json')
+    : path.join(account.configDir, '.claude.json');
+}
+
+function accountInventoryArgs(account) {
+  return { configDir: account.configDir, userConfigPath: accountUserConfigPath(account) };
+}
+
+// Rule 3 of the WSL contract: a stdio server configured in a distribution's
+// Claude home is a command that only exists inside that distribution, so the
+// probe has to run there too.
+function accountWrapArgv(account) {
+  const distro = accountWslDistro(account);
+  if (!distro) return null;
+  return (argv) => ['wsl.exe', wslExecArgs(distro, account.wslHome || null, argv)];
+}
+
+ipcMain.handle('get-account-mcp', (_event, accountId) => {
+  const account = findAccount(accountId);
+  if (!account) return { ok: false, error: 'unknown account' };
+  try {
+    return { ok: true, ...mcpInventory.readMcpInventory(accountInventoryArgs(account)) };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// Probes one configured server. The renderer sends the inventory id; the
+// command or URL behind it is read back out of the account's own files, so
+// nothing the renderer says decides what gets spawned or fetched.
+ipcMain.handle('check-account-mcp', async (_event, accountId, id) => {
+  const account = findAccount(accountId);
+  if (!account) return { state: 'error', message: 'unknown account' };
+  const config = mcpInventory.resolveServerConfig({ ...accountInventoryArgs(account), id });
+  if (!config) return { state: 'error', message: 'Server is no longer in this account’s configuration.' };
+  try {
+    return await probeMcpServer(config, {
+      wrapArgv: accountWrapArgv(account),
+      // Same PATH the CLI's own children get: a stdio server launched via npx
+      // or a version-managed node is not on launchd's PATH.
+      env: { PATH: claudeChildPath() },
+    });
+  } catch (err) {
+    return { state: 'error', message: err.message || 'Check failed.' };
+  }
+});
+
+ipcMain.handle('add-account-mcp', (_event, accountId, definition) => {
+  const account = findAccount(accountId);
+  if (!account) return { ok: false, error: 'unknown account' };
+  try {
+    const added = mcpInventory.addMcpServer({ configDir: account.configDir, definition });
+    log.info('[mcp] added server', added.name, 'to', added.path);
+    return { ok: true, ...added };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('remove-account-mcp', (_event, accountId, name) => {
+  const account = findAccount(accountId);
+  if (!account) return { ok: false, error: 'unknown account' };
+  try {
+    const removed = mcpInventory.removeMcpServer({ configDir: account.configDir, name });
+    log.info('[mcp] removed server', removed.name, 'from', removed.path);
+    return { ok: true, ...removed };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// --- Plugin marketplaces ---
+// Browsing is a read of the marketplace checkouts already on disk. Installing
+// is the CLI's job: it resolves the source, clones it, and may run a command
+// the marketplace declares — reimplementing that here would be a second,
+// divergent installer.
+const PLUGIN_COMMAND_TIMEOUT_MS = 180000;
+
+// `claude` as one account, in that account's own Claude home rather than in a
+// project. The WSL flavour runs inside the distribution, where both the home
+// and the binary actually live — its Windows configDir would mean nothing
+// there, so CLAUDE_CONFIG_DIR is left off, exactly as the PTY spawn does.
+function runAccountClaude(account, argv, { timeoutMs = PLUGIN_COMMAND_TIMEOUT_MS } = {}) {
+  const { spawn } = require('child_process');
+  const distro = accountWslDistro(account);
+  const [file, args, options] = distro
+    ? ['wsl.exe', wslExecArgs(distro, account.wslHome || null, ['claude', ...argv]), {}]
+    : [resolveClaudeBinary(), argv, {
+      cwd: os.homedir(),
+      env: {
+        ...process.env,
+        PATH: claudeChildPath(),
+        // A marketplace clone that needs credentials would otherwise sit on a
+        // password prompt no one can see until the timeout expires.
+        GIT_TERMINAL_PROMPT: '0',
+        ...(account.configDir === DEFAULT_CLAUDE_DIR ? {} : { CLAUDE_CONFIG_DIR: account.configDir }),
+      },
+    }];
+
+  return new Promise((resolve) => {
+    let child;
+    try {
+      child = spawn(file, args, { ...options, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    } catch (err) {
+      resolve({ ok: false, error: err.message });
+      return;
+    }
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', d => { stdout += d; });
+    child.stderr.on('data', d => { stderr += d; });
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch {}
+      resolve({ ok: false, error: `Timed out after ${Math.round(timeoutMs / 1000)}s.`, output: stdout.trim() });
+    }, timeoutMs);
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      resolve({ ok: false, error: err.code === 'ENOENT' ? 'The claude CLI was not found.' : err.message });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      const output = [stdout.trim(), stderr.trim()].filter(Boolean).join('\n');
+      resolve(code === 0
+        ? { ok: true, output }
+        : { ok: false, error: stderr.trim() || stdout.trim() || `claude exited with code ${code}.`, output });
+    });
+  });
+}
+
+ipcMain.handle('get-plugin-catalog', (_event, accountId, options) => {
+  const account = findAccount(accountId);
+  if (!account) return { ok: false, error: 'unknown account' };
+  try {
+    // What is already installed comes from the same inventory the panel shows,
+    // so "Installed" cannot disagree between the two lists.
+    const installedKeys = mcpInventory
+      .readMcpInventory(accountInventoryArgs(account))
+      .plugins.map(p => p.key);
+    const result = pluginCatalog.searchCatalog(account.configDir, { ...(options || {}), installedKeys });
+    return { ok: true, official: pluginCatalog.OFFICIAL_MARKETPLACE, ...result };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
+// install / uninstall / enable / disable / add-marketplace. The argv is built
+// and validated in plugin-catalog; nothing from the renderer reaches execFile
+// unchecked, and there is no shell in the path.
+ipcMain.handle('plugin-command', async (_event, accountId, action, options) => {
+  const account = findAccount(accountId);
+  if (!account) return { ok: false, error: 'unknown account' };
+  let argv;
+  try {
+    argv = pluginCatalog.pluginCommandArgv(action, options || {});
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  log.info('[plugins]', account.id, argv.join(' '));
+  const result = await runAccountClaude(account, argv);
+  if (!result.ok) log.warn('[plugins] failed:', result.error);
+  return result;
+});
+
 // --- Scheduled tasks ---
 const scheduleIpc = require('./schedule-ipc');
 
@@ -2808,6 +3029,51 @@ ipcMain.handle('read-session-jsonl', (_event, sessionId) => {
   } catch (err) {
     return { error: err.message };
   }
+});
+
+// --- IPC: sub-agents ---
+// A session's Task calls each get their own transcript in a folder beside the
+// session's own. Neither the sidebar nor the board lists them — they are not
+// sessions — so the side panel is where they surface.
+function sessionTranscriptPaths(sessionId) {
+  const folder = getCachedFolder(sessionId);
+  if (!folder) return null;
+  const base = path.join(activeProjectsDir(), folder);
+  return { sessionDir: path.join(base, sessionId), parentPath: path.join(base, sessionId + '.jsonl') };
+}
+
+ipcMain.handle('get-session-subagents', (_event, sessionId) => {
+  const paths = sessionTranscriptPaths(sessionId);
+  if (!paths) return [];
+  try {
+    return subagentTasks.listSubagents(paths.sessionDir, paths.parentPath);
+  } catch (err) {
+    log.warn('[subagents] list failed:', err.message);
+    return [];
+  }
+});
+
+// Running counts for the sidebar rows and the board cards. The renderer only
+// asks about sessions that are actually running — an agent cannot outlive the
+// CLI process that spawned it — and the count itself skips the expensive read
+// for any session whose agent files have gone quiet.
+ipcMain.handle('get-subagent-counts', (_event, sessionIds) => {
+  const counts = {};
+  for (const sessionId of (Array.isArray(sessionIds) ? sessionIds : []).slice(0, 40)) {
+    const paths = sessionTranscriptPaths(sessionId);
+    if (!paths) continue;
+    try {
+      const running = subagentTasks.countRunningSubagents(paths.sessionDir, paths.parentPath);
+      if (running) counts[sessionId] = running;
+    } catch {}
+  }
+  return counts;
+});
+
+ipcMain.handle('read-subagent-jsonl', (_event, sessionId, agentId) => {
+  const paths = sessionTranscriptPaths(sessionId);
+  if (!paths) return { error: 'Session not found in cache' };
+  return subagentTasks.readSubagentEntries(paths.sessionDir, agentId);
 });
 
 // --- IPC: read-session-transcript ---

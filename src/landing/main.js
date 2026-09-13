@@ -1,4 +1,5 @@
 import { createApp } from 'vue';
+import { marked } from 'marked';
 import { store } from '../vue/store.js';
 import { matchProjectPaths } from '../vue/project-search.js';
 import LandingApp from './LandingApp.vue';
@@ -12,9 +13,18 @@ import {
   MOCK_RESPONSE_READY_PTY_IDS,
   MOCK_PROJECT_INFO,
   MOCK_PROJECT_DETAIL,
+  MOCK_PROJECT_AVATARS,
   MOCK_PANEL_SHELL_LINES,
   MOCK_BOARD_SUMMARIES,
   MOCK_COMMIT_MESSAGES,
+  MOCK_PLAN_FILES,
+  MOCK_NOTE_FILES,
+  MOCK_NOTES,
+  MOCK_SUBAGENTS,
+  MOCK_ACCOUNT_DETAIL,
+  MOCK_ACCOUNT_STATS,
+  MOCK_ACCOUNT_MCP,
+  MOCK_ACCOUNT_FILE_CONTENT,
   getProjectAvatar,
 } from './mock-data.js';
 import '../../public/style.css';
@@ -126,6 +136,17 @@ window.api = new Proxy({}, {
     if (prop === 'getProjectDetail') return async (path) => MOCK_PROJECT_DETAIL[path] ?? null;
     if (prop === 'gitBranches') return async () => ({ ok: true, branches: ['feat/rate-limiting', 'main'], remotes: ['origin/main'] });
     if (prop === 'getProjectSessions') return async () => ({ ok: true, sessions: [] });
+    // These three answer with a bare array in the app, and their callers say
+    // `(x || []).filter(...)` — the default `{ ok: false }` below is not an
+    // array, so it has to be shadowed rather than fall through.
+    if (prop === 'getNotes') return async () => MOCK_NOTES;
+    if (prop === 'getSessionSubagents') return async (id) => MOCK_SUBAGENTS[id] || [];
+    if (prop === 'getNotesDir') {
+      return async () => ({ dir: '/Users/demo/.claude/notes', exists: true, accountName: 'Personal', accountId: 'default' });
+    }
+    if (prop === 'getPlansDir') {
+      return async () => ({ dir: '/Users/demo/.claude/plans', exists: true, accountName: 'Personal', accountId: 'default' });
+    }
     if (prop === 'getActiveTerminals') return async () => ({});
     if (prop === 'getGitUserInfo') return async () => ({ ok: true, name: 'Demo User', email: 'demo@example.com' });
     if (prop === 'getFileDiff') return async (_path, filePath) => ({
@@ -142,6 +163,46 @@ window.api = new Proxy({}, {
       };
     }
     if (prop === 'gitCommit' || prop === 'gitPush' || prop === 'gitCheckout') return DEMO_ONLY;
+
+    // ── Plans ─────────────────────────────────────────────────────────
+    // The Markdown pane opens on whatever this returns, so the demo ships the
+    // plan files themselves rather than a "download the app" placeholder.
+    if (prop === 'readPlan') {
+      return async (filename) => MOCK_PLAN_FILES[filename]
+        || { filePath: filename, content: '# ' + filename + '\n\nNothing here yet.' };
+    }
+    if (prop === 'readNote') return async (filename) => MOCK_NOTE_FILES[filename] || { ok: false };
+    if (prop === 'watchFile' || prop === 'unwatchFile' || prop === 'onFileChanged') return () => {};
+    if (prop === 'readFileForPanel') return async () => ({ ok: false });
+
+    // ── Account page ──────────────────────────────────────────────────
+    if (prop === 'getAccountDetail') return async (id) => MOCK_ACCOUNT_DETAIL[id] || { ok: false };
+    if (prop === 'getAccountStats') return async (id) => MOCK_ACCOUNT_STATS[id] || null;
+    if (prop === 'getAccountMcp') return async (id) => MOCK_ACCOUNT_MCP[id] || { ok: false };
+    if (prop === 'readAccountConfigFile') {
+      return async (id, name) => {
+        const file = (MOCK_ACCOUNT_DETAIL[id]?.files || []).find(f => f.name === name);
+        const content = MOCK_ACCOUNT_FILE_CONTENT[name];
+        if (!file || content === undefined) return { ok: false, error: 'Not available in the browser demo.' };
+        return { ok: true, name, path: file.path, size: file.size, truncated: false, content };
+      };
+    }
+    // Nothing is reachable from a page, so the probes answer the way they
+    // would for a healthy account rather than inventing a failure.
+    if (prop === 'checkAccountAuth') {
+      return async () => {
+        await new Promise(r => setTimeout(r, 500));
+        return { ok: true, state: 'authorized', status: 200, message: 'Token accepted by the usage API.' };
+      };
+    }
+    if (prop === 'checkAccountMcp') {
+      return async () => {
+        await new Promise(r => setTimeout(r, 400));
+        return { state: 'ok', message: 'Connected — 12 tools advertised.', durationMs: 384 };
+      };
+    }
+    if (prop === 'getPluginCatalog') return async () => ({ ok: false, error: 'Not available in the browser demo.' });
+
     if (prop === 'boardSummarizeAbort') return async () => ({ ok: true });
     if (prop === 'boardSummarizeSessions') {
       return async (sessions) => {
@@ -150,7 +211,7 @@ window.api = new Proxy({}, {
           ok: true,
           summaries: (sessions || [])
             .filter(s => MOCK_BOARD_SUMMARIES[s.sessionId])
-            .map(s => ({ sessionId: s.sessionId, summary: MOCK_BOARD_SUMMARIES[s.sessionId] })),
+            .map(s => ({ sessionId: s.sessionId, ...MOCK_BOARD_SUMMARIES[s.sessionId] })),
           usage: { inputTokens: 18_432, outputTokens: 611, costUSD: 0.042 },
         };
       };
@@ -181,6 +242,36 @@ window.createReadOnlyUnifiedMergeViewer = function(el, _old, newContent) {
   ).join('');
   el.innerHTML = `<div class="lp-diff-wrap"><div class="lp-diff-body">${rows}</div></div>`;
   return { destroy() { el.innerHTML = ''; } };
+};
+
+// ── Markdown pane ────────────────────────────────────────────────────────
+// ViewerContentApp renders plans through CodeMirror, and reads
+// window.marked for the preview toggle. The landing does not bundle the
+// CodeMirror setup (public/codemirror-bundle.js is built separately and pulls
+// in every language mode), so the editor half gets a read-only stand-in with
+// the same handful of methods the component calls: `state.doc`, `dispatch`
+// with a full-document change, and `destroy`. No `_wrapCompartment`, which is
+// exactly how the component detects that wrapping cannot be toggled.
+marked.setOptions({ breaks: true, gfm: true });
+window.marked = marked;
+
+window.createPlanEditor = function(parent) {
+  const pre = document.createElement('pre');
+  pre.className = 'lp-md-source';
+  parent.appendChild(pre);
+  let text = '';
+  return {
+    get state() {
+      return { doc: { length: text.length, toString: () => text } };
+    },
+    dispatch(tr) {
+      const insert = tr?.changes?.insert;
+      if (insert === undefined) return;
+      text = String(insert);
+      pre.textContent = text;
+    },
+    destroy() { pre.remove(); },
+  };
 };
 
 // ── Scratch shell ────────────────────────────────────────────────────────
@@ -234,6 +325,9 @@ window.confirm = () => false;
 window.confirmAndStopSession = () => {};
 
 // Populate store with mock data
+// Avatars first: ProjectAvatar reads this map synchronously and only falls
+// back to generated initials when a path is missing from it.
+Object.assign(store.avatarDataUrls, MOCK_PROJECT_AVATARS);
 store.projects = MOCK_PROJECTS;
 store.allProjects = MOCK_PROJECTS;
 store.activePtyIds = MOCK_ACTIVE_PTY_IDS;
@@ -244,6 +338,11 @@ store.headerAccount = MOCK_ACCOUNTS.find(a => a.id === MOCK_ACTIVE_ACCOUNT_ID)?.
 store.headerShellProfile = 'zsh';
 store.sessionMaxAgeDays = 30;
 store.visibleSessionCount = 20;
+// A plan is prose, so the demo opens it rendered rather than as source. Only
+// a default: ViewerContentApp writes the visitor's own choice back here.
+if (localStorage.getItem('markdownPreviewMode') === null) {
+  localStorage.setItem('markdownPreviewMode', 'true');
+}
 // The panel opens on Changes so the pane the rail leads with is the pane the
 // demo shows. The app persists the user's last choice instead.
 store.sidePanelTab = 'changes';

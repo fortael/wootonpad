@@ -145,6 +145,7 @@
         :show-copy-path="true"
         :show-copy-content="true"
         :on-save="planOnSave"
+        :on-close="closePlanViewer"
       />
     </div>
     <SettingsPanelApp v-if="store.settingsOpen" />
@@ -153,6 +154,9 @@
     </div>
     <div id="jsonl-viewer" v-show="store.showJsonl">
       <JsonlViewerApp ref="jsonlRef" />
+    </div>
+    <div id="subagent-viewer" v-show="store.subagentViewOpen">
+      <SubagentViewApp ref="subagentRef" />
     </div>
     <div id="account-viewer" v-show="store.accountViewerOpen">
       <AccountViewerApp ref="accountViewerRef" />
@@ -218,7 +222,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { store } from '../store.js';
 import SbIcon from './SbIcon.vue';
 import TopNavApp from './TopNavApp.vue';
@@ -245,6 +249,7 @@ import GridCardsApp from './GridCardsApp.vue';
 import SettingsPanelApp from './SettingsPanelApp.vue';
 import ProjectViewerApp from './ProjectViewerApp.vue';
 import JsonlViewerApp from './JsonlViewerApp.vue';
+import SubagentViewApp from './SubagentViewApp.vue';
 import AccountViewerApp from './AccountViewerApp.vue';
 import SessionBoardApp from './SessionBoardApp.vue';
 import BoardSidebarApp from './BoardSidebarApp.vue';
@@ -261,12 +266,41 @@ const statusBarRef = ref(null);
 const gridCardsRef = ref(null);
 const projectViewerRef = ref(null);
 const jsonlRef = ref(null);
+const subagentRef = ref(null);
 const accountViewerRef = ref(null);
 const planViewerRef = ref(null);
 const dialogsRef = ref(null);
 const boardRef = ref(null);
 
-const planOnSave = (filePath, content) => window.api.savePlan(filePath, content);
+// One Markdown pane serves plans and account notes, and each has its own
+// path-guarded write in the main process — so the save has to go to the one
+// that owns whatever is open, not to whichever guard is more forgiving.
+// The way out of the full-screen Markdown pane: back to whatever the main
+// area was showing before it — the board, the open session, or the empty
+// placeholder. Without it a plan opened from a session was a room with no
+// door: the pane covers the session view and its own controls are all about
+// the file.
+function closePlanViewer() {
+  store.planViewerOpen = false;
+  window.vuePlans?.clearActive?.();
+  const terminalArea = document.getElementById('terminal-area');
+  const placeholder = document.getElementById('placeholder');
+  if (store.activeTab === 'board') store.showBoard = true;
+  if (store.headerSession) {
+    if (terminalArea) terminalArea.style.display = '';
+    if (placeholder) placeholder.style.display = 'none';
+  } else if (!store.showBoard && placeholder) {
+    placeholder.style.display = '';
+  }
+}
+
+const planOnSave = async (filePath, content) => {
+  if (store.planViewerKind !== 'note') return window.api.savePlan(filePath, content);
+  const result = await window.api.saveNote(filePath, content);
+  // Ticking a box in the editor has to move the count in the sidebar.
+  window.vuePlans?.refreshNotes?.();
+  return result;
+};
 
 // ── Tab config ───────────────────────────────────────────────────
 const TABS = [
@@ -319,8 +353,17 @@ function startBoardResize(event) {
 }
 
 // Board with a session previewed below it: both panes are visible at once.
+// Anything that fills the main area — a document, a transcript, an account,
+// the settings — is showing *instead of* the board and its preview, so the
+// seam between them has nothing left to drag and must not be painted over
+// the top of it.
+const mainViewerOpen = computed(() =>
+  store.planViewerOpen || store.showJsonl || store.subagentViewOpen
+  || store.accountViewerOpen || store.settingsOpen
+);
+
 const boardSplitActive = computed(() =>
-  store.activeTab === 'board' && !!store.boardPreviewId
+  store.activeTab === 'board' && !!store.boardPreviewId && !mainViewerOpen.value
 );
 
 const sessionListVisible = computed(() => store.activeTab === 'sessions');
@@ -641,6 +684,7 @@ const sidebarCallbacks = {
 
 const planCallbacks = {
   openPlan: (plan) => window.__sb?.openPlan?.(plan),
+  openNote: (note) => window.openNote?.(note),
 };
 
 // A summary's link has to land exactly where a card click lands, so it goes
@@ -685,12 +729,43 @@ const projectViewerCallbacks = {
 };
 
 // ── Mount lifecycle ───────────────────────────────────────────────
+// ── Background tasks ──────────────────────────────────────────────
+// How many sub-agents each running session has out working, for the badge on
+// its sidebar row and its board card. Only running sessions are asked about:
+// a sub-agent lives inside the CLI process that spawned it, so a session that
+// is not running has none. When nothing is running, nothing is polled.
+const SUBAGENT_COUNT_MS = 6000;
+let subagentCountTimer = null;
+
+async function pollSubagentCounts() {
+  const ids = [...new Set([
+    ...store.activePtyIds,
+    ...store.sdkSessionIds,
+    ...[...store.sessionBusyState.entries()].filter(([, busy]) => busy).map(([id]) => id),
+  ])].filter(Boolean);
+
+  if (!ids.length) {
+    if (store.subagentCounts.size) store.subagentCounts.clear();
+    return;
+  }
+  const counts = await window.api.getSubagentCounts(ids).catch(() => null);
+  if (!counts) return;
+  // Rebuilt rather than merged: a session that finished its agents has to lose
+  // the badge, and it says so by being absent from the answer.
+  store.subagentCounts.clear();
+  for (const [id, n] of Object.entries(counts)) store.subagentCounts.set(id, n);
+}
+
 onMounted(async () => {
+  subagentCountTimer = setInterval(pollSubagentCounts, SUBAGENT_COUNT_MS);
+  pollSubagentCounts();
+
   // Re-export component bridge APIs so app.js can call them
   Object.assign(window.vuePlans, {
     setPlans: (list) => plansRef.value?.setPlans(list),
     setActive: (f) => plansRef.value?.setActive(f),
     clearActive: () => plansRef.value?.clearActive(),
+    refreshNotes: () => plansRef.value?.refreshNotes(),
   });
   Object.assign(window.vueAccounts, {
     setAccounts: (list, id) => accountsRef.value?.setAccounts(list, id),
@@ -732,7 +807,25 @@ onMounted(async () => {
     openFile: (relPath) => projectViewerRef.value?.openFile(relPath),
   };
   window.vueApp = { setTab };
-  window.vueJsonlViewer = { open: (s) => jsonlRef.value?.open(s) };
+  window.vueJsonlViewer = {
+    open: (s) => jsonlRef.value?.open(s),
+    openSubagent: (sessionId, agent) => jsonlRef.value?.openSubagent(sessionId, agent),
+  };
+
+  // A sub-agent is not a session, so it has no row to click anywhere else —
+  // the side panel's Background tasks pane hands it here. It takes the main
+  // area the way a session does, and renders through the same chat renderer,
+  // with a bar saying which session it belongs to.
+  window.openSubagentTranscript = (sessionId, agent) => {
+    if (!sessionId || !agent) return;
+    window.hideAllViewers?.();
+    const terminalArea = document.getElementById('terminal-area');
+    if (terminalArea) terminalArea.style.display = 'none';
+    const placeholder = document.getElementById('placeholder');
+    if (placeholder) placeholder.style.display = 'none';
+    store.subagentViewOpen = true;
+    subagentRef.value?.open(sessionId, agent);
+  };
   window.vueAccountViewer = {
     load: (id) => accountViewerRef.value?.load(id),
     reload: () => accountViewerRef.value?.reload(),
@@ -814,9 +907,9 @@ onMounted(async () => {
   window.renderPlans = (plans) => {
     window.vuePlans?.setPlans(plans || window.cachedPlans);
   };
-  window.openPlan = async (plan) => {
-    window.vuePlans?.setActive(plan.filename);
-    const result = await window.api.readPlan(plan.filename);
+  // Clear the main area and hand it to the Markdown pane. `kind` is what the
+  // pane's save goes through — see planOnSave.
+  const showMarkdown = (kind, title, filePath, content) => {
     document.getElementById('placeholder').style.display = 'none';
     document.getElementById('terminal-area').style.display = 'none';
     document.getElementById('project-viewer').style.display = 'none';
@@ -824,9 +917,24 @@ onMounted(async () => {
     if (window.vueStore) {
       window.vueStore.settingsOpen = false;
       window.vueStore.showJsonl = false;
+      window.vueStore.planViewerKind = kind;
       window.vueStore.planViewerOpen = true;
     }
-    window.vuePlanViewer?.open(plan.title || plan.filename, result.filePath, result.content);
+    window.vuePlanViewer?.open(title, filePath, content);
+  };
+
+  window.openPlan = async (plan) => {
+    window.vuePlans?.setActive(plan.filename);
+    const result = await window.api.readPlan(plan.filename);
+    showMarkdown('plan', plan.title || plan.filename, result.filePath, result.content);
+  };
+
+  // Notes open in the same pane as plans — same Markdown, same editor, same
+  // preview toggle. Only the directory behind them differs.
+  window.openNote = async (note) => {
+    const result = await window.api.readNote(note.filename);
+    if (!result?.ok) return;
+    showMarkdown('note', note.title || note.filename, result.filePath, result.content);
   };
   /**
    * Clear the main area for whatever is about to take it over.
@@ -848,6 +956,7 @@ onMounted(async () => {
       }
       window.vueStore.showJsonl = false;
       window.vueStore.accountViewerOpen = false;
+      window.vueStore.subagentViewOpen = false;
     }
     const pv = document.getElementById('project-viewer');
     if (pv) pv.style.display = 'none';
@@ -859,4 +968,6 @@ onMounted(async () => {
   // path, and the only one allowed to leave the board standing.
   window.hidePlanViewer = () => window.hideAllViewers({ keepBoard: true });
 });
+
+onBeforeUnmount(() => clearInterval(subagentCountTimer));
 </script>

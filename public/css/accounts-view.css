@@ -327,6 +327,146 @@
 
 .acct-auth__msg { color: var(--text-secondary); }
 
+/* ── MCP servers and plugins ──────────────────────────────────────────
+   One card per server or plugin, same box as .acct-usage__card: a list of
+   rows on the page reads as a table nobody aligned, and every row here has a
+   second line (its command, or its description) that a table would fight. */
+.acct-mcp-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.acct-mcp {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--surface-card);
+  border: var(--border-width-hairline) solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+}
+
+.acct-mcp__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.acct-mcp__name {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+/* The command or URL: monospace, because that is what it is, and clipped
+   because a long npx invocation would otherwise own the card. */
+.acct-mcp__target {
+  font-family: var(--font-code);
+  font-size: var(--text-2xs);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+
+.acct-mcp__target--text {
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  white-space: normal;
+}
+
+.acct-mcp__meta {
+  font-size: var(--text-2xs);
+  color: var(--text-disabled);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acct-mcp__pair { margin-right: var(--space-3); font-family: var(--font-code); }
+.acct-mcp__pair-value { color: var(--text-tertiary); }
+
+.acct-mcp__status {
+  font-size: var(--text-xs);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: var(--border-width-hairline) solid var(--border-subtle);
+  background: var(--surface-input);
+  color: var(--text-secondary);
+}
+
+.acct-mcp__status--ok {
+  color: var(--status-running);
+  border-color: color-mix(in srgb, var(--status-running) 40%, transparent);
+  background: color-mix(in srgb, var(--status-running) 10%, transparent);
+}
+.acct-mcp__status--warn {
+  color: var(--status-warning);
+  border-color: color-mix(in srgb, var(--status-warning) 40%, transparent);
+  background: color-mix(in srgb, var(--status-warning) 10%, transparent);
+}
+.acct-mcp__status--bad {
+  color: var(--status-danger);
+  border-color: color-mix(in srgb, var(--status-danger) 40%, transparent);
+  background: color-mix(in srgb, var(--status-danger) 10%, transparent);
+}
+
+/* The failure chip. --ok and --warn already exist above; danger did not, and
+   an unreachable server should not be wearing the same amber as one that
+   merely needs signing in. */
+.acct-chip--bad {
+  color: var(--status-danger);
+  background: color-mix(in srgb, var(--status-danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--status-danger) 40%, transparent);
+}
+
+/* ── Inline forms (Add MCP, account notes) ────────────────────────── */
+.acct-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  background: var(--surface-input);
+  border: var(--border-width-hairline) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+}
+
+.acct-form__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.acct-form__hint { flex: 1; min-width: 0; }
+
+.acct-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--text-primary);
+  background: var(--surface-app);
+  border: var(--border-width-hairline) solid var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+.acct-input::placeholder { color: var(--text-disabled); }
+.acct-input:focus-visible { outline: none; box-shadow: var(--shadow-focus-ring); }
+
+.acct-input--select { flex: 0 0 auto; }
+
+.acct-input--area {
+  font-family: var(--font-code);
+  font-size: var(--text-2xs);
+  resize: vertical;
+  min-height: var(--hit-md);
+}
+
 /* ── Usage ────────────────────────────────────────────────────────── */
 .acct-usage {
   display: grid;
