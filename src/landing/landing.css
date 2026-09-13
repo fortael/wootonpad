@@ -479,6 +479,29 @@ html, body {
 
 .lp-show__cta:hover { background: rgba(var(--_ac), 0.2); }
 
+/* ── Panels quoted whole ─────────────────────────────────────────────────
+   AccountsApp and ProjectsApp are sidebar panels: `flex: 1` inside a column
+   that gives them a height. Out here there is no column, so the stage is the
+   bounded box they fill, sized to show its rows without a scrollbar. */
+.lp-show__stage--accounts,
+.lp-show__stage--projects {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-app);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.lp-show__stage--accounts { height: 300px; }
+/* Tall enough for all three mock projects with their containers expanded —
+   the list scrolls beyond that, as it does in the sidebar. */
+.lp-show__stage--projects { height: 480px; }
+
+/* The Accounts tab's second block is the Add-account form. The panel is here
+   to show the switch, and an empty form under it is not part of that. */
+.lp-show__stage--accounts .sbx-block--fit { display: none; }
+
 /* UnreadRail sizes itself to the 320px sidebar it normally lives in. */
 .lp-show__stage--rail {
   max-width: 360px;

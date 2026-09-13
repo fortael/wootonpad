@@ -887,9 +887,21 @@ async function openAccountViewer(id) {
   accountViewerRef.value?.load(id);
 }
 
+// app.js broadcasts an account switch back to every component that shows one;
+// the landing has three of them (the nav chip and the two AccountsApp copies)
+// and no main process to do the broadcasting, so it happens here. Without it
+// pressing Use looks like it did nothing, which is a poor advertisement for
+// the feature this page leads with.
+function switchAccount(id) {
+  window.__sb?.switchAccount?.(id);
+  accountDropdownRef.value?.setActiveAccount?.(id);
+  accountsRef.value?.setActiveAccount?.(id);
+  showcaseAccountsRef.value?.setActiveAccount?.(id);
+}
+
 const accountsCallbacks = {
   openAccountViewer,
-  switchAccount: (id) => window.__sb?.switchAccount?.(id),
+  switchAccount,
   openAccountHomeSession: (acc) => window.__sb?.openAccountHomeSession?.(acc),
   renameAccount: (id, name) => window.__sb?.renameAccount?.(id, name),
   deleteAccount: (id) => window.__sb?.deleteAccount?.(id),
@@ -906,12 +918,7 @@ const showcaseAccountsCallbacks = {
   openAccountViewer: (id) => { setTab('accounts'); openAccountViewer(id); jumpToDemo(); },
 };
 
-const accountDropdownCallbacks = {
-  switchAccount: (id) => {
-    window.__sb?.switchAccount?.(id);
-    accountDropdownRef.value?.setActiveAccount?.(id);
-  },
-};
+const accountDropdownCallbacks = { switchAccount };
 
 // Clicking a project opens its page in the main area — overview, commits,
 // files, its sessions and the agent files it loads. It used to be a second,
@@ -985,8 +992,8 @@ const FEATURE_GRID = [
     body: 'Every conversation indexed with SQLite FTS5. Find a session by what was discussed, not by when it happened.',
   },
   {
-    icon: 'users', accent: 'blue', title: 'Multi-account',
-    body: 'Personal and work in one window — separate credentials, histories and quotas, no re-login. WSL homes included.',
+    icon: 'git-fork', accent: 'blue', title: 'Forks & worktrees',
+    body: 'A forked session is matched back to the one it came from, and git is scoped to the worktree it actually runs in.',
   },
   {
     icon: 'panel-right-open', accent: 'green', title: 'Session side panel',
@@ -1027,6 +1034,10 @@ const FEATURE_GRID = [
   {
     icon: 'terminal', accent: 'orange', title: 'Your fonts, your shell',
     body: 'Terminal and UI fonts, shell profile and per-project settings, all in Global Settings.',
+  },
+  {
+    icon: 'calendar-days', accent: 'green', title: 'Scheduled tasks',
+    body: 'Give a project a cron line and a prompt, and the session runs itself — output waiting where every other session is.',
   },
 ];
 
