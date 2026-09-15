@@ -529,6 +529,8 @@ import SbIcon from './SbIcon.vue';
 import ProjectAvatar from './ProjectAvatar.vue';
 import ViewerContentApp from './ViewerContentApp.vue';
 import SessionCard from './SessionCard.vue';
+// Aliased: this file already has a `sessionTitle` of its own in the template.
+import { sessionTitle as titleOfSession } from '../session-title.js';
 
 const TABS = computed(() => [
   { id: 'overview', label: 'Overview' },
@@ -1174,10 +1176,7 @@ function openSessionFull(session) {
   window.__sb?.openSession?.(session);
 }
 
-function sessionTitle(s) {
-  const name = s.name || s.summary;
-  return (window.cleanDisplayName ? window.cleanDisplayName(name) : name) || s.sessionId;
-}
+const sessionTitle = (s) => titleOfSession(s, s.sessionId);
 
 function openExternal(url) { window.api?.openExternal?.(url); }
 

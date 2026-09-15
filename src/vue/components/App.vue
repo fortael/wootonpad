@@ -53,14 +53,14 @@
     </CommandBar>
 
     <!-- Not scoped to the sessions tab: live sessions are worth watching from
-         wherever you are. Renders nothing when nothing is running. The board
-         is the exception — it already shows every live session as a card, so
-         a rail of the same projects above it is noise. -->
+         wherever you are — the board included. It was hidden there on the
+         grounds that the cards say the same thing, but the board scrolls and
+         filters, and the rail is the one place that is always the whole set.
+         Same position on every tab: directly under the search. -->
     <UnreadRail
-      v-if="store.activeTab !== 'board'"
-      :items="unreadRows"
+      :items="activeRows"
       :active-session-id="store.activeSessionId || ''"
-      @select="openUnread"
+      @select="openRailSession"
     />
 
     <!-- Shared with the board: its cards are the same sessions under the same
@@ -238,7 +238,7 @@ import SessionSdkApp from './SessionSdkApp.vue';
 import { loadSidePanelTab } from '../side-panel-tabs.js';
 import { isPlainTerminal } from '../session-filter.js';
 import { matchProjectPaths } from '../project-search.js';
-import { OPEN_ORDER, mostUrgent, worstColumn, wantsAttention, unreadSessions, stateFromStore } from '../session-column.js';
+import { OPEN_ORDER, mostUrgent, worstColumn, wantsAttention, activeSessions, stateFromStore } from '../session-column.js';
 import { parseRateLimitEvent } from '../rate-limits.js';
 import PlansApp from './PlansApp.vue';
 import AccountsApp from './AccountsApp.vue';
@@ -555,13 +555,15 @@ watch(
 // `ui_state` and the round trip to SQLite; this only reports the change.
 watch(() => store.highlightFresh, (on) => window.__sb?.setHighlightFresh?.(on));
 
-// ── Unread rail ──────────────────────────────────────────────────
+// ── Active rail ──────────────────────────────────────────────────
 //
-// The same set the dock badge counts — see unreadSessions() — so a badge
-// reading 1 always has exactly one avatar on the rail explaining it.
-const unreadRows = computed(() => unreadSessions(store.projects, stateFromStore(store)));
+// Everything live or unread — see activeSessions(). It is a superset of what
+// the dock badge counts, so a badge reading 1 still has exactly one avatar on
+// the rail explaining it; that avatar is now the one wearing the count.
+const activeRows = computed(() =>
+  activeSessions(store.projects, stateFromStore(store), store.activePtyIds));
 
-function openUnread(session) {
+function openRailSession(session) {
   if (session) window.__sb?.openSession?.(session);
 }
 

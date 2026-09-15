@@ -30,7 +30,7 @@
 
             <div
               class="sbx-spotlight__row"
-              :class="{ 'is-active': i === cursor }"
+              :class="{ 'is-active': i === cursor, 'is-archived': row.archived }"
               :data-index="i"
               @mousemove="cursor = i"
               @click="activate(row)"
@@ -86,8 +86,11 @@
             </div>
           </template>
 
+          <!-- The archive has not been looked in yet, so "nothing matches" is
+               not the answer — it is the answer to half the question. -->
           <div v-if="!rows.length" class="sbx-spotlight__empty">
-            Nothing matches “{{ query.trim() }}”.
+            <template v-if="archivePending">Nothing open matches “{{ query.trim() }}” — still looking through the archive…</template>
+            <template v-else>Nothing matches “{{ query.trim() }}”.</template>
           </div>
         </div>
 
@@ -121,14 +124,19 @@
  * to feel alive. It also means the browser demo, which has no index behind it,
  * runs the real component.
  *
- * Archived sessions and archived projects are not searched. They are the
- * things you have explicitly put away; a jump-to tool that resurfaces them is
- * undoing that.
+ * Archived sessions come last, under their own heading, and only once the
+ * typing has stopped for a couple of seconds. They are the things you have
+ * explicitly put away — mixing them into the live results is undoing that, and
+ * never answering for them at all means the one place that finds anything
+ * cannot find half of what you have. The delay is what keeps the two apart:
+ * while a query is being typed it is matched against the live set alone, and
+ * the larger set is only walked for a query you have settled on.
  */
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import { store } from '../store.js';
 import { projectName } from '../project-search.js';
-import { spotlightResults, livingProjects } from '../spotlight-results.js';
+import { spotlightResults, livingProjects, archivedSessions } from '../spotlight-results.js';
+import { sessionTitle } from '../session-title.js';
 import { highlightParts, matches } from '../fuzzy-match.js';
 import ProjectAvatar from './ProjectAvatar.vue';
 import SbIcon from './SbIcon.vue';
@@ -167,10 +175,7 @@ const liveProjects = computed(() => {
  *  row kind and do not need a second field on the row. */
 function highlight(text) { return highlightParts(text, query.value); }
 
-function displayName(session) {
-  const raw = session.name || session.summary || 'Session';
-  return window.cleanDisplayName ? window.cleanDisplayName(raw) : raw;
-}
+const displayName = (session) => sessionTitle(session);
 
 function timeAgo(session) {
   const t = window.lastActivityTime?.get(session.sessionId) || new Date(session.modified);
@@ -195,6 +200,41 @@ const results = computed(() => spotlightResults({
   query: query.value,
 }));
 
+// ── The archive, on its own clock ─────────────────────────────────
+//
+// `settled` trails `query` by ARCHIVE_DELAY_MS. Everything above re-runs on
+// every keystroke against the projects in memory; this re-runs only once the
+// typing has stopped, over the whole set including what has been put away.
+const ARCHIVE_DELAY_MS = 2000;
+const settled = ref('');
+let settleTimer = 0;
+
+watch(query, (text) => {
+  clearTimeout(settleTimer);
+  // Cleared immediately rather than left behind: rows answering the query from
+  // two letters ago are worse than no rows at all.
+  settled.value = '';
+  if (!text.trim()) return;
+  settleTimer = setTimeout(() => { settled.value = text; }, ARCHIVE_DELAY_MS);
+});
+
+onUnmounted(() => clearTimeout(settleTimer));
+
+/** Is there a query the archive has not been asked about yet? */
+const archivePending = computed(() => !!query.value.trim() && settled.value !== query.value);
+
+const archived = computed(() => {
+  if (!settled.value || settled.value !== query.value) return [];
+  // allProjects, not liveProjects: an archived project's sessions are archived
+  // by implication, and they are exactly what this section is for.
+  const all = store.allProjects?.length ? store.allProjects : store.projects;
+  return archivedSessions({
+    projects: all,
+    query: settled.value,
+    projectMeta: projectMeta.value,
+  });
+});
+
 const rows = computed(() => {
   const out = [];
 
@@ -213,27 +253,31 @@ const rows = computed(() => {
     });
   });
 
-  results.value.sessions.forEach(({ project, session }, i) => {
+  const sessionRow = (project, session, section) => {
     const title = displayName(session);
     // A row whose visible title does not contain the query looks like a wrong
-    // answer. When it is the model's title that matched, say so on the row
-    // instead of leaving the reader to guess.
-    const explained = !matches(title, query.value) && session.aiTitle && matches(session.aiTitle, query.value);
-    const subtitle = explained
-      ? `${projectName(project.projectPath)} · ${displayName({ name: session.aiTitle })}`
-      : projectName(project.projectPath);
-    out.push({
+    // answer. When it was the opening prompt that matched, put that on the row
+    // rather than leaving the reader to guess why it is here.
+    const first = session.summary && displayName({ summary: session.summary });
+    const explained = first && !matches(title, query.value) && matches(first, query.value);
+    return {
       key: 's:' + session.sessionId,
       kind: 'session',
-      section: i === 0 ? 'Sessions' : null,
+      section,
       session,
       projectPath: project.projectPath,
       title,
       titleParts: highlightParts(title, query.value),
-      subtitle,
+      subtitle: explained
+        ? `${projectName(project.projectPath)} · ${first}`
+        : projectName(project.projectPath),
       meta: timeAgo(session),
       statusClass: statusClass(session),
-    });
+    };
+  };
+
+  results.value.sessions.forEach(({ project, session }, i) => {
+    out.push(sessionRow(project, session, i === 0 ? 'Sessions' : null));
   });
 
   results.value.plans.forEach((plan, i) => {
@@ -247,6 +291,14 @@ const rows = computed(() => {
       subtitle: plan.filename,
       meta: plan.modified && window.formatDate ? window.formatDate(new Date(plan.modified)) : '',
     });
+  });
+
+  // Last, and only for a query that has stopped changing.
+  archived.value.forEach(({ project, session }, i) => {
+    const row = sessionRow(project, session, i === 0 ? 'Archived' : null);
+    row.key = 'a:' + session.sessionId;
+    row.archived = true;
+    out.push(row);
   });
 
   return out;

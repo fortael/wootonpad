@@ -13,9 +13,21 @@
         <div class="session-summary">
           <!-- eslint-disable-next-line vue/no-v-html -->
           <span v-if="session.type === 'terminal'" class="terminal-badge"><SbIcon name="terminal" :size="13" /></span>
-          {{ displayName }}
+          <!-- The name is still being decided — see titlePending. The bar is
+               the honest shape of "a title is coming", and the sentence that
+               opened the conversation is already on the line below. -->
+          <span
+            v-if="pending"
+            class="session-title-wait"
+            role="status"
+            aria-label="Naming this session"
+          ></span>
+          <!-- Keyed by the name itself, so the element is replaced when the
+               title resolves and the fade runs exactly once — on the change,
+               not on every re-render. -->
+          <span v-else :key="displayName" class="session-title-in">{{ displayName }}</span>
         </div>
-        <div v-if="session.aiTitle" class="session-subtitle">{{ cleanName(session.aiTitle) }}</div>
+        <div v-if="subtitle" class="session-subtitle">{{ subtitle }}</div>
         <div class="session-meta">
           <UsageRing
             v-if="contextPct !== null"
@@ -64,6 +76,10 @@ import UsageRing from './UsageRing.vue';
 import SessionMenu from './SessionMenu.vue';
 import { contextPercent, formatContextLabel } from '../context-window.js';
 import { sessionChurn } from '../session-churn.js';
+import { tick, fastTick } from '../time-tick.js';
+import {
+  sessionTitle, sessionSubtitle, sessionFirstPrompt, titlePending,
+} from '../session-title.js';
 import { store } from '../store.js';
 
 const props = defineProps({
@@ -85,12 +101,26 @@ const runningAgents = computed(() => store.subagentCounts.get(props.session.sess
 const contextPct = computed(() => contextPercent(props.session.contextTokens, props.session));
 const contextLabel = computed(() => formatContextLabel(props.session.contextTokens, props.session));
 
-const displayName = computed(() => {
-  const name = props.session.name || props.session.summary;
-  return window.cleanDisplayName ? window.cleanDisplayName(name) : name;
+// The model's title leads and the first prompt goes under it — see
+// session-title.js for why round that way.
+const displayName = computed(() => sessionTitle(props.session, props.session.sessionId));
+// The wait has to be able to expire on screen rather than only when something
+// else happens to re-render the row. A row that is *not* waiting subscribes to
+// the slow clock and nothing else; one that is subscribes to the fast one, so
+// the bar comes down within a few seconds of the wait being over rather than at
+// the next half-minute. See time-tick.js.
+const pending = computed(() => {
+  if (!titlePending(props.session, props.isBusy)) { tick.value; return false; }
+  fastTick.value;
+  return titlePending(props.session, props.isBusy);
 });
+// While the title is being decided the row would otherwise show the opening
+// sentence twice — once as the placeholder's stand-in and once beneath it. The
+// line below is the one that keeps it.
+const subtitle = computed(() => (pending.value
+  ? sessionFirstPrompt(props.session)
+  : sessionSubtitle(props.session)));
 
-const cleanName = (n) => window.cleanDisplayName ? window.cleanDisplayName(n) : n;
 
 const timeStr = computed(() => {
   const t = window.lastActivityTime?.get(props.session.sessionId) || new Date(props.session.modified);

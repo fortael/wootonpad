@@ -428,12 +428,18 @@ function makeDayline(ms, key) {
 }
 
 /**
- * Put a rule with a date on it before the first message of each day.
+ * Put a rule with a date on it where the day changes.
+ *
+ * Not before the first message: a separator separates, and at the top of the
+ * transcript there is nothing above it to be separated from. "TODAY" as the
+ * opening line of a chat you have just opened states the obvious and reads as
+ * the conversation having been divided when it has not.
  *
  * Rebuilt rather than patched: paging earlier messages in prepends a whole
  * window above what is on screen, which can turn the day the old first message
- * started into a day it no longer starts. Rebuilding is O(children) of
- * attribute reads and mutates only where a marker is actually missing.
+ * started into a day it no longer starts — and turn the marker this skipped
+ * into one that is now worth drawing. Rebuilding is O(children) of attribute
+ * reads and mutates only where a marker is actually missing.
  *
  * @returns {string} the last day key seen, so a caller can tell when the day
  *          has turned over without walking the transcript again.
@@ -447,8 +453,10 @@ function refreshDayMarkers(container) {
     if (!Number.isFinite(ts) || !ts) continue;
     const key = dayKey(ts);
     if (key === last) continue;
+    // The first day seen is the day the loaded transcript opens on, which is
+    // not a change. Every later one is.
+    if (last) container.insertBefore(makeDayline(ts, key), el);
     last = key;
-    container.insertBefore(makeDayline(ts, key), el);
   }
   return last;
 }
@@ -580,6 +588,9 @@ function markToolDuration(toolEl, ms) {
   took.textContent = formatDuration(ms);
 }
 
+/** WebSearch, WebFetch and ToolSearch: one colour, because they are one act. */
+const WEB_COLOR = '#5fc9d0';
+
 const toolRenderers = {
   Read(input) {
     const path = input.file_path || '';
@@ -588,7 +599,7 @@ const toolRenderers = {
       const start = input.offset || 0;
       range = input.limit ? `:${start}-${start + input.limit}` : `:${start}`;
     }
-    return toolBlock('#8888a0', 'Read', '<code>' + escHtml(shortPath(path) + range) + '</code>', null);
+    return toolBlock(TOOL_COLOR.Read, 'Read', '<code>' + escHtml(shortPath(path) + range) + '</code>', null);
   },
 
   Edit(input) {
@@ -607,7 +618,7 @@ const toolRenderers = {
       diff.innerHTML = html;
       content = diff;
     }
-    return toolBlock('#e0a040', 'Edit', '<code>' + escHtml(shortPath(path)) + '</code>', content);
+    return toolBlock(TOOL_COLOR.Edit, 'Edit', '<code>' + escHtml(shortPath(path)) + '</code>', content);
   },
 
   Write(input) {
@@ -618,7 +629,7 @@ const toolRenderers = {
     if (input.content) {
       content = makeCollapsible('jsonl-tool-result', 'Content', input.content, true);
     }
-    return toolBlock('#60c060', 'Write', detail, content);
+    return toolBlock(TOOL_COLOR.Write, 'Write', detail, content);
   },
 
   Bash(input) {
@@ -630,7 +641,7 @@ const toolRenderers = {
     // was the one row in the transcript you could not identify without opening
     // it — every other tool names its file or its pattern.
     const head = truncateCommand(cmd);
-    return toolBlock('#80c0e0', 'Bash', head ? '<code>' + escHtml(head) + '</code>' : null, pre);
+    return toolBlock(TOOL_COLOR.Bash, 'Bash', head ? '<code>' + escHtml(head) + '</code>' : null, pre);
   },
 
   Grep(input) {
@@ -638,12 +649,12 @@ const toolRenderers = {
     const path = input.path || '';
     const sp = path ? shortPath(path) : '';
     const summary = '<code>' + escHtml(pattern) + (sp ? ' in ' + escHtml(sp) : '') + '</code>';
-    return toolBlock('#c090e0', 'Grep', summary, null);
+    return toolBlock(TOOL_COLOR.Grep, 'Grep', summary, null);
   },
 
   Glob(input) {
     const pattern = input.pattern || '';
-    return toolBlock('#c090e0', 'Glob', '<code>' + escHtml(pattern) + '</code>', null);
+    return toolBlock(TOOL_COLOR.Glob, 'Glob', '<code>' + escHtml(pattern) + '</code>', null);
   },
 
   Agent(input) {
@@ -651,7 +662,47 @@ const toolRenderers = {
     const type = input.subagent_type || '';
     const summary = (type ? '<span class="jsonl-tool-detail">' + escHtml(type) + '</span> ' : '')
       + escHtml(desc);
-    return toolBlock('#f0a050', 'Agent', summary, null);
+    return toolBlock(TOOL_COLOR.Agent, 'Agent', summary, null);
+  },
+
+  // ── The three that leave the machine ────────────────────────────
+  //
+  // Drawn as their own family, in one colour, because they are the one kind of
+  // call whose answer did not come from this computer. What they went looking
+  // for is the whole summary — a search you cannot read the query of is a row
+  // that says only that some searching happened.
+
+  WebSearch(input) {
+    const query = input.query || '';
+    const domains = input.allowed_domains || [];
+    const summary = '<code>' + escHtml(query) + '</code>'
+      + (domains.length
+        ? ' <span class="jsonl-tool-detail">in ' + escHtml(domains.join(', ')) + '</span>'
+        : '');
+    return toolBlock(WEB_COLOR, 'Search', summary, null);
+  },
+
+  WebFetch(input) {
+    const url = input.url || '';
+    // The host is what says where this went; the path is usually longer than
+    // the row and says less.
+    let host = url;
+    try { host = new URL(url).host; } catch { /* not a URL the browser parses */ }
+    const summary = '<code>' + escHtml(host) + '</code>'
+      + (input.prompt ? ' <span class="jsonl-tool-detail">' + escHtml(truncateCommand(input.prompt)) + '</span>' : '');
+    const content = url ? makeInlineContent('jsonl-tool-result', url) : null;
+    return toolBlock(WEB_COLOR, 'Fetch', summary, content);
+  },
+
+  // Not a web call, but the same gesture: go and find out what is available
+  // before using it. `select:` queries name the tools outright and read better
+  // without the prefix.
+  ToolSearch(input) {
+    const query = String(input.query || '');
+    const select = query.startsWith('select:');
+    const summary = '<code>' + escHtml(select ? query.slice(7) : query) + '</code>'
+      + (select ? ' <span class="jsonl-tool-detail">by name</span>' : '');
+    return toolBlock(WEB_COLOR, 'Tools', summary, null);
   },
 };
 
@@ -713,7 +764,7 @@ function renderLocalCommand({ cmd, output }) {
   pre.textContent = cmd;
 
   const head = truncateCommand(cmd);
-  const el = toolBlock('#80c0e0', 'Bash',
+  const el = toolBlock(TOOL_COLOR.Bash, 'Bash',
     '<span class="jsonl-tool-detail">local</span>'
     + (head ? ' <code>' + escHtml(head) + '</code>' : ''), pre);
 
@@ -1012,6 +1063,222 @@ function renderToolResult(resultData, container) {
   }
 }
 
+// ── A call that failed ────────────────────────────────────────────
+//
+// The CLI marks it on the result block — `is_error: true` — and for a shell
+// command writes the status into the first line of the output. Folded, that
+// line is behind a click, so the row itself said nothing: a turn where one
+// command in nine came back non-zero looked exactly like a turn where none did.
+
+/** `Exit code 127\n(eval):1: command not found: timeout` */
+const EXIT_CODE = /^\s*Exit code (\d+)\b/;
+
+/**
+ * Say on the row that this one came back failed, and with what status.
+ *
+ * The bullet is recoloured rather than overridden in CSS: the renderers set it
+ * inline, per tool, and a stylesheet rule would have to out-shout them.
+ */
+function markToolFailed(toolEl, content) {
+  if (!toolEl || toolEl.classList.contains('jsonl-tool-block--failed')) return;
+  toolEl.classList.add('jsonl-tool-block--failed');
+  const bullet = toolEl.querySelector('.jsonl-tool-bullet');
+  if (bullet) bullet.style.color = 'var(--red-500)';
+
+  const header = toolEl.querySelector('.jsonl-tool-header');
+  if (!header) return;
+  const text = typeof content === 'string' ? content : (extractResultText(content) || '');
+  const code = EXIT_CODE.exec(text);
+  const chip = document.createElement('span');
+  chip.className = 'jsonl-tool-failed';
+  chip.textContent = code ? `exit ${code[1]}` : 'failed';
+  // Before the duration, which is pinned to the right edge of the row.
+  const took = header.querySelector('.jsonl-tool-took');
+  if (took) header.insertBefore(chip, took);
+  else header.appendChild(chip);
+}
+
+/**
+ * A stored result, which may or may not have been kept with its error flag.
+ *
+ * The maps that hold results between a call and its answer predate the flag and
+ * some still hold the bare content, so both shapes are read here rather than at
+ * six call sites. The wrapper is recognised by carrying `isError` — a real
+ * payload with a `content` field (a Write result, say) does not.
+ */
+function unwrapResult(data) {
+  const wrapped = data && typeof data === 'object' && !Array.isArray(data)
+    && 'content' in data && 'isError' in data;
+  return wrapped
+    ? { content: data.content, isError: !!data.isError }
+    : { content: data, isError: false };
+}
+
+/** The tool's answer, into the call it belongs to, marked if it failed. */
+function applyToolResult(toolEl, data) {
+  const { content, isError } = unwrapResult(data);
+  renderToolResult(content, toolContent(toolEl));
+  if (isError) markToolFailed(toolEl, content);
+  return isError;
+}
+
+// ── An answer whose call is not on screen ─────────────────────────
+//
+// A window of the transcript can start in the middle of a turn, and then the
+// results of calls made in the page above arrive with nothing to fold into.
+// They used to render as a bare "Tool Result": no tool, no reason for being
+// there, no cost. Three things nobody could recover without opening it and
+// guessing from the output.
+
+/** Every tool that draws its own row, and the colour it draws it in. */
+const TOOL_COLOR = {
+  Read: '#8888a0',
+  Edit: '#e0a040',
+  Write: '#60c060',
+  Bash: '#80c0e0',
+  Grep: '#c090e0',
+  Glob: '#c090e0',
+  Agent: '#f0a050',
+  WebSearch: WEB_COLOR,
+  WebFetch: WEB_COLOR,
+  ToolSearch: WEB_COLOR,
+};
+
+/**
+ * Which tool produced this, read off the shape of what it produced.
+ *
+ * The `toolUseResult` the CLI writes beside a result is a different object per
+ * tool, and that is enough to name it without the call — which is the whole
+ * point, since the call is what is missing.
+ */
+function toolFromResult(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
+  if ('stdout' in result || 'stderr' in result) return 'Bash';
+  if ('total_deferred_tools' in result) return 'ToolSearch';
+  if ('searchCount' in result || ('query' in result && Array.isArray(result.results))) return 'WebSearch';
+  if ('codeText' in result && 'bytes' in result) return 'WebFetch';
+  if ('oldString' in result && 'structuredPatch' in result) return 'Edit';
+  if (result.type === 'create' && result.filePath) return 'Write';
+  if (result.type === 'text' && result.file) return 'Read';
+  if ('filenames' in result || 'numFiles' in result) return 'Glob';
+  return null;
+}
+
+/** 12400 → "12.4k" — a count that has to fit on a row beside three others. */
+function shortTokenCount(n) {
+  if (!Number.isFinite(n) || n <= 0) return '';
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(n >= 10_000 ? 0 : 1) + 'k';
+  return String(n);
+}
+
+/**
+ * What the call cost, when the result says so.
+ *
+ * Most do not — a shell command's answer carries its output and nothing else,
+ * and the duration for those is reconstructed from the entry timestamps by the
+ * caller. This reports only what is actually written down.
+ */
+function resultCost(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return '';
+  const parts = [];
+
+  const ms = Number.isFinite(result.totalDurationMs) ? result.totalDurationMs
+    : Number.isFinite(result.durationSeconds) ? result.durationSeconds * 1000
+    : null;
+  if (ms != null) parts.push(formatDuration(ms));
+
+  const usage = result.usage || {};
+  const tokens = Number.isFinite(result.totalTokens)
+    ? result.totalTokens
+    : (usage.input_tokens || 0) + (usage.output_tokens || 0)
+      + (usage.cache_creation_input_tokens || 0) + (usage.cache_read_input_tokens || 0);
+  const short = shortTokenCount(tokens);
+  if (short) parts.push(short + ' tokens');
+
+  if (Number.isFinite(result.bytes) && result.bytes > 0) {
+    parts.push(result.bytes >= 1024 ? Math.round(result.bytes / 1024) + ' KB' : result.bytes + ' B');
+  }
+  if (Number.isFinite(result.searchCount) && result.searchCount > 0) {
+    parts.push(result.searchCount + (result.searchCount === 1 ? ' search' : ' searches'));
+  }
+  return parts.join(' · ');
+}
+
+/**
+ * A loose result, drawn as the answer it is.
+ *
+ * @param {unknown} content  what the result block carried
+ * @param {{ toolUseResult?: unknown, toolName?: string|null, isError?: boolean }} [opts]
+ */
+function renderOrphanResult(content, opts = {}) {
+  const raw = opts.toolUseResult;
+  const name = opts.toolName
+    || toolFromResult(raw)
+    || (EXIT_CODE.test(typeof content === 'string' ? content : '') ? 'Bash' : null);
+  const cost = resultCost(raw);
+
+  // The reason it is here at all: the call is real and it is in the part of the
+  // session above this window. Saying so beats leaving it unexplained.
+  const why = name ? 'answer to a call above' : 'answer to a call above — tool unknown';
+  const summary = '<span class="jsonl-tool-detail">'
+    + escHtml([why, cost].filter(Boolean).join(' · '))
+    + '</span>';
+
+  const body = document.createElement('div');
+  renderToolResult(content, body);
+
+  const el = toolBlock(
+    (name && TOOL_COLOR[name]) || '#8888a0',
+    name ? `${name} result` : 'Tool result',
+    summary,
+    body.children.length ? body : null,
+  );
+  el.classList.add('jsonl-tool-block--orphan');
+  // So it can stop being an orphan. Pages load upward, so the call this
+  // answers may well arrive after it — see adoptOrphanResults.
+  if (opts.toolUseId) el.dataset.orphanFor = opts.toolUseId;
+  if (opts.isError) {
+    el.dataset.orphanError = '1';
+    markToolFailed(el, content);
+  }
+  return collapseToolBlock(el);
+}
+
+/**
+ * Give every loose result back to its call, once the call is on screen.
+ *
+ * History is paged in upward, so the two halves of a pair arrive in the wrong
+ * order: the window holding the result is painted first, and the window holding
+ * the call is prepended above it one scroll later. At that moment the loose
+ * block stops being loose — the thing it is an answer to is right there — and
+ * leaving it at the bottom of the turn is the same anonymous row it was before.
+ *
+ * Run after anything that inserts into the transcript. Costs one selector over
+ * the loose blocks, of which a page has none or one.
+ */
+function adoptOrphanResults(container) {
+  if (!container) return;
+  for (const orphan of container.querySelectorAll('[data-orphan-for]')) {
+    const id = orphan.dataset.orphanFor;
+    const call = container.querySelector(`[data-tool-use-id="${CSS.escape(id)}"]`);
+    if (!call || !call.classList.contains('jsonl-tool-block')) continue;
+
+    const target = toolContent(call);
+    for (const node of Array.from(orphan.querySelector('.jsonl-tool-content')?.childNodes || [])) {
+      target.appendChild(node);
+    }
+    if (orphan.dataset.orphanError) markToolFailed(call, target.textContent || '');
+    if (!call.classList.contains('jsonl-tool-block--foldable')) collapseToolBlock(call);
+
+    // The block was wrapped in an entry of its own; an entry with nothing left
+    // in it is a blank line in the transcript.
+    const entry = orphan.parentElement;
+    orphan.remove();
+    if (entry?.classList.contains('jsonl-entry') && !entry.children.length) entry.remove();
+  }
+}
+
 /**
  * The prompt just sent, echoed into the transcript.
  *
@@ -1064,6 +1331,15 @@ export {
   extractResultText,
   makeChatImage,
   renderToolResult,
+  applyToolResult,
+  markToolFailed,
+  renderOrphanResult,
+  adoptOrphanResults,
+  // Exported for their own tests: they are the only part of the orphan block
+  // that is a decision rather than markup.
+  toolFromResult,
+  resultCost,
+  unwrapResult,
   renderUserPrompt,
   getEntryText,
   mergeLocalCommandEntries,
@@ -1269,7 +1545,7 @@ function renderViewItems(items, toolResults, opts) {
         const toolEl = renderToolUse({ name: item.name, input: item.input, id: item.id });
         if (item.id) toolEl.dataset.toolUseId = item.id;
         if (item.id && toolResults && toolResults.has(item.id)) {
-          renderToolResult(toolResults.get(item.id), toolContent(toolEl));
+          applyToolResult(toolEl, toolResults.get(item.id));
           toolResults.delete(item.id);
         }
         // A run of calls is one operation — "read three files, then edit them"
@@ -1283,7 +1559,11 @@ function renderViewItems(items, toolResults, opts) {
         if (item.toolUseId && toolResults && !toolResults.has(item.toolUseId)) break;
         const el = document.createElement('div');
         el.className = 'jsonl-entry jsonl-assistant';
-        el.appendChild(makeCollapsible('jsonl-tool-result', 'Tool Result', item.content, false));
+        el.appendChild(renderOrphanResult(item.content, {
+          toolUseId: item.toolUseId,
+          toolName: opts?.toolNames?.get(item.toolUseId) || null,
+          isError: item.isError,
+        }));
         frag.appendChild(el);
         break;
       }
@@ -1508,7 +1788,7 @@ function renderJsonlEntry(entry, toolResultMap, opts) {
       if (block.id && toolResultMap && toolResultMap.has(block.id)) {
         const resultData = toolResultMap.get(block.id);
         toolResultMap.delete(block.id);
-        renderToolResult(resultData, toolContent(toolEl));
+        applyToolResult(toolEl, resultData);
       }
       // Read back off disk, a call's duration is the gap between the entry that
       // made it and the entry that carried the result — see renderWindow.
@@ -1523,8 +1803,14 @@ function renderJsonlEntry(entry, toolResultMap, opts) {
       div.appendChild(makeChatImage(`data:${mediaType};base64,${block.source.data}`, 'jsonl-msgimage'));
     } else if (block.type === 'tool_result') {
       if (block.tool_use_id && toolResultMap && !toolResultMap.has(block.tool_use_id)) continue;
-      const resultContent = block.content || block.output || '';
-      div.appendChild(makeCollapsible('jsonl-tool-result', 'Tool Result', resultContent, false));
+      // The call is in the page above this window. `toolUseResult` sits on the
+      // entry rather than on the block, and its shape is what names the tool.
+      div.appendChild(renderOrphanResult(block.content || block.output || '', {
+        toolUseId: block.tool_use_id,
+        toolUseResult: entry.toolUseResult,
+        toolName: opts?.toolNames?.get(block.tool_use_id) || null,
+        isError: block.is_error === true,
+      }));
     }
   }
 

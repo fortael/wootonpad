@@ -215,12 +215,19 @@ function shortProject(path) {
   return projectName(path);
 }
 
+// The one place the notes are re-read. Every note mutation in the app ends
+// here — the ones in this component directly, the ones in the session side
+// panel and the Markdown editor through `window.vuePlans.refreshNotes` — so it
+// is also the one place that can tell anything else the notes have moved.
+// See store.notesRevision: the side panel's rail shows a count derived from
+// these and has no other way to learn the count has changed.
 async function refreshNotes() {
   try {
     notes.value = (await window.api?.getNotes?.()) || [];
   } catch {
     notes.value = [];
   }
+  store.notesRevision++;
 }
 
 async function toggleCreate() {

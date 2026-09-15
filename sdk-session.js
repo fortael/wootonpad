@@ -18,6 +18,7 @@
 // CLI calls the authoritative turn-over signal, to whoever is listening.
 
 const { HOOK_EVENTS } = require('./hook-settings');
+const { stripInheritedClaudeEnv } = require('./claude-env');
 
 // The SDK ships as ESM and main.js is CommonJS, so the import is dynamic and
 // deferred: a user who never opens an SDK session never pays for loading it.
@@ -202,8 +203,13 @@ async function startSdkSession(sessionId, opts) {
       if (line) log.debug(`[sdk] session=${sessionId} stderr: ${line.slice(0, 500)}`);
       opts.onStderr?.(sessionId, String(data));
     },
+    // Not `process.env` wholesale: a parent Claude Code session's variables
+    // describe a different conversation, and the CLI believes them — see
+    // claude-env.js. The one that was actually noticed turns off the Haiku
+    // titling the CLI does on the first turn, so every session started this
+    // way stayed unnamed.
     env: {
-      ...process.env,
+      ...stripInheritedClaudeEnv(process.env),
       ...(opts.env || {}),
       PATH: deps.claudeChildPath(),
     },

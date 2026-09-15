@@ -133,9 +133,20 @@ onMounted(loadAll);
 watch(projectPath, loadAll);
 watch(sessionId, loadAgentBadge);
 
+// Ticking an item off in the panel beside this rail changes the number on it.
+// The notes are files, and nothing about writing one reaches a badge that only
+// shows a count derived from them — see store.notesRevision.
+watch(() => store.notesRevision, loadTodoBadge);
+
 // Closing the panel drops store.sidePanelDetail, so re-read the row it just
 // refreshed rather than falling back to whatever this component loaded first.
-watch(() => store.sidePanelTab, (tab) => { if (!tab) loadCounts(); });
+// Opening the TODO pane is also a moment the count is worth re-reading: the
+// notes are files on disk and anything — a session, an editor, another window
+// — may have written one since this rail last looked.
+watch(() => store.sidePanelTab, (tab) => {
+  if (!tab) loadCounts();
+  if (tab === 'todos') loadTodoBadge();
+});
 
 // A turn that just ended is the moment the working tree stopped moving. The
 // row is only rewritten by a real detail load, so this picks up a refresh the

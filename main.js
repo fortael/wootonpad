@@ -1,5 +1,6 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } = require('electron');
 const { Worker } = require('worker_threads');
+const { stripInheritedClaudeEnv } = require('./claude-env');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -25,7 +26,9 @@ const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolveP
 const { startHookServer, stopHookServer } = require('./hook-server');
 const { buildHookSettings } = require('./hook-settings');
 const { SessionStatusTracker } = require('./session-status');
-const { readTranscriptWindow, readCompactBoundaries, forgetTranscript } = require('./transcript-window');
+const {
+  readTranscriptWindow, readSessionLandmarks, recordIndexAtTime, forgetTranscript,
+} = require('./transcript-window');
 const { createDockAttention } = require('./dock-attention');
 const {
   detectCompose, composeCheckDue, pollPlan, activeProjectPaths,
@@ -56,9 +59,11 @@ try {
 } catch {}
 
 // Clean env for child processes — strip Electron internals that cause nested
-// Electron apps (or node-pty inside them) to malfunction.
+// Electron apps (or node-pty inside them) to malfunction, and a parent Claude
+// Code session's own variables, which the CLI would otherwise believe are its
+// own. See claude-env.js for what that breaks.
 const cleanPtyEnv = Object.fromEntries(
-  Object.entries(process.env).filter(([k]) =>
+  Object.entries(stripInheritedClaudeEnv(process.env)).filter(([k]) =>
     !k.startsWith('ELECTRON_') &&
     !k.startsWith('GOOGLE_API_KEY') &&
     k !== 'NODE_OPTIONS' &&
@@ -3095,19 +3100,35 @@ ipcMain.handle('read-session-transcript', (_event, sessionId, opts) => {
   }
 });
 
-// --- IPC: session-compacts ---
-// Where this session's context was thrown away, for the chat's timeline rail.
-// Reuses the same cached line index the windowed read builds, so it costs one
-// stat on a warm file and parses only the boundary records themselves.
-ipcMain.handle('session-compacts', (_event, sessionId) => {
+// --- IPC: session-record-at ---
+// Where a moment in time sits in the file. The chat drops its oldest messages
+// from the DOM once they are far enough above the viewport, and then has to say
+// what its top is now: the nodes it kept carry the timestamps they were drawn
+// with, and this turns one of those back into a record index to page from.
+ipcMain.handle('session-record-at', (_event, sessionId, ms) => {
   const folder = getCachedFolder(sessionId);
-  if (!folder) return { ok: false, total: 0, compacts: [] };
+  if (!folder) return { ok: false, index: 0, total: 0 };
   const jsonlPath = path.join(activeProjectsDir(), folder, sessionId + '.jsonl');
   try {
-    return { ok: true, ...readCompactBoundaries(jsonlPath) };
+    return { ok: true, ...recordIndexAtTime(jsonlPath, Number(ms)) };
+  } catch {
+    return { ok: false, index: 0, total: 0 };
+  }
+});
+
+// --- IPC: session-landmarks ---
+// Compacts, errors, day changes and turn ends, for the chat's timeline rail.
+// Reuses the same cached line index the windowed read builds — see
+// transcript-window.js for why none of this parses the whole file.
+ipcMain.handle('session-landmarks', (_event, sessionId) => {
+  const folder = getCachedFolder(sessionId);
+  if (!folder) return { ok: false, total: 0, marks: [] };
+  const jsonlPath = path.join(activeProjectsDir(), folder, sessionId + '.jsonl');
+  try {
+    return { ok: true, ...readSessionLandmarks(jsonlPath) };
   } catch {
     // A session with no transcript yet is the normal case for a new one.
-    return { ok: false, total: 0, compacts: [] };
+    return { ok: false, total: 0, marks: [] };
   }
 });
 

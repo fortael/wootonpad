@@ -116,6 +116,17 @@
   background: var(--surface-card-hover);
 }
 
+/* A session that has been put away. It is still findable and still opens; it
+   just should not read as one of the live rows above it. */
+.sbx-spotlight__row.is-archived {
+  opacity: 0.62;
+}
+
+.sbx-spotlight__row.is-archived.is-active,
+.sbx-spotlight__row.is-archived:hover {
+  opacity: 1;
+}
+
 /* Cursor bar. On the row rather than a separate element so it cannot fall out
    of step with the highlight. */
 .sbx-spotlight__row.is-active::before {

@@ -58,6 +58,7 @@
 import { computed, ref } from 'vue';
 import SessionItem from './SessionItem.vue';
 import SbIcon from './SbIcon.vue';
+import { sessionTitle } from '../session-title.js';
 
 const props = defineProps({
   slug: { type: String, required: true },
@@ -100,11 +101,7 @@ const mostRecent = computed(() =>
   })
 );
 
-const displayName = computed(() => {
-  const s = mostRecent.value;
-  const name = s.name || s.summary || props.slug;
-  return window.cleanDisplayName ? window.cleanDisplayName(name) : name;
-});
+const displayName = computed(() => sessionTitle(mostRecent.value, props.slug));
 
 const timeStr = computed(() => {
   const t = window.lastActivityTime?.get(mostRecent.value.sessionId) || new Date(mostRecent.value.modified);

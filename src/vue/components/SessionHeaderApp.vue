@@ -10,14 +10,27 @@
 
       <div class="sbx-sesshead__text">
         <div class="sbx-sesshead__titlerow">
-          <span class="sbx-sesshead__title" :title="sessionName">{{ sessionName }}</span>
+          <!-- Still being named. The same wait the sidebar row shows, in the
+               same place the name will land — see titlePending. -->
+          <span
+            v-if="pending"
+            class="sbx-sesshead__title sbx-sesshead__title--wait session-title-wait"
+            role="status"
+            aria-label="Naming this session"
+          ></span>
+          <span
+            v-else
+            :key="sessionName"
+            class="sbx-sesshead__title session-title-in"
+            :title="sessionName"
+          >{{ sessionName }}</span>
 
           <span class="sbx-sesshead__sep">·</span>
 
           <span class="sbx-sesshead__project" :title="session.projectPath">{{ projectShortPath }}</span>
         </div>
 
-        <span v-if="aiTitle" class="sbx-sesshead__ai" :title="aiTitle">{{ aiTitle }}</span>
+        <span v-if="subtitle" class="sbx-sesshead__ai" :title="subtitle">{{ subtitle }}</span>
       </div>
     </div>
 
@@ -28,7 +41,15 @@
         <span v-if="timeStr">{{ timeStr }}</span>
       </span>
 
-      <span class="sbx-sesshead__badge" :class="statusClass">
+      <!-- What the four words actually mean. "Active" and "Stopped" are the
+           pair worth explaining: they are about whether a Claude process
+           exists, not about whether the conversation is finished, and nothing
+           else on screen says so. -->
+      <span
+        class="sbx-sesshead__badge"
+        :class="statusClass"
+        :data-tooltip="statusHint"
+      >
         <span class="sbx-sesshead__dot"></span>
         <span class="sbx-sesshead__badge-label">{{ statusLabel }}</span>
       </span>
@@ -71,6 +92,8 @@ import { computed } from 'vue';
 import { store } from '../store.js';
 import ProjectAvatar from './ProjectAvatar.vue';
 import SessionMenu from './SessionMenu.vue';
+import { sessionTitle, sessionSubtitle, sessionFirstPrompt, titlePending } from '../session-title.js';
+import { tick, fastTick } from '../time-tick.js';
 
 const session = computed(() => store.headerSession);
 const sessionId = computed(() => session.value?.sessionId);
@@ -80,19 +103,19 @@ const projectShortPath = computed(() => {
   return p.split('/').filter(Boolean).slice(-2).join('/');
 });
 
-const sessionName = computed(() => {
-  const s = session.value;
-  if (!s) return '';
-  const name = s.name || s.summary || 'Session';
-  return window.cleanDisplayName ? window.cleanDisplayName(name) : name;
+// The top line is what the session is about; the one under it is how it
+// opened. See session-title.js.
+const sessionName = computed(() => (session.value ? sessionTitle(session.value) : ''));
+// Subscribed to the fast clock only while actually waiting — see SessionItem
+// for why round that way, and time-tick.js for what the two clocks are.
+const pending = computed(() => {
+  if (!titlePending(session.value, isBusy.value)) { tick.value; return false; }
+  fastTick.value;
+  return titlePending(session.value, isBusy.value);
 });
-
-const aiTitle = computed(() => {
-  const s = session.value;
-  if (!s?.aiTitle) return null;
-  const cleaned = window.cleanDisplayName ? window.cleanDisplayName(s.aiTitle) : s.aiTitle;
-  return cleaned !== sessionName.value ? cleaned : null;
-});
+const subtitle = computed(() => (pending.value
+  ? sessionFirstPrompt(session.value)
+  : sessionSubtitle(session.value)));
 
 const isRunning = computed(() => store.activePtyIds?.has(sessionId.value));
 const isBusy = computed(() => store.sessionBusyState?.get(sessionId.value) || false);
@@ -109,6 +132,24 @@ const statusLabel = computed(() => {
   if (isBusy.value) return 'Working…';
   if (isRunning.value) return 'Active';
   return 'Stopped';
+});
+
+// The distinction the label alone does not carry: this is about the process,
+// not about the conversation. A session with a hundred messages in it can be
+// Stopped, and an empty one that was just opened is Active.
+const statusHint = computed(() => {
+  if (isAttention.value) {
+    return 'Claude has stopped to ask you something and will not go on until it is answered.';
+  }
+  if (isBusy.value) {
+    return 'Claude is running and answering right now.';
+  }
+  if (isRunning.value) {
+    return 'A live Claude process is running for this session, idle and waiting for your next message. '
+      + 'Closing this view leaves it running; Stop ends it.';
+  }
+  return 'No Claude process is running. The conversation is saved on disk — sending a message '
+    + 'starts one again and carries on where it left off.';
 });
 
 const messageCount = computed(() => session.value?.messageCount || null);

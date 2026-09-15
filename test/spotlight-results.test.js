@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { spotlightResults, livingProjects } = require('../src/vue/spotlight-results.js');
+const { spotlightResults, livingProjects, archivedSessions } = require('../src/vue/spotlight-results.js');
 
 const session = (id, name, modified, extra = {}) => ({
   sessionId: id, name, summary: name, modified, ...extra,
@@ -149,4 +149,74 @@ test('a loose match buried in a long title is not a match', () => {
   // "sess" is a subsequence of the long one (s…e…s…s) and the word in the
   // other. Only the second is a result a reader would recognise.
   assert.deepEqual(ids(spotlightResults({ projects: list, query: 'sess' }).sessions), ['short']);
+});
+
+// ── The archive ───────────────────────────────────────────────────
+//
+// The same rules, under a different heading. What is worth guarding is that
+// the two halves stay disjoint: a session must not be able to appear in both.
+
+test('an archived session is found by the same rules as a live one', () => {
+  const found = archivedSessions({ projects: projects(), query: 'spike', projectMeta: META });
+  assert.deepEqual(ids(found), ['c']);
+});
+
+test('every session of an archived project is in the archive', () => {
+  const found = archivedSessions({ projects: projects(), query: 'wooton', projectMeta: META });
+  assert.deepEqual(ids(found), ['f']);
+});
+
+test('a live session is never in the archive', () => {
+  const live = spotlightResults({ projects: projects(), query: 'search', projectMeta: META });
+  const put = archivedSessions({ projects: projects(), query: 'search', projectMeta: META });
+  assert.deepEqual(ids(live.sessions), ['b']);
+  assert.deepEqual(ids(put), []);
+});
+
+test('the two halves never hold the same session', () => {
+  for (const query of ['wooton', 'search', 'old', 'e', 'rate']) {
+    const live = new Set(ids(spotlightResults({ projects: projects(), query, projectMeta: META }).sessions));
+    const put = ids(archivedSessions({ projects: projects(), query, projectMeta: META }));
+    for (const id of put) {
+      assert.ok(!live.has(id), `"${query}" put ${id} in both halves`);
+    }
+  }
+});
+
+// An empty field is the project list. "Everything you have ever archived" is
+// not a list anyone opened a palette to read.
+test('an empty query asks the archive nothing', () => {
+  assert.deepEqual(archivedSessions({ projects: projects(), query: '', projectMeta: META }), []);
+  assert.deepEqual(archivedSessions({ projects: projects(), query: '   ', projectMeta: META }), []);
+});
+
+test('the archive is capped like every other section', () => {
+  const many = [{
+    projectPath: '/Users/zakhar/Projects/heap',
+    sessions: Array.from({ length: 40 }, (_, i) =>
+      session('z' + i, 'Archived thing ' + i, '2026-09-01T10:00:00Z', { archived: 1 })),
+  }];
+  assert.equal(archivedSessions({ projects: many, query: 'archived thing' }).length, 8);
+});
+
+test('archived results are newest first when they rank the same', () => {
+  const found = archivedSessions({
+    projects: [{
+      projectPath: '/p',
+      sessions: [
+        session('old', 'Same title', '2026-01-01T10:00:00Z', { archived: 1 }),
+        session('new', 'Same title', '2026-09-01T10:00:00Z', { archived: 1 }),
+      ],
+    }],
+    query: 'same title',
+  });
+  assert.deepEqual(ids(found), ['new', 'old']);
+});
+
+test('a project with no sessions does not break the archive search', () => {
+  const found = archivedSessions({
+    projects: [{ projectPath: '/p' }, { sessions: [] }, null],
+    query: 'anything',
+  });
+  assert.deepEqual(found, []);
 });

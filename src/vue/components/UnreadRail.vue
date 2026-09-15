@@ -1,11 +1,11 @@
 <template>
   <!-- Always rendered, empty or not. It was hidden when it had nothing, so the
        sidebar's whole top shifted every time the last turn was read — and an
-       empty rail is itself the answer to "is anything waiting for me". -->
+       empty rail is itself the answer to "is anything running". -->
   <div class="sbx-unread">
     <div class="sbx-unread__header">
-      <span class="sbx-unread__dot" :class="{ 'is-quiet': !rows.length }"></span>
-      <span class="sbx-unread__label">Unread</span>
+      <span class="sbx-unread__dot" :class="{ 'is-quiet': !unreadCount }"></span>
+      <span class="sbx-unread__label">Active</span>
       <div class="sbx-unread__spacer"></div>
       <span class="sbx-unread__count">{{ rows.length }}</span>
     </div>
@@ -18,12 +18,30 @@
         class="sbx-unread__avatar"
         :class="[
           `sbx-unread__avatar--${row.status}`,
-          { 'sbx-unread__avatar--open': row.sessionId === activeSessionId },
+          {
+            'sbx-unread__avatar--open': row.sessionId === activeSessionId,
+            'is-read': !row.unread,
+          },
         ]"
         :title="row.title"
         @click="$emit('select', row.session)"
       >
-        <ProjectAvatar class="sbx-unread__monogram" :project-path="row.projectPath" />
+        <!-- The avatar and its two marks move together: the wrapper is what
+             bounces, so the pip and the badge stay stuck to the corners of the
+             thing that is jumping. -->
+        <span class="sbx-unread__stack">
+          <ProjectAvatar class="sbx-unread__monogram" :project-path="row.projectPath" />
+          <!-- The session's own status mark, repeated small in the corner — the
+               spinning arc and the orange dot the sidebar row already draws. A
+               finished or idle session has none: the count says it is unread,
+               and an idle one is making no claim at all. -->
+          <span
+            v-if="row.status === 'running' || row.status === 'waiting'"
+            class="sbx-unread__pip"
+            :class="`sbx-unread__pip--${row.status}`"
+          ></span>
+          <span v-if="row.unread" class="sbx-unread__badge">1</span>
+        </span>
         <!-- The session, not its project: a rail of four avatars from the same
              project is otherwise four identical labels. The project is still
              the avatar, and the full pair is in the tooltip. -->
@@ -33,45 +51,59 @@
       </button>
     </div>
 
-    <div v-else class="sbx-unread__empty">Nothing unread</div>
+    <div v-else class="sbx-unread__empty">Nothing running</div>
   </div>
 </template>
 
 <script setup>
 import { computed } from 'vue';
 import ProjectAvatar from './ProjectAvatar.vue';
+import { sessionTitle } from '../session-title.js';
 
-// Only the two states that want something. Anything else is not unread — see
-// unreadSessions() in session-column.js, which is also what the dock counts.
-const STATUSES = ['waiting', 'done'];
-const REASONS = { waiting: 'needs input', done: 'response ready' };
+// Four lanes now, not two — see activeSessions() in session-column.js. The
+// reason is the half of the answer the row cannot draw: why it is on the rail.
+const STATUSES = ['waiting', 'running', 'done', 'idle'];
+const REASONS = {
+  waiting: 'needs input',
+  running: 'working',
+  done: 'response ready',
+  idle: 'running, idle',
+};
 
 const props = defineProps({
-  // [{ sessionId, projectPath, project, status, session }] — unreadSessions()
+  // [{ sessionId, projectPath, project, status, unread, session }] —
+  // activeSessions()
   items: { type: Array, default: () => [] },
   activeSessionId: { type: String, default: '' },
 });
 
 defineEmits(['select']);
 
-function sessionName(session, fallback) {
-  const raw = session?.name || session?.aiTitle || session?.summary || '';
-  const clean = window.cleanDisplayName ? window.cleanDisplayName(raw) : raw;
-  return clean || fallback;
-}
+const sessionName = (session, fallback) => sessionTitle(session, fallback);
 
 const rows = computed(() => (props.items || []).map((item) => {
   const name = sessionName(item.session, item.project || item.sessionId);
   const status = STATUSES.includes(item.status) ? item.status : 'done';
+  // The landing page's mock rail still feeds the older unread-only shape, where
+  // being on the rail was itself the claim that it was unread.
+  const unread = item.unread === undefined
+    ? (status === 'waiting' || status === 'done')
+    : !!item.unread;
   return {
     sessionId: item.sessionId,
     projectPath: item.projectPath || '',
     session: item.session,
     status,
+    unread,
     name,
     // The hover label is short by design, so the tooltip carries what it left
     // out: which project, and why the session is on the rail at all.
-    title: `${item.project ? item.project + ' — ' : ''}${name} — ${REASONS[status]}`,
+    title: `${item.project ? item.project + ' — ' : ''}${name} — ${REASONS[status]}`
+      + (unread ? ' — unread' : ''),
   };
 }));
+
+// Only the unread half lights the header's dot. The rail being full of working
+// sessions is not something to deal with.
+const unreadCount = computed(() => rows.value.filter((row) => row.unread).length);
 </script>

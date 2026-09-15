@@ -13,7 +13,20 @@
     <div class="sbx-board__cardmenu">
       <SessionMenu :session="session" :is-running="isRunning" />
     </div>
-    <div class="sbx-board__cardtitle">{{ title }}</div>
+    <div class="sbx-board__cardtitle">
+      <span
+        v-if="pending"
+        class="session-title-wait sbx-board__cardtitle--wait"
+        role="status"
+        aria-label="Naming this session"
+      ></span>
+      <span v-else :key="title" class="session-title-in">{{ title }}</span>
+    </div>
+    <!-- How the conversation opened, under whatever it ended up being called.
+         The list and the session header both carry it; a card that did not was
+         the one place you could see a session's name without being able to see
+         what it was actually asked. -->
+    <div v-if="subtitle" class="sbx-board__cardsub">{{ subtitle }}</div>
     <div class="sbx-board__cardmeta">
       <!-- Where the last Summarize said to look next. Ahead of the meta text
            rather than over the title: the title is what the card *is*, and the
@@ -64,7 +77,8 @@ import { focusLevel } from '../board-focus.js';
 import { contextPercent, formatContextLabel } from '../context-window.js';
 import { freshnessOpacity } from '../freshness.js';
 import { sessionChurn } from '../session-churn.js';
-import { tick } from '../time-tick.js';
+import { sessionTitle, sessionSubtitle, sessionFirstPrompt, titlePending } from '../session-title.js';
+import { tick, fastTick } from '../time-tick.js';
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -80,6 +94,7 @@ defineEmits(['preview', 'open']);
 const id = computed(() => props.session.sessionId);
 const isRunning = computed(() => store.activePtyIds.has(id.value));
 const isActive = computed(() => store.activeSessionId === id.value);
+const isBusy = computed(() => store.sessionBusyState.get(id.value) || false);
 
 // app.js writes into window.lastActivityTime outside Vue; tick is what makes a
 // card re-read it. See src/vue/time-tick.js.
@@ -88,10 +103,16 @@ const time = computed(() => {
   return window.lastActivityTime?.get(id.value) || new Date(props.session.modified);
 });
 
-const title = computed(() => {
-  const name = props.session.name || props.session.summary;
-  return (window.cleanDisplayName ? window.cleanDisplayName(name) : name) || id.value;
+const title = computed(() => sessionTitle(props.session, id.value));
+// Subscribed to the fast clock only while actually waiting — see SessionItem.
+const pending = computed(() => {
+  if (!titlePending(props.session, isBusy.value)) { tick.value; return false; }
+  fastTick.value;
+  return titlePending(props.session, isBusy.value);
 });
+const subtitle = computed(() => (pending.value
+  ? sessionFirstPrompt(props.session)
+  : sessionSubtitle(props.session)));
 
 const meta = computed(() => {
   const msgs = props.session.messageCount ? ` · ${props.session.messageCount} msgs` : '';

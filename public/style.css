@@ -1692,6 +1692,45 @@ body { display: flex; flex-direction: column; }
   50% { opacity: 0.55; }
 }
 
+/* ---- A name still being decided ---- */
+/*
+   The CLI titles a conversation once it knows what it is about, which is a
+   real gap after the first prompt. During it the row has no name to show —
+   only the sentence that was typed, which is already on the line below. A bar
+   where the name will land says "a title is coming" without pretending one is
+   already here, and it is the one shape that cannot be mistaken for a title.
+
+   Opacity, not a travelling gradient: the sweep this app used elsewhere
+   re-rasterised text every frame for no gain — see .session-item.cli-busy.
+*/
+.session-title-wait {
+  display: inline-block;
+  width: 9em;
+  max-width: 100%;
+  height: 0.85em;
+  vertical-align: -0.1em;
+  border-radius: var(--radius-xs);
+  background: var(--border-default);
+  animation: pulse-summary 1.4s ease-in-out infinite;
+}
+
+/* The name arriving. Keyed on the name itself in the template, so the element
+   is replaced when the title resolves and this runs once, on the change —
+   the first prompt giving way to what the conversation turned out to be. */
+.session-title-in {
+  animation: title-settle 360ms var(--ease-standard, ease-out) both;
+}
+
+@keyframes title-settle {
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-title-wait { animation: none; }
+  .session-title-in { animation: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .session-item.cli-busy:not(.needs-attention) .session-summary { animation: none; }
   /* A board that is not allowed to fly cards is not allowed to ripple dots.

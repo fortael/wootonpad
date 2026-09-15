@@ -100,8 +100,12 @@ function refreshFolder(folder) {
   // Get what's currently cached for this folder
   const cachedSessions = getCachedByFolder(folder, accountId);
   const cachedMap = new Map(); // sessionId → modified ISO string
+  // sessionId → the `custom-title` this session's transcript carried last time
+  // we looked. What makes "the user just ran /rename" answerable — see below.
+  const lastCustomTitle = new Map();
   for (const row of cachedSessions) {
     cachedMap.set(row.sessionId, row.modified);
+    lastCustomTitle.set(row.sessionId, row.customTitle || null);
   }
 
   // Scan current .jsonl files
@@ -140,12 +144,35 @@ function refreshFolder(folder) {
     else foldState.delete(filePath);
     if (s) {
       sessionsToUpsert.push(s);
-      // Title precedence: user rename (session_meta.name) > JSONL custom-title > JSONL ai-title.
-      // Only customTitle (Claude /title) promotes to session_meta.name — AI titles stay in
-      // session_cache.aiTitle and are preserved once written (COALESCE in the upsert).
+      // A name the user typed lives in session_meta.name, whichever door they
+      // typed it at: the rename dialog in this app, or `/rename` in the CLI —
+      // which writes a `custom-title` record into the transcript. AI titles are
+      // never promoted; they stay in session_cache.aiTitle and lose to a name.
+      //
+      // The test is whether the record *changed*, not whether it exists. It
+      // stays in the file forever, so "this transcript has a custom-title" was
+      // true long after the rename that wrote it, and re-applying it on every
+      // rescan is how a name typed in this app minutes ago got wiped back to
+      // one set last week. A value we have not seen before is a rename that has
+      // just happened, and that is the only one worth acting on.
+      // NULL is "we have never recorded one", not "there was none": the column
+      // was added to a database full of rows, and a session indexed before it
+      // existed has no before-value however many times it has been scanned. Only
+      // a title we have actually written down can be compared against.
+      const previous = lastCustomTitle.get(s.sessionId);
+      const recorded = previous !== undefined && previous !== null;
       const existingName = getMeta(s.sessionId)?.name;
-      if (!existingName && s.customTitle) namesToSet.push({ id: s.sessionId, name: s.customTitle });
-      const name = existingName || s.customTitle || s.aiTitle || '';
+      const renamedInCli = recorded
+        ? !!s.customTitle && s.customTitle !== previous
+        // Nothing to compare against, so fall back to the conservative rule:
+        // take the record only where nothing else has named the session. The
+        // upsert below records it, and every scan after this one can tell.
+        : !!s.customTitle && !existingName;
+      if (renamedInCli) namesToSet.push({ id: s.sessionId, name: s.customTitle });
+      // Search titles follow the same order, with the record itself still a
+      // fallback: a session whose meta name was cleared but whose transcript
+      // carries a title is better found by that title than by nothing.
+      const name = (renamedInCli ? s.customTitle : existingName) || s.customTitle || s.aiTitle || '';
       searchEntriesToUpsert.push({
         id: s.sessionId, type: 'session', folder: s.folder,
         title: (name ? name + ' ' : '') + s.summary, body: s.textContent,
@@ -422,9 +449,16 @@ function populateCacheViaWorker() {
         sessionCount += sessions.length;
         upsertCachedSessions(sessions, currentAccountId);
         for (const s of sessions) {
-          // Only JSONL custom-title (genuine user title) promotes to the DB name column.
-          // AI titles must not — see refreshFolder for the rationale.
-          if (s.customTitle) setName(s.sessionId, s.customTitle);
+          // Only JSONL custom-title (a genuine user title) promotes to the DB
+          // name column. AI titles must not — see refreshFolder.
+          //
+          // And only where nothing has named the session already. This is the
+          // first index of a folder, so there is no "what did it say last
+          // time" to compare against — but session_meta survives a cache
+          // rebuild, so a name typed in this app can be sitting there with an
+          // older `/rename` still in the file. The live path in refreshFolder
+          // is the one that can tell a new rename from an old record.
+          if (s.customTitle && !getMeta(s.sessionId)?.name) setName(s.sessionId, s.customTitle);
         }
         upsertSearchEntries(sessions.map(s => {
           // Search title precedence matches the sidebar: user rename > custom-title > ai-title.

@@ -13,8 +13,11 @@
 //      sessions matched only by their own title. Typing a project name and
 //      getting the project on top with its work underneath is the whole shape
 //      the palette exists for.
-//   3. Archived sessions and archived projects are never searched. They are
-//      the things that have been put away on purpose.
+//   3. Archived sessions and archived projects are not in the main results.
+//      They are the things that have been put away on purpose, and a jump-to
+//      tool that mixes them back into the list is undoing that. They are still
+//      findable — archivedSessions() answers for them separately, under their
+//      own heading and on a delay. See SpotlightApp.vue.
 
 import { projectName } from './project-search.js';
 import { fuzzyMatch, isTightMatch } from './fuzzy-match.js';
@@ -23,6 +26,7 @@ export const SPOTLIGHT_LIMITS = {
   projects: 6,      // only while searching; an empty query lists them all
   sessions: 12,
   plans: 5,
+  archived: 8,
 };
 
 /**
@@ -83,6 +87,42 @@ export function spotlightResults({ projects, plans = [], query = '', projectMeta
       .map(entry => entry.plan)
       .slice(0, limits.plans),
   };
+}
+
+/**
+ * The archived half of the same search.
+ *
+ * Everything the main results deliberately skip: sessions put away by hand, and
+ * every session of a project put away by hand. Matched by exactly the same
+ * rules — a result that only appears under a different heading should not also
+ * obey different rules.
+ *
+ * Kept as its own function rather than a flag on spotlightResults because the
+ * component runs it on its own clock: a query is matched against the live set
+ * as it is typed and against this one only once the typing stops. Searching the
+ * archive is the rarer intent, and it is the larger set.
+ *
+ * @param {object} input  same shape as spotlightResults
+ * @returns {Array<{project: object, session: object}>}
+ */
+export function archivedSessions({ projects, query = '', projectMeta = {}, limits = SPOTLIGHT_LIMITS } = {}) {
+  const q = String(query || '').trim().toLowerCase();
+  // An empty query is the project list, and "every session you have ever
+  // archived" is not a list anyone opened a palette to read.
+  if (!q) return [];
+
+  const found = [];
+  for (const project of projects || []) {
+    if (!project?.projectPath) continue;
+    const projectArchived = !!projectMeta?.[project.projectPath]?.archived;
+    for (const session of project.sessions || []) {
+      if (!session?.archived && !projectArchived) continue;
+      const hit = matchSession(session, q);
+      if (hit) found.push({ project, session, score: hit.score });
+    }
+  }
+  found.sort((a, b) => b.score - a.score || byRecency(a, b));
+  return found.slice(0, limits.archived).map(({ project, session }) => ({ project, session }));
 }
 
 // Fuzzy on the name — the thing the row shows and the thing you type — and

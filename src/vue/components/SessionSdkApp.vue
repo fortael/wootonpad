@@ -9,17 +9,20 @@
     @dragleave="onDragLeave"
     @drop="onDrop"
   >
-    <!-- The shape of a long session is mostly where its context was thrown
-         away, and that is the one thing a scrollbar cannot show: the records
-         above a compact are not loaded and have no height to scroll through.
-         So the rail measures the file, not the viewport. -->
-    <div v-if="compactMarks.length" class="sbx-timeline">
+    <!-- The shape of a long session is the four things a scrollbar cannot show:
+         where its context was thrown away, where a turn ended, where something
+         failed, and where the calendar turned over. The records above a compact
+         are not even loaded and have no height to scroll through — so the rail
+         measures the file, not the viewport, and it is there for the whole of
+         a session rather than only for one that has been compacted. -->
+    <div v-if="railVisible" class="sbx-timeline">
       <div class="sbx-timeline__thumb" :style="viewBand"></div>
       <button
-        v-for="mark in compactMarks"
-        :key="mark.index"
+        v-for="mark in timelineMarks"
+        :key="mark.key"
         type="button"
         class="sbx-timeline__notch"
+        :class="`is-${mark.kind}`"
         :style="{ top: mark.at }"
         :data-tooltip="mark.label"
         :aria-label="mark.label"
@@ -213,7 +216,8 @@ import { controlsFromTranscript } from '../session-controls.js';
 import {
   renderViewItems, renderJsonlEntry, renderJsonlText, mergeLocalCommandEntries,
   refreshWhen, toolContent, mergeToolGroups, groupOfEntry, markToolDuration,
-  renderToolResult, collapseToolBlock, refreshDayMarkers, refreshStamps, dayKey,
+  applyToolResult, collapseToolBlock, refreshDayMarkers, refreshStamps, dayKey,
+  adoptOrphanResults,
   mergeSlashOutput, renderUserPrompt,
 } from '../message-render.js';
 import {
@@ -315,6 +319,12 @@ let toolResults = new Map();
 // session's worth of detached DOM.
 let toolNodes = new Map();
 
+// tool_use_id → the tool's name, for every call this view has ever seen.
+// Ids, not nodes, so it survives the blocks being released from the DOM — a
+// result whose call has scrolled out of the window is what needs it. Kept for
+// the life of the view: it is two short strings per call.
+let toolNames = new Map();
+
 // ── Rendering ─────────────────────────────────────────────────────
 //
 // Whether the view is following the bottom is tracked from the scroll event
@@ -342,12 +352,30 @@ function readScroll() {
   const el = bodyRef.value;
   if (!el) return;
   pinned = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
-  viewSpan.value = viewSpanOf(el);
+  const next = viewSpanOf(el);
+  // The rail is a few hundred pixels tall, so a change it cannot draw is not a
+  // change. Without this the thumb's style was patched on every scroll event —
+  // and, while a turn streams, on every frame that grew the transcript by a
+  // line, because a fresh object is always a fresh identity.
+  const now = viewSpan.value;
+  maybePageUp();
+  if (Math.abs(next.start - now.start) < 0.001 && Math.abs(next.end - now.end) < 0.001) return;
+  viewSpan.value = next;
 }
+
+/**
+ * Past the end, which the browser clamps to the end.
+ *
+ * `el.scrollTop = el.scrollHeight` reads a layout-dependent property before
+ * writing one, so it forces the document to be laid out synchronously *twice*.
+ * A number no transcript can reach does the same job with the read removed —
+ * and this runs on every painted frame of every streamed answer.
+ */
+const BOTTOM = 1e9;
 
 function stickBottom() {
   const el = bodyRef.value;
-  if (pinned && el) el.scrollTop = el.scrollHeight;
+  if (pinned && el) el.scrollTop = BOTTOM;
 }
 
 // The working indicator and the two paragraphs being streamed all live at the
@@ -396,6 +424,9 @@ function append(nodes) {
   // Live messages are always today's, so the separators only have to be redrawn
   // when the day turns over — or on the first message after history that ended
   // on an earlier one. Anything else would rebuild them per message.
+  // A call drawn in this batch may be the one a loose result above was waiting
+  // for — the CLI can report the answer before the record of the call.
+  adoptOrphanResults(el);
   const today = dayKey(Date.now());
   if (today !== shownDay) shownDay = refreshDayMarkers(el);
   // Whether a message is followed by the calls it led to changes with every
@@ -405,6 +436,10 @@ function append(nodes) {
   // Only chase the bottom if the user was already there — otherwise reading
   // back through a long turn would be yanked away on every message.
   stickBottom();
+  // A turn that runs for an hour appends without limit, so the ceiling cannot
+  // wait for the turn to end. Returns immediately unless there is something to
+  // let go of.
+  releaseOldMessages();
 }
 
 // ── Streaming ─────────────────────────────────────────────────────
@@ -424,19 +459,32 @@ let thinkText = '';
 /** @type {HTMLElement|null} the "working" row, last child while a turn runs */
 let workingEl = null;
 
-// Painting is throttled, not done per token.
+// Painting is throttled, and the throttle widens as the answer grows.
 //
 // A delta carries a few characters, and the paragraph is re-rendered from the
 // whole accumulated answer each time — so painting per delta is quadratic in
 // the length of the answer, and measurably so: the same paint costs 2.7ms at
-// 3k characters and 6.8ms at 23k. At the rate the SDK emits partial messages
-// that is more than a core, and it gets worse the longer Claude talks.
+// 3k characters and 6.8ms at 23k. A fixed cadence bounds how often that is
+// paid but not what it costs, so a long answer still ends up spending a
+// growing fraction of a core on re-rendering text nobody can read that fast:
+// twelve paints a second of a 23k answer is 85ms of work per second, and it
+// keeps climbing for as long as Claude keeps talking.
 //
-// A leading paint keeps the first token instant; everything after it lands on
-// a fixed cadence, which is well under the rate anyone reads at.
-const LIVE_PAINT_MS = 80;
+// So the interval is derived from the length. Prose arrives at a few hundred
+// characters a second and is read at about a thousand; at the ceiling the
+// paragraph still refreshes twice a second, which is well inside that.
+//
+// A leading paint keeps the first token instant.
+const LIVE_PAINT_MIN_MS = 80;
+const LIVE_PAINT_MAX_MS = 500;
 let livePaintTimer = 0;
 let livePending = false;
+
+/** How long to wait before repainting an answer this long. */
+function paintInterval() {
+  const size = liveText.length + thinkText.length;
+  return Math.min(LIVE_PAINT_MAX_MS, Math.max(LIVE_PAINT_MIN_MS, Math.round(size / 60)));
+}
 
 function schedulePaint() {
   livePending = true;
@@ -447,7 +495,7 @@ function schedulePaint() {
     // Re-arm only while tokens are still arriving, so a finished turn stops
     // the timer rather than leaving it ticking for the life of the session.
     if (livePending) schedulePaint();
-  }, LIVE_PAINT_MS);
+  }, paintInterval());
 }
 
 function paintLive() {
@@ -470,7 +518,7 @@ function paintLive() {
     const body = thinkEl.lastElementChild;
     body.textContent = thinkText;
     // The box is capped, so the tail of the reasoning is what should show.
-    body.scrollTop = body.scrollHeight;
+    body.scrollTop = BOTTOM;
   }
 
   if (liveText) {
@@ -559,14 +607,30 @@ function elapsedLabel(ms) {
  * arithmetic is right. What was actually produced is the honest headline; the
  * rest is in the tooltip for when the question really is what it cost.
  */
+/**
+ * The three parts of the row, held rather than looked up.
+ *
+ * `paintWorking` runs once a second for the length of a turn and again on every
+ * token of usage; re-querying the row each time is three selector walks for
+ * three elements that cannot move.
+ */
+let workingParts = null;
+
 function paintWorking() {
-  if (!workingEl) return;
+  if (!workingEl || !workingParts) return;
   const { input, cached, output } = turnTokens.value;
-  workingEl.querySelector('.sbx-working__label').textContent = activity.value || 'Working';
-  workingEl.querySelector('.sbx-working__meta').textContent = [
+  workingParts.meta.textContent = [
     turnStartedAt ? elapsedLabel(Date.now() - turnStartedAt) : '',
     output ? `${shortCount(output)} written` : '',
   ].filter(Boolean).join(' · ');
+  // What it is doing goes *under* the row rather than in place of the word on
+  // it. Swapping "Working" out for "Running Bash" and back several times a turn
+  // made the one fixed thing on screen the twitchiest: the eye tracked a label
+  // that was really a status feed, and the row's own state — is this turn still
+  // alive — was the thing it stopped saying.
+  const doing = activity.value;
+  if (workingParts.doing.textContent !== doing) workingParts.doing.textContent = doing;
+  workingEl.classList.toggle('has-activity', !!doing);
   const sent = input + cached;
   workingEl.title = output || sent
     ? [
@@ -583,6 +647,7 @@ function setWorking(on) {
     workingTimer = 0;
     workingEl?.remove();
     workingEl = null;
+    workingParts = null;
     activity.value = '';
     turnStartedAt = 0;
     return;
@@ -594,9 +659,18 @@ function setWorking(on) {
   if (!turnStartedAt) { turnStartedAt = Date.now(); resetTokens(); }
   workingEl = document.createElement('div');
   workingEl.className = 'jsonl-entry jsonl-assistant sbx-working';
-  workingEl.innerHTML = '<span class="sbx-working__orb"></span>'
+  // The same ring the sidebar spins on a busy row, so "this session is working"
+  // looks like one thing whichever of the two you happen to be looking at.
+  workingEl.innerHTML = '<div class="sbx-working__row">'
+    + '<span class="sbx-working__spinner"></span>'
     + '<span class="sbx-working__label">Working</span>'
-    + '<span class="sbx-working__meta"></span>';
+    + '<span class="sbx-working__meta"></span>'
+    + '</div>'
+    + '<div class="sbx-working__doing"></div>';
+  workingParts = {
+    meta: workingEl.querySelector('.sbx-working__meta'),
+    doing: workingEl.querySelector('.sbx-working__doing'),
+  };
   el.appendChild(workingEl);
   paintWorking();
   // One second, because the elapsed count is in seconds. Cleared the moment the
@@ -606,7 +680,12 @@ function setWorking(on) {
 }
 
 watch(busy, setWorking);
-watch([activity, turnTokens], paintWorking);
+// What it is doing changes a handful of times a turn and is worth showing the
+// moment it does. The token counts are not on this watcher: `message_delta`
+// reports them on every frame of the stream, which had the row rewriting three
+// nodes and building a two-line tooltip through `toLocaleString` dozens of
+// times a second — for a figure whose own clock ticks once a second anyway.
+watch(activity, paintWorking);
 
 // ── Tokens spent on the current turn ──────────────────────────────
 //
@@ -652,6 +731,25 @@ function shortToolName(name) {
 }
 
 /**
+ * The block for a call, wherever it is — this turn's, or one read off disk.
+ *
+ * `toolNodes` holds only the calls this view drew live, and it is emptied at
+ * the end of every turn. That left two ordinary situations with no block to
+ * find: a chat opened while a turn was already running, whose calls came from
+ * the file, and a result that arrived after its turn closed. Both ended up as
+ * a loose result below a call that was sitting right there on screen.
+ *
+ * The id is on the element, so the document is the index.
+ */
+function findToolNode(id) {
+  if (!id) return null;
+  const known = toolNodes.get(id);
+  if (known?.isConnected) return known;
+  const found = bodyRef.value?.querySelector(`[data-tool-use-id="${CSS.escape(id)}"]`);
+  return found?.classList.contains('jsonl-tool-block') ? found : null;
+}
+
+/**
  * A call already on screen, answered.
  *
  * The result arrives as its own message, usually seconds after the call. Folded
@@ -659,11 +757,13 @@ function shortToolName(name) {
  * its own — which is what used to happen — it is an anonymous "Tool Result"
  * some distance below the call it answers.
  */
-function settleTool(id, content) {
-  const node = toolNodes.get(id);
+function settleTool(id, data) {
+  const node = findToolNode(id);
   if (!node) return false;
   toolNodes.delete(id);
-  renderToolResult(content, toolContent(node));
+  // Folds the answer in and, when it came back non-zero, says so on the row —
+  // see applyToolResult.
+  applyToolResult(node, data);
   // A call with nothing to show was not foldable when it was drawn; now it has
   // a result, it is.
   if (!node.classList.contains('jsonl-tool-block--foldable')) collapseToolBlock(node);
@@ -688,10 +788,15 @@ function handle(message) {
     if (item.kind === 'usage') { noteUsage(item); continue; }
     // Remember results before rendering, so a call in the same batch can claim
     // one. A result for a call already drawn folds straight into it.
+    if (item.kind === 'tool_use' && item.id) toolNames.set(item.id, item.name);
     if (item.kind === 'tool_result' && item.toolUseId) {
       activity.value = '';
-      if (!settleTool(item.toolUseId, item.content)) {
-        toolResults.set(item.toolUseId, item.content);
+      // Carried as a pair: whether the call failed is as much a part of the
+      // answer as the text of it, and the row has to be able to say so
+      // whichever path renders it.
+      const answer = { content: item.content, isError: item.isError };
+      if (!settleTool(item.toolUseId, answer)) {
+        toolResults.set(item.toolUseId, answer);
       }
     }
     if (item.kind === 'turn_end') {
@@ -700,8 +805,12 @@ function handle(message) {
       busy.value = false;
       toolNodes.clear();
       refreshContext();
-      // A turn can have compacted the context; the rail is drawn from the file.
-      loadCompacts();
+      // The turn just added marks to the rail — at the very least its own end,
+      // and possibly a compact. The rail is drawn from the file.
+      loadLandmarks();
+      // A finished turn is the one moment the file is certainly flush with what
+      // is on screen, so it is the moment to let go of what has scrolled away.
+      releaseOldMessages();
     } else if (item.kind === 'delta') {
       noteTurnActivity();
       // Any frame at all means the turn is alive — including one carrying no
@@ -722,7 +831,7 @@ function handle(message) {
     }
   }
 
-  const frag = renderViewItems(items, toolResults, { foldTools: true, at: Date.now() });
+  const frag = renderViewItems(items, toolResults, { foldTools: true, at: Date.now(), toolNames });
   // Held so a result arriving later folds into its call rather than landing as
   // a loose block, and so the call can be told how long it took.
   const startedAt = String(Date.now());
@@ -1508,15 +1617,16 @@ let whenTimer = 0;
 const loadingHistory = ref(true);
 const HISTORY_PAGE = 50;
 
-// ── The compact rail ──────────────────────────────────────────────
+// ── The timeline rail ─────────────────────────────────────────────
 //
-// Where this session's context was thrown away, down the left edge. A compact
-// is the one event in a session's history that a scrollbar cannot show: the
-// records above one are not loaded and have no height to scroll through, so
-// the rail is measured against the file's record count rather than the DOM.
+// The session's own shape, down the left edge: compacts, turn ends, failures
+// and day changes. None of the four is something a scrollbar can show — the
+// records above a compact are not loaded and have no height to scroll through
+// at all — so the rail is measured against the file's record count rather than
+// against the DOM. See readSessionLandmarks for where the marks come from.
 
-/** Every compact boundary in the file — see readCompactBoundaries. */
-const compacts = ref([]);
+/** Every mark in the file — `{ kind, index, timestamp, ... }`. */
+const landmarks = ref([]);
 /** Records in the file. */
 const historyTotal = ref(0);
 /**
@@ -1529,19 +1639,55 @@ const historyTotal = ref(0);
  */
 const paintedRuns = ref([]);
 
-const compactMarks = computed(() => {
+/** What a notch says when you hover it. One line, kind first. */
+function markLabel(mark) {
+  const when = mark.timestamp ? relativeTime(mark.timestamp) : '';
+  if (mark.kind === 'compact') {
+    return [
+      mark.trigger === 'auto' ? 'Auto-compacted' : 'Compacted',
+      when,
+      mark.preTokens ? `${shortTokens(mark.preTokens)} → ${shortTokens(mark.postTokens)} tokens` : '',
+    ].filter(Boolean).join(' · ');
+  }
+  if (mark.kind === 'day') {
+    const d = mark.timestamp ? new Date(mark.timestamp) : null;
+    return d && !Number.isNaN(d.getTime())
+      ? d.toLocaleDateString([], { weekday: 'short', month: 'long', day: 'numeric' })
+      : 'A new day';
+  }
+  return ['Something failed', when].filter(Boolean).join(' · ');
+}
+
+/**
+ * Below this many messages there is no shape to show.
+ *
+ * A rail is a map, and a conversation you can scroll through in one flick does
+ * not need one — it was drawing a two-notch strip down the side of an exchange
+ * you could see all of at once.
+ */
+const RAIL_MIN_MESSAGES = 10;
+
+const railVisible = computed(() => {
+  if (!historyTotal.value) return false;
+  // The cache's own count, which is what the sidebar row shows. A record is not
+  // a message — attachments, titles and mode changes are records too — so the
+  // file's length is only the fallback, for a session too new to be indexed.
+  const counted = store.headerSession?.messageCount;
+  const messages = Number.isFinite(counted) && counted > 0 ? counted : historyTotal.value;
+  return messages >= RAIL_MIN_MESSAGES;
+});
+
+const timelineMarks = computed(() => {
   const total = historyTotal.value;
-  if (!total || !compacts.value.length) return [];
-  return compacts.value.map(c => ({
-    index: c.index,
+  if (!total) return [];
+  return landmarks.value.map(mark => ({
+    key: `${mark.kind}:${mark.index}`,
+    kind: mark.kind,
+    index: mark.index,
     // Clamped off both ends: a notch flush with the edge reads as the rail's
     // own cap rather than as a mark on it.
-    at: `${Math.min(97, Math.max(3, (c.index / total) * 100))}%`,
-    label: [
-      c.trigger === 'auto' ? 'Auto-compacted' : 'Compacted',
-      c.timestamp ? relativeTime(c.timestamp) : '',
-      c.preTokens ? `${shortTokens(c.preTokens)} → ${shortTokens(c.postTokens)} tokens` : '',
-    ].filter(Boolean).join(' · '),
+    at: `${Math.min(97, Math.max(3, (mark.index / total) * 100))}%`,
+    label: markLabel(mark),
   }));
 });
 
@@ -1577,12 +1723,12 @@ function growToTotal(total) {
   paintedRuns.value = [...runs.slice(0, -1), { from: last.from, to: total }];
 }
 
-async function loadCompacts() {
+async function loadLandmarks() {
   const id = sessionId.value;
   if (!id) return;
-  const res = await window.api.sessionCompacts?.(id).catch(() => null);
+  const res = await window.api.sessionLandmarks?.(id).catch(() => null);
   if (!res?.ok || sessionId.value !== id) return;
-  compacts.value = res.compacts || [];
+  landmarks.value = res.marks || [];
   growToTotal(res.total);
 }
 
@@ -1593,8 +1739,6 @@ let historyHasMore = false;
 /** The `/compact` boundary directly above the loaded range, if the page hit one. */
 let historyCompact = null;
 let loadingEarlier = false;
-/** @type {IntersectionObserver|null} watches the top sentinel for an upward scroll */
-let topObserver = null;
 /** @type {HTMLElement|null} the marker or sentinel currently at the top */
 let topEl = null;
 
@@ -1674,20 +1818,52 @@ function makeTopSentinel() {
 function refreshTopAffordance() {
   const body = bodyRef.value;
   if (!body) return;
-  topObserver?.disconnect();
   topEl?.remove();
   topEl = null;
   if (!historyHasMore) return;
 
   topEl = historyCompact ? makeCompactMarker(historyCompact) : makeTopSentinel();
   body.insertBefore(topEl, body.firstChild);
+}
 
-  // A compact marker is answered by hand; only the plain sentinel auto-loads.
+// ── Paging upward ─────────────────────────────────────────────────
+//
+// One page per gesture, and a gesture is input: a wheel, a drag, an arrow key.
+//
+// This was an IntersectionObserver on the sentinel, and it was wrong twice
+// over. A sentinel that stays in view after a page lands — which is what "at
+// the top" means — is not a *change* in intersection, so the observer never
+// fired again and paging stopped dead after one page. And when the scroll
+// anchoring drifted (see holdInPlace), the sentinel came back into view on its
+// own and the observer paged over and over with nobody asking: a six-thousand
+// record session read itself into the document in a couple of seconds.
+//
+// Reading the scroll position answers both. It is only acted on while armed,
+// and only input arms it, so a scroll this component performed itself — chasing
+// the bottom of a stream, holding a page in place — can never load anything.
+
+/** How close to the top counts as asking for the page above. */
+const PAGE_UP_MARGIN = 400;
+
+/** Has the reader asked for more since the last page arrived? */
+let autoPageArmed = true;
+
+function maybePageUp() {
+  const body = bodyRef.value;
+  if (!autoPageArmed || !historyHasMore || loadingEarlier || !body) return;
+  // A compact marker is answered by hand: what is above it is a segment the
+  // model itself threw away, and loading it is a decision rather than a scroll.
   if (historyCompact) return;
-  topObserver = new IntersectionObserver((entries) => {
-    if (entries.some(e => e.isIntersecting)) loadEarlier(historyFrom);
-  }, { root: body, rootMargin: '400px 0px 0px 0px' });
-  topObserver.observe(topEl);
+  if (body.scrollTop > PAGE_UP_MARGIN) return;
+  autoPageArmed = false;
+  loadEarlier(historyFrom);
+}
+
+function armAutoPage() {
+  autoPageArmed = true;
+  // Tried straight away as well as on the scroll that follows: at the very top
+  // there is nothing left to scroll, so the wheel event is the only signal.
+  maybePageUp();
 }
 
 /** Render one window into a fragment, newest last. Returns null if empty. */
@@ -1703,14 +1879,20 @@ function renderWindow(rawEntries) {
     const blocks = entry.message?.content || entry.content;
     if (!Array.isArray(blocks)) continue;
     for (const block of blocks) {
+      // Names are remembered for the whole view, not just this window: the next
+      // page up can carry the answer to a call this page already showed.
+      if (block.type === 'tool_use' && block.id) toolNames.set(block.id, block.name);
       if (block.type === 'tool_result' && block.tool_use_id) {
-        results.set(block.tool_use_id, block.content || block.output || '');
+        results.set(block.tool_use_id, {
+          content: block.content || block.output || '',
+          isError: block.is_error === true,
+        });
         if (entry.timestamp) toolTimes.set(block.tool_use_id, entry.timestamp);
       }
     }
   }
   const frag = document.createDocumentFragment();
-  const opts = { foldTools: true, timestamps: true, toolTimes };
+  const opts = { foldTools: true, timestamps: true, toolTimes, toolNames };
   for (const entry of entries) {
     const el = renderJsonlEntry(entry, results, opts);
     if (!el) continue;
@@ -1759,11 +1941,22 @@ async function loadHistory() {
     if (!body) return;
     const frag = renderWindow(result.entries);
     if (frag.childNodes.length) body.appendChild(frag);
+    adoptOrphanResults(body);
     refreshTopAffordance();
     shownDay = refreshDayMarkers(body);
     refreshStamps(body);
-    body.scrollTop = body.scrollHeight;
-    readScroll();
+    // Over the next few frames, not once: every entry carries
+    // `content-visibility: auto`, so the transcript's height right after the
+    // first paint is an estimate that is about to be replaced by the real one.
+    // Landing short of the bottom left the top sentinel in view, and from there
+    // the session read itself into the document a page at a time.
+    let settle = 3;
+    const toBottom = () => {
+      body.scrollTop = BOTTOM;
+      if (--settle > 0) requestAnimationFrame(toBottom);
+      else readScroll();
+    };
+    toBottom();
   } catch {
     /* A session with no transcript yet is the normal case for a new one. */
   } finally {
@@ -1773,12 +1966,38 @@ async function loadHistory() {
 }
 
 /**
+ * Hold one element still in the viewport while the page above it settles.
+ *
+ * Correcting the scroll by "how much taller the transcript got" is right only
+ * if the transcript's height is known at that moment, and it is not: every
+ * entry carries `content-visibility: auto`, so a run of freshly inserted nodes
+ * reports an estimate until the browser has actually laid it out. The
+ * correction was therefore applied against a made-up number, the viewport drift
+ * upward by the difference, and the top sentinel stayed in view — which loaded
+ * another page, which drifted again. Opening a long session pulled nine hundred
+ * entries into the document instead of fifty.
+ *
+ * So the anchor is an element rather than a total, and it is re-applied over
+ * the next few frames as the estimates are replaced by real heights.
+ */
+function holdInPlace(body, anchor) {
+  if (!body || !anchor) return;
+  const offset = anchor.offsetTop - body.scrollTop;
+  let left = 3;
+  const settle = () => {
+    if (!anchor.isConnected || anchor.parentNode !== body) return;
+    body.scrollTop = anchor.offsetTop - offset;
+    if (--left > 0) requestAnimationFrame(settle);
+  };
+  settle();
+}
+
+/**
  * Prepend the page ending at `before`, holding the reading position still.
  *
  * Inserting above the viewport moves everything under it down by the height of
- * what was inserted, so the scroll offset is corrected by exactly that much —
- * otherwise loading a page would throw the reader back to where they had
- * already been.
+ * what was inserted, so the reading position is pinned to the entry that was
+ * already under the cursor — see holdInPlace.
  */
 /** Where the next page up ends: the loaded top, or the compact just above it. */
 function nextPageStart() {
@@ -1839,32 +2058,132 @@ async function loadEarlier(before) {
       paintedRuns.value = [{ from: result.from, to: result.to }, ...paintedRuns.value];
     }
 
-    const heightBefore = body.scrollHeight;
-    const scrollBefore = body.scrollTop;
     const frag = renderWindow(result.entries);
+
+    // What the reader is looking at: the first entry that was already here,
+    // which the new page is going above. It keeps its place on screen no matter
+    // what the inserted run turns out to measure.
+    const marker = topEl;
+    const held = marker?.nextElementSibling || body.firstElementChild;
 
     // The marker goes first so the new entries land under it, then the
     // affordance for whatever is above *this* page replaces it.
-    topObserver?.disconnect();
-    const anchor = topEl;
     if (frag.childNodes.length) {
-      if (anchor && anchor.parentNode === body) body.insertBefore(frag, anchor.nextSibling);
+      if (marker && marker.parentNode === body) body.insertBefore(frag, marker.nextSibling);
       else body.insertBefore(frag, body.firstChild);
     }
-    anchor?.remove();
+    marker?.remove();
     topEl = null;
+    // The page just prepended holds the calls that the results already on
+    // screen are answers to. This is the moment they stop being loose.
+    adoptOrphanResults(body);
     refreshTopAffordance();
     // A prepended window can turn the day the old first message started into a
     // day it no longer starts, so the separators are rebuilt rather than added to.
     shownDay = refreshDayMarkers(body);
     refreshStamps(body);
 
-    body.scrollTop = scrollBefore + (body.scrollHeight - heightBefore);
+    holdInPlace(body, held);
     readScroll();
   } catch {
     /* A read that fails leaves the affordance in place to try again. */
   } finally {
     loadingEarlier = false;
+  }
+}
+
+// ── Letting go of what has scrolled away ──────────────────────────
+//
+// History is paged in from the top and never paged back out, so a session left
+// open all day ends up holding every message it has produced — the transcript
+// starts at fifty nodes and grows without a ceiling for as long as the turn
+// runs. That is the memory, and it is also the layout: every node in the
+// document is a node the next scroll and the next streamed token are measured
+// against.
+//
+// So the transcript is trimmed from the top, and only while the reader is
+// parked at the bottom — the one position from which nothing above is being
+// looked at. What was dropped is not lost: it is in the file, and scrolling up
+// pages it straight back in, exactly as it does for history that was never
+// loaded in the first place.
+
+/** Nodes that trigger a trim, and how many are kept when one happens. */
+const MAX_PAINTED = 260;
+const KEEP_PAINTED = 140;
+
+/**
+ * How far back of the anchor to resolve the file index.
+ *
+ * The anchor is the timestamp a surviving node was *drawn* with, and for a live
+ * message that is a moment or two after the CLI wrote the record. Resolving the
+ * exact time would then land one record too late and leave a gap — a message
+ * that is neither on screen nor reachable by scrolling. Biasing the anchor
+ * backwards trades that for at most a message or two drawn twice at the seam,
+ * which is the right way round: a duplicate is visible, a gap is not.
+ */
+const ANCHOR_GUARD_MS = 2000;
+
+/** Whether a trim is already in flight — it takes one round trip to the file. */
+let releasing = false;
+
+/** Top-level messages, oldest first. Not the rail marker, not the live tail. */
+function paintedEntries(body) {
+  const tailNodes = tailOrder().filter(Boolean);
+  const out = [];
+  for (const el of body.children) {
+    if (el === topEl || tailNodes.includes(el)) continue;
+    // Day separators are rebuilt from whatever survives, so they are not
+    // counted and not anchored to.
+    if (!el.classList.contains('jsonl-entry')) continue;
+    out.push(el);
+  }
+  return out;
+}
+
+async function releaseOldMessages() {
+  const body = bodyRef.value;
+  const id = sessionId.value;
+  // Not while the reader is up in the history: that is the one case where the
+  // nodes above the viewport are the ones being read.
+  if (!body || !id || releasing || !pinned) return;
+  // Cheap gate first — this is called on every appended message.
+  if (body.children.length <= MAX_PAINTED) return;
+
+  const entries = paintedEntries(body);
+  if (entries.length <= MAX_PAINTED) return;
+
+  const keep = entries[entries.length - KEEP_PAINTED];
+  const anchorTs = Number(keep?.dataset?.ts);
+  if (!keep || !Number.isFinite(anchorTs) || !anchorTs) return;
+
+  releasing = true;
+  try {
+    const res = await window.api.sessionRecordAt?.(id, anchorTs - ANCHOR_GUARD_MS).catch(() => null);
+    const still = bodyRef.value;
+    if (!res?.ok || sessionId.value !== id || !still || keep.parentNode !== still) return;
+
+    topEl?.remove();
+    topEl = null;
+    for (const el of [...still.children]) {
+      if (el === keep) break;
+      el.remove();
+    }
+
+    historyFrom = res.index;
+    historyHasMore = res.index > 0;
+    // Whatever compact was flooring the old top is above the new one now, and
+    // the window that finds it again is the one the sentinel will ask for.
+    historyCompact = null;
+    if (res.total) historyTotal.value = res.total;
+    paintedRuns.value = [{ from: res.index, to: Math.max(res.index + 1, historyTotal.value) }];
+
+    refreshTopAffordance();
+    shownDay = refreshDayMarkers(still);
+    refreshStamps(still);
+    still.scrollTop = still.scrollHeight;
+    readScroll();
+  } finally {
+    releasing = false;
   }
 }
 
@@ -1914,13 +2233,18 @@ onMounted(() => {
 
   bodyRef.value?.addEventListener('scroll', readScroll, { passive: true });
   bodyRef.value?.addEventListener('click', onBodyClick);
+  // The three ways a reader asks for more of the history. A scroll this
+  // component performed itself is deliberately not one of them.
+  for (const kind of ['wheel', 'touchmove', 'keydown']) {
+    bodyRef.value?.addEventListener(kind, armAutoPage, { passive: true });
+  }
 
   // "2 minutes ago" has to become "3 minutes ago" on its own. One clock for the
   // whole transcript, at the resolution the coarsest unit needs.
   whenTimer = setInterval(() => refreshWhen(bodyRef.value), 30000);
 
   loadHistory();
-  loadCompacts();
+  loadLandmarks();
   loadPending();
   loadModels();
   loadCommands();
@@ -1940,15 +2264,18 @@ onBeforeUnmount(() => {
   whenTimer = 0;
   for (const off of subscriptions) off?.();
   subscriptions.length = 0;
-  topObserver?.disconnect();
-  topObserver = null;
   topEl = null;
   bodyRef.value?.removeEventListener('scroll', readScroll);
   bodyRef.value?.removeEventListener('click', onBodyClick);
+  for (const kind of ['wheel', 'touchmove', 'keydown']) {
+    bodyRef.value?.removeEventListener(kind, armAutoPage);
+  }
   toolResults = new Map();
   toolNodes = new Map();
+  toolNames = new Map();
   liveEl = null;
   workingEl = null;
+  workingParts = null;
   thinkEl = null;
   liveText = '';
   thinkText = '';

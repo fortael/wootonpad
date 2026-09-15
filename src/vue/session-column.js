@@ -176,6 +176,70 @@ export function unreadSessions(projects, state) {
     || (new Date(b.modified || 0).getTime() || 0) - (new Date(a.modified || 0).getTime() || 0));
 }
 
+/**
+ * The rail's contents: every session worth watching right now — the ones that
+ * want something from you *and* the ones with a live Claude process behind
+ * them — in one list, each carrying whether it has been read.
+ *
+ * `unreadSessions` above is the narrower question the dock badge asks. The rail
+ * answers a wider one: a session that is mid-turn or sitting idle with a live
+ * process is not unread, but it is the thing you will go back to, and leaving
+ * it off meant the rail emptied itself the moment you read a turn — the widget
+ * went blank exactly while five sessions were running.
+ *
+ * Membership is the four state collections plus the live PTYs. A session in
+ * none of them is not running and is not asking for anything; it is one of the
+ * thousand rows in the sidebar, and it belongs there and not here.
+ *
+ * @param {Array<{projectPath: string, sessions: Array<object>}>} projects
+ * @param {SessionState} state
+ * @param {Set<string>|Iterable<string>} live  session ids with a running PTY
+ * @returns {Array<{sessionId: string, projectPath: string, project: string,
+ *                  status: 'waiting'|'running'|'done'|'idle', unread: boolean,
+ *                  modified: string|null, session: object}>}
+ */
+export function activeSessions(projects, state, live) {
+  const watched = new Set([
+    ...(state?.attention || []),
+    ...(state?.busy ? state.busy.keys() : []),
+    ...(state?.responseReady || []),
+    ...(state?.readPending || []),
+    ...(live || []),
+  ]);
+  if (!watched.size) return [];
+
+  const out = [];
+  for (const project of projects || []) {
+    const name = project.projectPath?.split('/').filter(Boolean).pop() || project.projectPath || '';
+    for (const session of project.sessions || []) {
+      const id = session?.sessionId;
+      if (!id || !watched.has(id)) continue;
+      out.push({
+        sessionId: id,
+        projectPath: project.projectPath,
+        project: name,
+        status: columnOf(id, state),
+        // Blocked on an answer counts as unread for the same reason a finished
+        // turn does: in both the session has said something nobody has read.
+        // `readPending` is the one that is deliberately not here — it is the
+        // collection that exists to mean "finished, and you have seen it".
+        unread: !!(state?.attention?.has(id) || state?.responseReady?.has(id)),
+        modified: session.modified || null,
+        session,
+      });
+    }
+  }
+
+  // The worklist order: blocked first, then a finished turn, then work in
+  // flight, then the ones simply kept alive. Within a lane, unread outranks
+  // read — a lane holds both once you have opened one of two finished turns —
+  // and the rest is most recently active first.
+  return out.sort((a, b) =>
+    OPEN_ORDER[a.status] - OPEN_ORDER[b.status]
+    || (b.unread ? 1 : 0) - (a.unread ? 1 : 0)
+    || (new Date(b.modified || 0).getTime() || 0) - (new Date(a.modified || 0).getTime() || 0));
+}
+
 /** The worst lane anything in this list is in — a project's status in one word. */
 export function worstColumn(sessions, state) {
   let worst = 'idle';

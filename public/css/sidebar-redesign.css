@@ -267,7 +267,9 @@
 .sbx-unread__empty {
   display: flex;
   align-items: center;
-  height: 30px;
+  /* One avatar row plus the room the rail keeps for the badge and the bounce,
+     so the widget is the same height whether or not anything is running. */
+  height: 40px;
   padding-left: 2px;
   font-size: var(--text-2xs);
   color: var(--text-disabled);
@@ -297,6 +299,10 @@
   gap: var(--space-2);
   overflow-x: auto;
   scrollbar-width: none;
+  /* overflow-x also clips vertically, and the two things that leave the
+     avatar's box are both vertical: the unread badge on its top corner and the
+     bounce a waiting session does. This is the room for them. */
+  padding: 7px 4px 3px;
 }
 
 .sbx-unread__rail::-webkit-scrollbar {
@@ -326,11 +332,120 @@
     padding var(--duration-base) var(--ease-standard);
 }
 
-/* Only two lanes can reach this rail. The running and idle tones went with
-   the project-stacking version: a session that is working or asleep is not
-   unread, and the dock does not count it either. */
+/* All four lanes reach this rail now — see activeSessions(). The ring colour
+   is the lane; whether it has been read is the opacity below. */
 .sbx-unread__avatar--waiting { --sbx-tone: var(--amber-500); }
 .sbx-unread__avatar--done    { --sbx-tone: var(--blue-500); }
+.sbx-unread__avatar--running { --sbx-tone: var(--blue-500); }
+.sbx-unread__avatar--idle    { --sbx-tone: var(--gray-500); }
+
+/* Read, and therefore not asking for anything. Dimmed rather than dropped:
+   the rail is a worklist and these are still the sessions you are in the
+   middle of. Hovering one brings it back — you are looking at it. */
+.sbx-unread__avatar.is-read {
+  opacity: 0.75;
+}
+
+.sbx-unread__avatar.is-read:hover,
+.sbx-unread__avatar.is-read.sbx-unread__avatar--open {
+  opacity: 1;
+}
+
+/* The avatar and its corner marks as one body, so the bounce moves all three
+   and the marks stay pinned to the corners of what is moving. */
+.sbx-unread__stack {
+  position: relative;
+  flex: none;
+  display: flex;
+}
+
+/* Blocked on an answer, and nothing else on screen is going to say so if the
+   sidebar is scrolled elsewhere. The Dock's gesture: still most of the cycle,
+   then a hop and a smaller one. Transform only — it composites, so a rail of
+   these costs nothing per frame. */
+.sbx-unread__avatar--waiting .sbx-unread__stack {
+  animation: sbx-dock-bounce 2.4s var(--ease-standard) infinite;
+}
+
+@keyframes sbx-dock-bounce {
+  0%, 62%, 100% { transform: translateY(0); }
+  70%           { transform: translateY(-5px); }
+  78%           { transform: translateY(0); }
+  85%           { transform: translateY(-2px); }
+  92%           { transform: translateY(0); }
+}
+
+/* ---- Corner marks ---------------------------------------------- *
+ * Bottom left is the session's own status mark, the same one its sidebar row
+ * draws; top right is the unread count. A session never shows a status mark
+ * and nothing else to read at once, so the two corners never compete.
+ * ------------------------------------------------------------------ */
+
+.sbx-unread__pip {
+  position: absolute;
+  left: -2px;
+  bottom: -2px;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  box-sizing: border-box;
+  /* Punched out of the avatar rather than floating over it. */
+  outline: 2px solid var(--surface-card);
+}
+
+/* The arc from .session-item.cli-busy, at rail size. spin-dot lives in
+   style.css; keyframes are document-wide, and having one definition of "this
+   session is working" is the point of copying the mark down here at all. */
+.sbx-unread__pip--running {
+  background: transparent;
+  border: 1.5px solid var(--blue-500);
+  border-top-color: transparent;
+  animation: spin-dot 0.8s linear infinite;
+}
+
+.sbx-unread__pip--waiting {
+  background: var(--orange-400);
+  animation: sbx-pip-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes sbx-pip-pulse {
+  0%, 100% { opacity: 1;    transform: scale(1); }
+  50%      { opacity: 0.45; transform: scale(0.78); }
+}
+
+/* Always 1: one entry per session, and a session has one unread turn or none.
+   It is a mark, not arithmetic — but it reads as a count because that is the
+   shape every unread badge has, and it is the only thing on the avatar that
+   says "there is something here to read". */
+.sbx-unread__badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--sbx-tone);
+  color: var(--text-on-accent);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: var(--weight-bold);
+  line-height: 1;
+  outline: 2px solid var(--surface-card);
+}
+
+/* The rail is ambient — it sits in the corner of the eye all day. */
+@media (prefers-reduced-motion: reduce) {
+  .sbx-unread__avatar--waiting .sbx-unread__stack,
+  .sbx-unread__pip--running,
+  .sbx-unread__pip--waiting {
+    animation: none;
+  }
+}
 
 /* ProjectAvatar renders an <img> when the project has an icon and a
    colour-filled <span> of initials when it does not — the same avatar the

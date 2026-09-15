@@ -9,6 +9,7 @@
 <script setup>
 import { ref, watch } from 'vue';
 import { store } from '../store.js';
+import { sessionTitle } from '../session-title.js';
 // How a thinking block, a tool call or a screenshot looks now lives in one
 // place, shared with the SDK-backed session view — see message-render.js.
 import {
@@ -36,7 +37,7 @@ watch(() => store.showJsonl, (showing) => {
 // ── Public API ────────────────────────────────────────────────────
 async function open(session) {
   const result = await window.api.readSessionJsonl(session.sessionId);
-  const displayName = session.name || session.aiTitle || session.summary || session.sessionId;
+  const displayName = sessionTitle(session, session.sessionId);
   await render(result, displayName, session.sessionId);
 }
 

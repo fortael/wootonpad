@@ -103,6 +103,14 @@ export const store = reactive({
   // the board cards. Only running sessions are ever polled: an agent cannot
   // outlive the CLI process that spawned it.
   subagentCounts: new Map(),
+  // Bumped whenever a note is written — created, edited, ticked off, deleted.
+  // The notes themselves live in files and are re-read by whoever is showing
+  // them; this is for the things that only show a *number* derived from them,
+  // which would otherwise have no way of knowing the number had moved. The
+  // side panel's TODO badge was the case: ticking an item off updated the list
+  // under your cursor and left the count beside it saying the old figure until
+  // the session was reopened.
+  notesRevision: 0,
   planViewerOpen: false,
   // What the Markdown pane is currently showing: 'plan' or 'note'. The two
   // come from different directories with different write guards, so the save

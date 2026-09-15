@@ -153,6 +153,7 @@ import { store } from '../store.js';
 import SbIcon from './SbIcon.vue';
 import ProjectAvatar from './ProjectAvatar.vue';
 import { filterSessions } from '../session-filter.js';
+import { sessionTitle } from '../session-title.js';
 import { focusLevel } from '../board-focus.js';
 
 const props = defineProps({
@@ -215,10 +216,7 @@ const boardSessions = computed(() => {
 
 const summarizable = computed(() => boardSessions.value.slice(0, MAX_SUMMARIZED));
 
-function titleOf(session) {
-  const name = session.name || session.summary;
-  return (window.cleanDisplayName ? window.cleanDisplayName(name) : name) || session.sessionId;
-}
+const titleOf = (session) => sessionTitle(session, session.sessionId);
 
 function pick(projectPath) {
   store.boardProjectFilter = store.boardProjectFilter === projectPath ? null : projectPath;

@@ -60,6 +60,7 @@ db.exec(`
     messageCount INTEGER DEFAULT 0,
     slug TEXT,
     aiTitle TEXT,
+    customTitle TEXT,
     contextTokens INTEGER DEFAULT 0,
     contextLimit INTEGER DEFAULT 0,
     changedFiles INTEGER DEFAULT 0,
@@ -210,6 +211,22 @@ const migrations = [
       )
     `);
   },
+  // v12: Remember the `custom-title` the transcript last carried.
+  //
+  // `/rename` in the CLI writes one of those records, and it has to reach
+  // session_meta.name — it is the user naming the session, by the other door.
+  // But the record stays in the file forever, so "the transcript has a
+  // customTitle" is not the same question as "the user just renamed it": read
+  // that way, every folder rescan re-applied an old title and wiped out a name
+  // typed in this app minutes ago.
+  //
+  // Storing what we last saw turns it into the right question — has it changed
+  // since we looked — and a rename from either door then survives the other.
+  // No cache clear: the column starts NULL, which reads as "not looked yet",
+  // and the first index of each session fills it in.
+  (db) => {
+    try { db.exec('ALTER TABLE session_cache ADD COLUMN customTitle TEXT'); } catch {}
+  },
 ];
 
 const currentDbVersion = (() => {
@@ -264,19 +281,20 @@ const stmts = {
   cacheCountByAccount: db.prepare("SELECT COUNT(*) as cnt FROM session_cache WHERE accountId = ?"),
   cacheGetByAccount: db.prepare('SELECT * FROM session_cache WHERE accountId = ?'),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, accountId, contextTokens, contextLimit, changedFiles, linesAdded, linesRemoved)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, customTitle, accountId, contextTokens, contextLimit, changedFiles, linesAdded, linesRemoved)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
       created = excluded.created, modified = excluded.modified,
       messageCount = excluded.messageCount, slug = excluded.slug,
-      aiTitle = COALESCE(session_cache.aiTitle, excluded.aiTitle), accountId = excluded.accountId,
+      aiTitle = COALESCE(session_cache.aiTitle, excluded.aiTitle),
+      customTitle = excluded.customTitle, accountId = excluded.accountId,
       contextTokens = excluded.contextTokens, contextLimit = excluded.contextLimit,
       changedFiles = excluded.changedFiles,
       linesAdded = excluded.linesAdded, linesRemoved = excluded.linesRemoved
   `),
-  cacheGetByFolder: db.prepare('SELECT sessionId, modified FROM session_cache WHERE folder = ? AND accountId = ?'),
+  cacheGetByFolder: db.prepare('SELECT sessionId, modified, customTitle FROM session_cache WHERE folder = ? AND accountId = ?'),
   cacheGetFolder: db.prepare('SELECT folder FROM session_cache WHERE sessionId = ?'),
   cacheGetSession: db.prepare('SELECT * FROM session_cache WHERE sessionId = ?'),
   cacheDeleteSession: db.prepare('DELETE FROM session_cache WHERE sessionId = ?'),
@@ -367,7 +385,8 @@ const upsertCachedSessionsBatch = db.transaction((sessions, accountId) => {
     stmts.cacheUpsert.run(
       s.sessionId, s.folder, s.projectPath, s.summary,
       s.firstPrompt, s.created, s.modified, s.messageCount || 0,
-      s.slug || null, s.aiTitle || null, accountId, s.contextTokens || 0, s.contextLimit || 0, s.changedFiles || 0,
+      s.slug || null, s.aiTitle || null, s.customTitle || null,
+      accountId, s.contextTokens || 0, s.contextLimit || 0, s.changedFiles || 0,
       s.linesAdded || 0, s.linesRemoved || 0
     );
   }

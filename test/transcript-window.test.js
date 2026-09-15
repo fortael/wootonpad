@@ -3,7 +3,9 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { readTranscriptWindow, readCompactBoundaries, forgetTranscript } = require('../transcript-window');
+const {
+  readTranscriptWindow, readSessionLandmarks, recordIndexAtTime, forgetTranscript,
+} = require('../transcript-window');
 
 let dirCount = 0;
 function makeTranscript(records, { trailingNewline = true, blanks = false } = {}) {
@@ -220,7 +222,7 @@ test('an empty transcript reads as an empty window', () => {
 // ── The compact rail ──────────────────────────────────────────────
 //
 // The rail down the left of the chat is drawn from every boundary in the file,
-// not just the one flooring the current window — see readCompactBoundaries.
+// not just the one flooring the current window — see readSessionLandmarks.
 
 test('every compact boundary is reported, in file order, with its position', () => {
   const records = [
@@ -232,21 +234,22 @@ test('every compact boundary is reported, in file order, with its position', () 
   ];
   const { dir, file } = makeTranscript(records);
   try {
-    const found = readCompactBoundaries(file);
+    const found = readSessionLandmarks(file);
+    const compacts = found.marks.filter(m => m.kind === 'compact');
     assert.equal(found.total, 27);
-    assert.deepEqual(found.compacts.map(c => c.index), [10, 21]);
-    assert.deepEqual(found.compacts.map(c => c.trigger), ['manual', 'auto']);
-    assert.equal(found.compacts[0].preTokens, 936783);
-    assert.equal(found.compacts[1].postTokens, 11112);
+    assert.deepEqual(compacts.map(c => c.index), [10, 21]);
+    assert.deepEqual(compacts.map(c => c.trigger), ['manual', 'auto']);
+    assert.equal(compacts[0].preTokens, 936783);
+    assert.equal(compacts[1].postTokens, 11112);
   } finally { cleanup(dir, file); }
 });
 
 test('a transcript that was never compacted reports none', () => {
   const { dir, file } = makeTranscript(Array.from({ length: 5 }, (_, i) => msg(i)));
   try {
-    const found = readCompactBoundaries(file);
+    const found = readSessionLandmarks(file);
     assert.equal(found.total, 5);
-    assert.deepEqual(found.compacts, []);
+    assert.deepEqual(found.marks.filter(m => m.kind === 'compact'), []);
   } finally { cleanup(dir, file); }
 });
 
@@ -258,7 +261,205 @@ test('a boundary index matches the one the window floors on', () => {
   const { dir, file } = makeTranscript(records);
   try {
     const win = readTranscriptWindow(file, { limit: 50 });
-    const found = readCompactBoundaries(file);
-    assert.equal(win.compact.index, found.compacts[0].index);
+    const found = readSessionLandmarks(file).marks.find(m => m.kind === 'compact');
+    assert.equal(win.compact.index, found.index);
+  } finally { cleanup(dir, file); }
+});
+
+// ── The timeline rail ─────────────────────────────────────────────
+//
+// Four kinds of mark, all found in the bytes rather than by parsing records.
+// What each test is really guarding is that the needle still picks out the
+// record the CLI writes, and nothing else.
+
+const at = (ts) => ts;
+
+/** A record the user typed. `promptSource` is what marks one in the CLI's own file. */
+function prompt(ts) {
+  return {
+    type: 'user', promptSource: 'user', origin: 'cli', timestamp: at(ts),
+    message: { role: 'user', content: 'hello' },
+  };
+}
+
+function reply(ts) {
+  return { type: 'assistant', timestamp: at(ts), message: { role: 'assistant', content: 'hi' } };
+}
+
+function failedTool(ts) {
+  return {
+    type: 'user', timestamp: at(ts),
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: 'boom' }] },
+  };
+}
+
+const kinds = (marks, kind) => marks.filter(m => m.kind === kind).map(m => m.index);
+
+// Turn ends used to be marked here and are deliberately not any more: a day's
+// work is hundreds of them, and hundreds of notches down an eight-pixel strip
+// is a striped bar rather than a map.
+test('an ordinary exchange puts nothing on the rail', () => {
+  const { dir, file } = makeTranscript([
+    prompt('2026-09-10T10:00:00.000Z'),
+    reply('2026-09-10T10:00:01.000Z'),
+    reply('2026-09-10T10:00:02.000Z'),
+    prompt('2026-09-10T10:00:03.000Z'),
+    reply('2026-09-10T10:00:04.000Z'),
+  ]);
+  try {
+    const { marks, total } = readSessionLandmarks(file);
+    assert.equal(total, 5);
+    assert.deepEqual(marks, []);
+  } finally { cleanup(dir, file); }
+});
+
+test('a failed tool result is an error mark', () => {
+  const { dir, file } = makeTranscript([
+    reply('2026-09-10T10:00:00.000Z'),
+    failedTool('2026-09-10T10:00:01.000Z'),
+    reply('2026-09-10T10:00:02.000Z'),
+  ]);
+  try {
+    const { marks } = readSessionLandmarks(file);
+    assert.deepEqual(kinds(marks, 'error'), [1]);
+    assert.equal(marks.find(m => m.kind === 'error').timestamp, '2026-09-10T10:00:01.000Z');
+  } finally { cleanup(dir, file); }
+});
+
+// A tool that came back fine says so with the same field, and the rail must not
+// flag every call in the session.
+test('a tool result that succeeded is not an error', () => {
+  const { dir, file } = makeTranscript([
+    reply('2026-09-10T10:00:00.000Z'),
+    {
+      type: 'user', timestamp: '2026-09-10T10:00:01.000Z',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', is_error: false, content: 'ok' }] },
+    },
+  ]);
+  try {
+    assert.deepEqual(kinds(readSessionLandmarks(file).marks, 'error'), []);
+  } finally { cleanup(dir, file); }
+});
+
+test('the day is marked where it turns over, and not at the start', () => {
+  const { dir, file } = makeTranscript([
+    reply('2026-09-10T10:00:00.000Z'),
+    reply('2026-09-10T11:00:00.000Z'),
+    reply('2026-09-12T09:00:00.000Z'),
+    reply('2026-09-12T10:00:00.000Z'),
+  ]);
+  try {
+    const days = kinds(readSessionLandmarks(file).marks, 'day');
+    // Local days, so the exact indices depend on the machine's zone — what is
+    // fixed is that the first record never carries one and a two-day gap does.
+    assert.ok(!days.includes(0));
+    assert.equal(days.length, 1);
+  } finally { cleanup(dir, file); }
+});
+
+test('compacts are on the same rail as everything else', () => {
+  const { dir, file } = makeTranscript([
+    reply('2026-09-10T10:00:00.000Z'),
+    boundary({ timestamp: '2026-09-10T10:05:00.000Z', trigger: 'auto' }),
+    reply('2026-09-10T10:06:00.000Z'),
+  ]);
+  try {
+    const { marks } = readSessionLandmarks(file);
+    const compact = marks.find(m => m.kind === 'compact');
+    assert.equal(compact.index, 1);
+    assert.equal(compact.trigger, 'auto');
+    assert.equal(compact.preTokens, 936783);
+  } finally { cleanup(dir, file); }
+});
+
+test('marks come back in file order whatever kind they are', () => {
+  const { dir, file } = makeTranscript([
+    reply('2026-09-10T10:00:00.000Z'),
+    failedTool('2026-09-10T10:00:01.000Z'),
+    reply('2026-09-10T10:00:02.000Z'),
+    prompt('2026-09-10T10:00:03.000Z'),
+    boundary({ timestamp: '2026-09-10T10:00:04.000Z' }),
+  ]);
+  try {
+    const { marks } = readSessionLandmarks(file);
+    const order = marks.map(m => m.index);
+    assert.deepEqual(order, [...order].sort((a, b) => a - b));
+  } finally { cleanup(dir, file); }
+});
+
+test('a transcript with nothing to mark reports an empty rail', () => {
+  const { dir, file } = makeTranscript([reply('2026-09-10T10:00:00.000Z')]);
+  try {
+    const { total, marks } = readSessionLandmarks(file);
+    assert.equal(total, 1);
+    assert.deepEqual(marks, []);
+  } finally { cleanup(dir, file); }
+});
+
+// A rail is a few hundred pixels tall; a session that failed hundreds of times
+// still has to draw as a shape rather than as a solid bar.
+test('more marks of one kind than the rail can draw are thinned', () => {
+  const records = [];
+  for (let i = 0; i < 400; i++) {
+    const at = new Date(Date.UTC(2026, 8, 10, 10, 0, i)).toISOString();
+    records.push(reply(at));
+    records.push(failedTool(at));
+  }
+  const { dir, file } = makeTranscript(records);
+  try {
+    const errors = kinds(readSessionLandmarks(file).marks, 'error');
+    assert.ok(errors.length <= 90, `expected at most 90 notches, got ${errors.length}`);
+    assert.ok(errors.length > 40, 'thinning must keep the shape, not just a handful');
+    assert.deepEqual(errors, [...errors].sort((a, b) => a - b));
+  } finally { cleanup(dir, file); }
+});
+
+// ── Anchoring a trimmed chat ──────────────────────────────────────
+
+test('a timestamp resolves to the first record at or after it', () => {
+  const { dir, file } = makeTranscript([
+    reply('2026-09-10T10:00:00.000Z'),
+    reply('2026-09-10T10:00:10.000Z'),
+    reply('2026-09-10T10:00:20.000Z'),
+    reply('2026-09-10T10:00:30.000Z'),
+  ]);
+  try {
+    assert.equal(recordIndexAtTime(file, Date.parse('2026-09-10T10:00:20.000Z')).index, 2);
+    assert.equal(recordIndexAtTime(file, Date.parse('2026-09-10T10:00:15.000Z')).index, 2);
+    assert.equal(recordIndexAtTime(file, Date.parse('2026-09-10T09:00:00.000Z')).index, 0);
+    assert.equal(recordIndexAtTime(file, Date.parse('2026-09-10T11:00:00.000Z')).index, 4);
+    assert.equal(recordIndexAtTime(file, Date.parse('2026-09-10T10:00:20.000Z')).total, 4);
+  } finally { cleanup(dir, file); }
+});
+
+// `custom-title` and `ai-title` records carry no timestamp of their own. They
+// must not be able to stall the search or land on the wrong side of it.
+test('records without a timestamp take the time of the next one that has one', () => {
+  const { dir, file } = makeTranscript([
+    reply('2026-09-10T10:00:00.000Z'),
+    { type: 'custom-title', customTitle: 'named', sessionId: 'x' },
+    { type: 'ai-title', aiTitle: 'titled', sessionId: 'x' },
+    reply('2026-09-10T10:00:30.000Z'),
+  ]);
+  try {
+    // 10:00:30 is record 3, and the two untimed records above it belong to it.
+    assert.equal(recordIndexAtTime(file, Date.parse('2026-09-10T10:00:30.000Z')).index, 1);
+    assert.equal(recordIndexAtTime(file, Date.parse('2026-09-10T10:00:00.000Z')).index, 0);
+  } finally { cleanup(dir, file); }
+});
+
+test('an empty transcript anchors at nothing rather than throwing', () => {
+  const { dir, file } = makeTranscript([]);
+  try {
+    assert.deepEqual(recordIndexAtTime(file, Date.now()), { index: 0, total: 0 });
+    assert.deepEqual(readSessionLandmarks(file), { total: 0, marks: [] });
+  } finally { cleanup(dir, file); }
+});
+
+test('an unreadable timestamp does not become an anchor', () => {
+  const { dir, file } = makeTranscript([reply('2026-09-10T10:00:00.000Z')]);
+  try {
+    assert.equal(recordIndexAtTime(file, NaN).index, 1);
+    assert.equal(recordIndexAtTime(file, undefined).index, 1);
   } finally { cleanup(dir, file); }
 });

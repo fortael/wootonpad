@@ -628,16 +628,38 @@ setInterval(() => {
 // Shared session map so all caches reference the same objects
 const sessionMap = new Map();
 
-function dedup(projects) {
+/**
+ * Point both project lists at one object per session — this refresh's object.
+ *
+ * `visible` and `all` are two separate passes over the same cache, so the same
+ * session arrives as two equal-but-distinct objects; anything that writes to
+ * one (a rename, a star) has to be visible through the other. Hence a map.
+ *
+ * What it must *not* do is keep the object from last time and copy the new
+ * values into it, which is what it used to do. Vue tracks what it reads, and
+ * what it reads through a reactive proxy is the raw object underneath — so a
+ * row whose values were assigned onto the object it was already holding was a
+ * row whose values had, as far as Vue was concerned, not changed. A session
+ * created as "New session" kept that name through every refresh, including the
+ * one the refresh button asks for, until something unrelated forced the list to
+ * be rebuilt. A new object per refresh is a new identity, and an identity is
+ * the one thing every layer here agrees to watch.
+ *
+ * @param {Array<object>} projects
+ * @param {Set<string>} seen  ids already claimed by an earlier list this refresh
+ */
+function dedup(projects, seen = new Set()) {
   for (const p of projects) {
     for (let i = 0; i < p.sessions.length; i++) {
       const s = p.sessions[i];
-      if (sessionMap.has(s.sessionId)) {
-        Object.assign(sessionMap.get(s.sessionId), s);
-        p.sessions[i] = sessionMap.get(s.sessionId);
-      } else {
-        sessionMap.set(s.sessionId, s);
+      const id = s.sessionId;
+      if (seen.has(id)) {
+        // The other list got here first; share its object rather than this copy.
+        p.sessions[i] = sessionMap.get(id);
+        continue;
       }
+      seen.add(id);
+      sessionMap.set(id, s);
     }
   }
 }
@@ -651,8 +673,11 @@ async function loadProjects({ resort = false } = {}) {
   cachedProjects = visible;
   cachedAllProjects = all;
   if (window.vueStore) window.vueStore.loadingStatus = '';
-  dedup(cachedProjects);
-  dedup(cachedAllProjects);
+  // One `seen` across both passes: the two lists must end up sharing one object
+  // per session, and it must be this refresh's.
+  const claimed = new Set();
+  dedup(cachedProjects, claimed);
+  dedup(cachedAllProjects, claimed);
 
   // Reconcile pending sessions: remove ones that now have real data
   let hasReinjected = false;
@@ -697,13 +722,74 @@ async function loadProjects({ resort = false } = {}) {
 
   await pollActiveSessions();
   refreshSidebar({ resort });
+  refreshHeaderSession();
   renderDefaultStatus();
+}
+
+/**
+ * A new name for a session, everywhere it is written, without waiting.
+ *
+ * The name also reaches the cache and comes back on the next refresh — from
+ * this window, and from the CLI's own `/rename`, which writes a `custom-title`
+ * record the indexer promotes. That round trip is a folder rescan away, and a
+ * row that keeps its old name for a second after you rename it reads as the
+ * rename not having worked. So it is written here as well, and the refresh
+ * that follows agrees with what is already on screen.
+ */
+function renameLocally(id, name) {
+  const current = sessionMap.get(id);
+  // A fresh object rather than an assignment: identity is what the lists and
+  // the header watch — see dedup.
+  const renamed = { ...(current || { sessionId: id }), name };
+  sessionMap.set(id, renamed);
+  for (const list of [cachedProjects, cachedAllProjects]) {
+    for (const p of list) {
+      const i = (p.sessions || []).findIndex(s => s?.sessionId === id);
+      if (i !== -1) p.sessions[i] = renamed;
+    }
+  }
+  if (window.vueStore?.headerSession?.sessionId === id) {
+    window.vueSidebar?.setHeaderSession(renamed);
+  }
+  refreshSidebar();
+}
+
+/**
+ * Put the open session's fresh row back in the header.
+ *
+ * The header is handed a session object once, when the session is opened, and
+ * then keeps it. For a session that already existed that is harmless — its name
+ * and counts were settled before it was opened. For one created a moment ago it
+ * is the whole problem: the row is built as "New session" with no messages, and
+ * everything that then becomes true about it — the first prompt, the model's
+ * title, a `/rename` — lands in the cache and never reaches the thing on screen
+ * with the session's name on it. It said "New session" until the session was
+ * closed and opened again.
+ */
+function refreshHeaderSession() {
+  const open = window.vueStore?.headerSession;
+  if (!open) return;
+  const fresh = sessionMap.get(open.sessionId);
+  // Only when something actually moved: the header is watched, and rewriting it
+  // with an equal object re-renders everything downstream of it for nothing.
+  if (!fresh || fresh === open) return;
+  window.vueSidebar?.setHeaderSession(fresh);
 }
 
 
 
 
+// `sessionOptions` is what the session is started with — permission mode,
+// worktree, model, and which transport it runs on. Omitting it does not mean
+// "no options": it means "whatever this project is configured for", which is
+// what resolveDefaultSessionOptions answers. Callers that passed nothing got a
+// terminal even where the project's Chat view setting said otherwise, so a
+// session opened from the accounts page or from a deep link came up as the one
+// view the setting was there to replace — and with an xterm behind it.
+//
+// A caller that genuinely wants a plain shell says so with `{ type: 'terminal' }`.
 async function launchNewSession(project, sessionOptions) {
+  const options = sessionOptions || await resolveDefaultSessionOptions(project);
   const sessionId = crypto.randomUUID();
   const projectPath = project.projectPath;
   const session = {
@@ -750,7 +836,7 @@ async function launchNewSession(project, sessionOptions) {
   const entry = createTerminalEntry(session);
 
   // Open terminal in main process with session options
-  const result = await window.api.openTerminal(sessionId, projectPath, true, sessionOptions || null);
+  const result = await window.api.openTerminal(sessionId, projectPath, true, options);
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
     entry.closed = true;
@@ -1212,8 +1298,10 @@ async function openAccountHomeSession(account) {
     }
   }
 
-  // Nothing open yet — launch a new session (stays on accounts tab, terminal appears in main area)
-  await launchNewSession({ projectPath: homedir }, {});
+  // Nothing open yet — launch a new session in the account's home directory.
+  // No options of its own: it takes the same defaults as a session started
+  // anywhere else, chat view included.
+  await launchNewSession({ projectPath: homedir });
 }
 
 async function switchAccount(id) {
@@ -1622,23 +1710,7 @@ window.__sb = {
 
   renameSession: async (id, name) => {
     await window.api.renameSession(id, name);
-    const s = sessionMap.get(id);
-    if (s) s.name = name;
-    // Replace the session object in Vue's reactive array via splice — this is the
-    // only reliable way to force ProjectGroup.allItems to recompute, because simple
-    // property mutation on the nested object is not always detected by Vue's watcher.
-    if (window.vueStore?.projects) {
-      outer: for (const p of window.vueStore.projects) {
-        if (!p.sessions) continue;
-        for (let i = 0; i < p.sessions.length; i++) {
-          if (p.sessions[i]?.sessionId === id) {
-            p.sessions.splice(i, 1, { ...p.sessions[i], name });
-            break outer;
-          }
-        }
-      }
-    }
-    refreshSidebar();
+    renameLocally(id, name);
   },
 
   newSession: (project, anchorEl) => {

@@ -167,6 +167,7 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue';
 import SbSwitch from './SbSwitch.vue';
+import { sessionTitle } from '../session-title.js';
 
 const PERM_MODES = [
   { value: null, label: 'Default', desc: 'Prompt for all actions' },
@@ -304,7 +305,7 @@ let rsOnResume = null;
 
 const resumeSessionName = computed(() => {
   const s = resumeSession.value;
-  return s ? (s.name || s.aiTitle || s.summary || s.sessionId?.slice(0, 8) || '') : '';
+  return s ? sessionTitle(s, s.sessionId?.slice(0, 8) || '') : '';
 });
 
 function openResumeSession(session, effective, onResume) {

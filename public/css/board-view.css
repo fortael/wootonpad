@@ -254,6 +254,28 @@ body.hide-avatars .sbx-board__avatar { display: none; }
   word-break: break-word;
 }
 
+/* How the conversation opened, under whatever it ended up being called. One
+   line only — a card is as wide as a board column is narrow, and this is the
+   thing you recognise the session by, not the thing you read on it. */
+.sbx-board__cardsub {
+  margin-bottom: var(--space-1);
+  padding-right: calc(var(--hit-xs) + var(--space-1));
+  color: var(--text-disabled);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-tight);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The wait bar is the card's own width rather than the sidebar's — see
+   .session-title-wait for what it is. */
+.sbx-board__cardtitle--wait {
+  width: 70%;
+  height: 0.8em;
+}
+
 /* The card's own corner for SessionMenu. Quiet until the card is under the
    cursor — the board is read at a glance and a dot grid of menu buttons is
    not part of that. :focus-within keeps it reachable from the keyboard. */

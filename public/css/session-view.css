@@ -93,6 +93,15 @@
   min-width: 0;
 }
 
+/* The wait bar in the header is the header's own size — see .session-title-wait
+   for what it is and why it is a bar. Wider here because the name it stands in
+   for has more room to land in. */
+.sbx-sesshead__title--wait {
+  width: 13em;
+  height: 0.9em;
+  flex-shrink: 0;
+}
+
 .sbx-sesshead__title {
   font-size: var(--text-md);
   font-weight: var(--weight-semibold);
@@ -169,6 +178,9 @@
   font-weight: var(--weight-medium);
   color: var(--text-secondary);
   white-space: nowrap;
+  /* It carries an explanation. Without the cursor there is nothing to suggest
+     hovering it, and "Active" is the word here people most need explained. */
+  cursor: help;
 }
 
 .sbx-sesshead__dot {
@@ -442,58 +454,89 @@
    long think — which is the whole point: those are the moments that look like
    nothing is happening, and the row answers the three questions asked during
    one: how long, doing what, at what cost. */
+/* No box. A pill with a tinted fill and a border is how a *label* is drawn —
+   a piece of metadata sitting in the flow — and this is the opposite of that:
+   it is the one live thing on the screen, and it has to read as motion rather
+   than as another row. Taking the frame away and giving the room back to the
+   spinner is what makes it catch the eye instead of blending into the cards
+   above it. */
 .sbx-working {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-top: var(--space-2);
-  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-2);
-  border: 1px solid color-mix(in srgb, var(--blue-500) 26%, transparent);
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--blue-500) 8%, var(--surface-card));
+  display: block;
+  margin: var(--space-4) 0 var(--space-2);
   color: var(--text-secondary);
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
   line-height: var(--leading-tight);
 }
 
-/* One orb with a ring leaving it, rather than three hopping dots. A pulse that
-   starts at the centre and travels outward reads as ongoing work at a glance,
-   and it holds up next to a label that changes every few seconds. */
-.sbx-working__orb {
-  position: relative;
+.sbx-working__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* An ANSI spinner, drawn the way a terminal draws one — the same braille cycle
+   Docker turns while it pulls a layer.
+   `content` is animated in discrete steps, because there is nothing to
+   interpolate between two glyphs, and that is the whole character of it: a
+   smooth sweep reads as decoration, a thing that ticks reads as a process.
+   Braille rather than the quadrant blocks, which carry a quarter of a cell and
+   at any readable size come out as a dot; these keep their mass through the
+   whole turn, which is what makes it read as one object rotating. */
+.sbx-working__spinner {
   flex-shrink: 0;
-  width: 8px;
-  height: 8px;
-  border-radius: var(--radius-full);
-  background: var(--blue-500);
-  animation: sbx-working-core 1.6s var(--ease-standard, ease-in-out) infinite;
+  width: 1ch;
+  font-family: var(--font-mono);
+  font-size: var(--text-lg);
+  line-height: 1;
+  text-align: center;
+  color: var(--blue-500);
 }
 
-.sbx-working__orb::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--blue-500);
-  animation: sbx-working-ring 1.6s var(--ease-standard, ease-out) infinite;
+.sbx-working__spinner::before {
+  content: '⠋';
+  animation: ansi-spin 0.8s steps(1, end) infinite;
 }
 
-/* What it is doing right now — "Running Bash", "Thinking", "Responding". The
-   sweep is the movement; the word is the answer. */
+@keyframes ansi-spin {
+  0%  { content: '⠋'; }
+  10% { content: '⠙'; }
+  20% { content: '⠹'; }
+  30% { content: '⠸'; }
+  40% { content: '⠼'; }
+  50% { content: '⠴'; }
+  60% { content: '⠦'; }
+  70% { content: '⠧'; }
+  80% { content: '⠇'; }
+  90% { content: '⠏'; }
+}
+
+/* The fixed word: this turn is alive. It pulses rather than shimmers.
+   The shimmer was a gradient clipped to the glyphs with its position animated,
+   and neither is a property the compositor can move on its own — every frame
+   re-rasterised the text. Opacity is composited and says the same thing; the
+   sidebar's busy rows were moved off the same effect for the same reason. */
 .sbx-working__label {
-  font-weight: var(--weight-medium);
+  font-weight: var(--weight-semibold);
   color: var(--text-primary);
-  background: linear-gradient(
-    100deg,
-    var(--text-secondary) 20%,
-    var(--text-primary) 40%,
-    var(--text-secondary) 60%
-  );
-  background-size: 220% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: sbx-working-sweep 2.4s linear infinite;
+  letter-spacing: 0.01em;
+  animation: pulse-summary 1.8s ease-in-out infinite;
+}
+
+/* What it is doing right now — "Running Bash", "Thinking", "Responding" — on
+   its own line under the row. It used to replace the word above, which made
+   the one fixed thing on screen the twitchiest: three swaps a second while
+   Claude reads files, and the row stopped saying the thing it is there for. */
+.sbx-working__doing {
+  display: none;
+  margin-top: 2px;
+  /* Under the label, past the spinner's own cell. */
+  padding-left: calc(1ch + var(--space-2));
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.sbx-working.has-activity .sbx-working__doing {
+  display: block;
 }
 
 /* Elapsed and tokens. Monospaced so a number that grows does not shuffle the
@@ -509,37 +552,21 @@
   margin-right: var(--space-1);
 }
 
-@keyframes sbx-working-core {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(0.75); opacity: 0.7; }
-}
-
-@keyframes sbx-working-ring {
-  0% { transform: scale(1); opacity: 0.6; }
-  70%, 100% { transform: scale(2.4); opacity: 0; }
-}
-
-@keyframes sbx-working-sweep {
-  from { background-position: 120% 0; }
-  to { background-position: -120% 0; }
-}
-
 @keyframes sbx-working-dot {
   0%, 60%, 100% { opacity: 0.25; transform: translateY(0); }
   30% { opacity: 1; transform: translateY(-3px); }
 }
 
-/* A board that is not allowed to fly cards is not allowed to pulse an orb. */
+/* A board that is not allowed to fly cards is not allowed to run a spinner. */
 @media (prefers-reduced-motion: reduce) {
-  .sbx-working__orb,
-  .sbx-working__orb::after,
+  .sbx-working__spinner::before,
   .sbx-working__label,
   .sbx-streaming .jsonl-text::after {
     animation: none;
   }
-  .sbx-working__label {
-    background: none;
-    -webkit-text-fill-color: currentColor;
+  /* Stopped on the fullest frame in the cycle rather than a sliver of one. */
+  .sbx-working__spinner::before {
+    content: '⠿';
   }
 }
 
@@ -549,39 +576,57 @@
    Capped and self-scrolling: it is longer than the answer and it is not the
    answer, but it is where you find out Claude has misread the task — early
    enough to stop it, which is the whole reason for showing it. Replaced by the
-   foldable block on the finished message. */
+   foldable block on the finished message.
+
+   No frame around it. It was a tinted box with a rule down its left edge, which
+   made the thing at the bottom of the transcript for the whole of every turn
+   the most drawn-on thing on screen — and it is the least settled: text that
+   rewrites itself every few hundred milliseconds and then disappears. The head
+   says what it is; the indent says where it belongs. */
 .sbx-think {
   margin: var(--space-2) 0;
-  padding: var(--space-2) var(--space-3);
-  border-left: 2px solid color-mix(in srgb, var(--indigo-400) 45%, transparent);
-  border-radius: var(--radius-xs);
-  background: color-mix(in srgb, var(--indigo-400) 7%, transparent);
+  padding: 0 0 0 var(--space-1);
 }
 
+/* Larger than the rows around it, not smaller. Without the frame this is the
+   only thing marking the reasoning as its own kind of text, and it is the half
+   of a turn actually worth watching — it is where you find out Claude has
+   misread the task. Set in the size it is meant to be read at. */
 .sbx-think__head {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--text-2xs);
+  font-size: var(--text-xs);
   font-weight: var(--weight-medium);
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
 }
 
+/* The same spinner the working line runs, a size down and in the reasoning's
+   own colour. Two live marks at the bottom of a transcript should not be two
+   different ideas: the loud blue one is the turn, the quiet indigo one is the
+   thinking inside it. */
 .sbx-think__spark {
-  width: 5px;
-  height: 5px;
-  border-radius: var(--radius-full);
-  background: var(--indigo-400);
-  animation: sbx-working-core 1.6s var(--ease-standard, ease-in-out) infinite;
+  flex-shrink: 0;
+  width: 1ch;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1;
+  text-align: center;
+  color: var(--indigo-400);
+}
+
+.sbx-think__spark::before {
+  content: '⠋';
+  animation: ansi-spin 0.8s steps(1, end) infinite;
 }
 
 .sbx-think__text {
-  max-height: 180px;
+  max-height: 220px;
   margin-top: var(--space-1);
   overflow-y: auto;
   color: var(--text-tertiary);
-  font-size: var(--text-2xs);
-  line-height: 1.6;
+  font-size: var(--text-xs);
+  line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -600,7 +645,11 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sbx-think__spark { animation: none; }
+  /* Stopped on the fullest frame, as the working line's is. */
+  .sbx-think__spark::before {
+    animation: none;
+    content: '⠿';
+  }
 }
 
 /* ─── Tool groups ───────────────────────────────────────────────── */
@@ -649,6 +698,50 @@
 .sbx-sdk__body .jsonl-tool-summary {
   min-width: 0;
   white-space: nowrap;
+}
+
+/* ─── A call that came back failed ──────────────────────────────── */
+
+/* Folded, a row says what the call was and not how it went, so a turn where
+   one command in nine exited non-zero looked exactly like a turn where none
+   did. The status is the answer: `exit 127` is a missing binary and `exit 1`
+   is the thing you asked about having gone wrong. */
+.jsonl-tool-failed {
+  flex-shrink: 0;
+  padding: 0 var(--space-1);
+  border: 1px solid color-mix(in srgb, var(--red-500) 40%, transparent);
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--red-500) 12%, transparent);
+  color: var(--red-400);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.5;
+}
+
+.jsonl-tool-block--failed > .jsonl-tool-header > .jsonl-tool-name {
+  color: var(--red-400);
+}
+
+/* Enough to find in a folded group of nine, not enough to shout over the
+   prose either side of it. */
+.sbx-sdk__body .jsonl-toolgroup > .jsonl-tool-block--failed,
+.sbx-sdk__body > .jsonl-entry .jsonl-tool-block--failed {
+  background: color-mix(in srgb, var(--red-500) 5%, transparent);
+}
+
+/* ─── An answer whose call is not on screen ─────────────────────── */
+
+/* A window of the transcript can start mid-turn, and then the results of calls
+   made in the page above arrive with nothing to fold into. Dashed, because the
+   thing it belongs to is missing rather than absent — scroll up and the call
+   is there. */
+.jsonl-tool-block--orphan {
+  margin: var(--space-2) 0;
+  border: 1px dashed var(--border-default);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-2);
+  background: color-mix(in srgb, var(--surface-card) 40%, transparent);
 }
 
 /* ─── AskUserQuestion, in the transcript ────────────────────────── */
@@ -868,8 +961,9 @@
   background: color-mix(in srgb, var(--indigo-400) 70%, transparent);
 }
 
-/* One notch per compact. Clickable, because "what was thrown away here" is the
-   only question a mark like this raises — it loads the segment above it. */
+/* One notch per landmark. Clickable, because every kind of mark here raises
+   the same question — "what happened there" — and the answer is to walk the
+   transcript up to it. Colour carries the kind; nothing else has to. */
 .sbx-timeline__notch {
   position: absolute;
   left: 0;
@@ -878,12 +972,32 @@
   padding: 0;
   border: none;
   border-radius: 1px;
-  background: var(--orange-500);
+  background: var(--text-disabled);
   cursor: pointer;
   pointer-events: auto;
   transform: translateY(-1px);
   transition: width var(--duration-fast) var(--ease-standard),
               left var(--duration-fast) var(--ease-standard);
+}
+
+/* A compact is the loudest thing on the rail: it is the only mark that says
+   part of the session is not merely unloaded but gone from the model. */
+.sbx-timeline__notch.is-compact {
+  background: var(--orange-500);
+  height: 3px;
+}
+
+.sbx-timeline__notch.is-error {
+  background: var(--red-500);
+}
+
+/* A day change is a rule across the rail, not a mark on it — and deliberately
+   not indigo: the thumb is indigo, and two indigo things on the same 8px strip
+   read as the same kind of thing. */
+.sbx-timeline__notch.is-day {
+  background: color-mix(in srgb, var(--green-500) 55%, transparent);
+  height: 1px;
+  width: 8px;
 }
 
 .sbx-timeline__notch:hover {

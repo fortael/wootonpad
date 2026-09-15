@@ -1092,10 +1092,21 @@ async function toggleNoteTodo(note, todo) {
 }
 
 // ── Background tasks ──────────────────────────────────────────────
-// Sub-agents of the open session. Polled while the pane is showing and the
-// session is working — a Task that finishes while you watch should stop
-// saying "running" without a click.
+//
+// Sub-agents of the open session, polled for as long as the pane is showing.
+//
+// It used to poll only while the session was working, which meant the list
+// stopped refreshing at the exact moment it had something new to say: the
+// interval was cleared when the turn ended, so the agents that finished with it
+// went on reading "running" until the tab was closed and opened again. An idle
+// session can gain agents too — it is one prompt away from a turn, and that
+// turn is usually started from this very window.
+//
+// Two cadences rather than one, because the two states move at different
+// speeds: a working session spawns and finishes agents within seconds, an idle
+// one changes only when something outside starts it.
 const SUBAGENT_POLL_MS = 5000;
+const SUBAGENT_IDLE_POLL_MS = 20000;
 const subagents = ref([]);
 let subagentTimer = null;
 
@@ -1138,8 +1149,13 @@ watch([tab, sessionId, sessionState], () => {
   clearInterval(subagentTimer);
   subagentTimer = null;
   if (tab.value === 'tasks') {
+    // Immediately, because a turn that just ended is exactly when the list is
+    // wrong — and then on the cadence that state deserves.
     loadSubagents();
-    if (sessionState.value === 'running') subagentTimer = setInterval(loadSubagents, SUBAGENT_POLL_MS);
+    subagentTimer = setInterval(
+      loadSubagents,
+      sessionState.value === 'running' ? SUBAGENT_POLL_MS : SUBAGENT_IDLE_POLL_MS,
+    );
   }
   if (tab.value === 'todos') loadDocs();
 }, { immediate: true });

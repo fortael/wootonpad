@@ -63,7 +63,12 @@ contextBridge.exposeInMainWorld('api', {
   // One window of a transcript, newest first. `before` pages upward; a window
   // never spans a `/compact` boundary — see transcript-window.js.
   readSessionTranscript: (sessionId, opts) => ipcRenderer.invoke('read-session-transcript', sessionId, opts),
-  sessionCompacts: (sessionId) => ipcRenderer.invoke('session-compacts', sessionId),
+  // Everything the chat's timeline rail draws: compacts, errors, day changes
+  // and the end of each turn.
+  sessionLandmarks: (sessionId) => ipcRenderer.invoke('session-landmarks', sessionId),
+  // Which record a moment in time is, so a chat that has released its oldest
+  // messages knows where to page from.
+  sessionRecordAt: (sessionId, ms) => ipcRenderer.invoke('session-record-at', sessionId, ms),
 
   // Settings
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),

@@ -178,6 +178,7 @@
 <script setup>
 import { ref, computed, nextTick, onUnmounted } from 'vue';
 import SbIcon from './SbIcon.vue';
+import { sessionTitle, titleSource } from '../session-title.js';
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -285,9 +286,7 @@ function saveRename() {
 }
 
 async function remove() {
-  const name = window.cleanDisplayName
-    ? window.cleanDisplayName(props.session.name || props.session.summary)
-    : (props.session.name || props.session.summary);
+  const name = sessionTitle(props.session);
   if (!confirm(`Delete "${name}"?\n\nThis removes the transcript from ~/.claude/projects. It cannot be undone.`)) return;
   sb('deleteSession', id.value);
 }
@@ -343,6 +342,12 @@ function duration(ms) {
 }
 
 // Anything the cached session already knows is shown immediately; the rest
+const TITLE_SOURCE = {
+  named: { value: 'renamed by you', hint: 'A name you typed. Nothing overwrites it but another rename.' },
+  ai: { value: 'named by Claude', hint: 'The CLI titles a conversation with Haiku on its first turn.' },
+  prompt: { value: 'the first prompt', hint: 'No title was generated, so the row is showing the opening line.' },
+};
+
 // fills in when the transcript read returns.
 const rows = computed(() => {
   const s = props.session;
@@ -358,6 +363,13 @@ const rows = computed(() => {
   const active = stamp(m?.lastActivity || window.lastActivityTime?.get(s.sessionId) || s.modified);
   if (active) out.push({ label: 'Last active', value: active.value, title: active.title });
   if (m) push('Duration', duration(new Date(m.lastActivity) - new Date(m.created)));
+
+  // Which of the three names the row above is showing. They are
+  // indistinguishable once drawn, and the case that matters is the one that
+  // looks like success: when no title was generated the row falls back to the
+  // opening line, which reads exactly like a title that worked.
+  const source = titleSource(s);
+  if (source) out.push({ label: 'Title', value: TITLE_SOURCE[source].value, title: TITLE_SOURCE[source].hint });
 
   push('Status', props.isRunning ? 'Active' : (s.archived ? 'Archived' : null));
   push('Messages', m ? `${m.userTurns} user · ${m.assistantTurns} assistant` : s.messageCount);
@@ -414,9 +426,7 @@ async function summarize() {
   summary.value = '';
   summaryUsage.value = null;
   try {
-    const name = window.cleanDisplayName
-      ? window.cleanDisplayName(props.session.name || props.session.summary)
-      : (props.session.name || props.session.summary);
+    const name = sessionTitle(props.session);
     const result = await call(
       [{ sessionId: id.value, projectPath: props.session.projectPath, title: name || id.value }],
       { detail: true }
