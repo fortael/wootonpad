@@ -111,7 +111,7 @@ test('message_start reports the prompt the request went out with', () => {
       message: { usage: { input_tokens: 12, cache_read_input_tokens: 400, output_tokens: 1 } },
     },
   }), [
-    { kind: 'usage', phase: 'start', inputTokens: 412, outputTokens: 1 },
+    { kind: 'usage', phase: 'start', inputTokens: 12, cachedTokens: 400, outputTokens: 1 },
     { kind: 'delta', target: 'other', text: '' },
   ]);
 });
@@ -122,7 +122,7 @@ test('message_delta reports the answer so far', () => {
     session_id: 's',
     event: { type: 'message_delta', usage: { output_tokens: 87 } },
   }), [
-    { kind: 'usage', phase: 'delta', inputTokens: 0, outputTokens: 87 },
+    { kind: 'usage', phase: 'delta', inputTokens: 0, cachedTokens: 0, outputTokens: 87 },
     { kind: 'delta', target: 'other', text: '' },
   ]);
 });
@@ -293,4 +293,28 @@ test('an error with no message stays an unknown card', () => {
   ]) {
     assert.equal(normalize(message)[0].kind, 'unknown');
   }
+});
+
+// Split apart on purpose. A turn is one request per tool round trip and each
+// re-sends the whole prompt, so at a large context the cached figure is nearly
+// all of it, every time. Added together they made a headline in the millions
+// that grew with round trips rather than with work.
+test('cache reads are reported apart from new input', () => {
+  const [usage] = normalize({
+    type: 'stream_event', session_id: 's',
+    event: {
+      type: 'message_start',
+      message: {
+        usage: {
+          input_tokens: 1200,
+          cache_creation_input_tokens: 300,
+          cache_read_input_tokens: 796000,
+          output_tokens: 4,
+        },
+      },
+    },
+  });
+  assert.equal(usage.inputTokens, 1500);     // read for the first time
+  assert.equal(usage.cachedTokens, 796000);  // re-read
+  assert.equal(usage.outputTokens, 4);
 });

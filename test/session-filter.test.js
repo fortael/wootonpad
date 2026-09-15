@@ -5,7 +5,7 @@ const path = require('node:path');
 
 // The module is an ES module in src/vue; node:test runs CommonJS here, so it is
 // loaded the same way the other renderer-module tests do it.
-const { filterSessions, isPlainTerminal } = require('../src/vue/session-filter.js');
+const { filterSessions, isPlainTerminal, projectHasVisibleSessions } = require('../src/vue/session-filter.js');
 
 const chat = (over = {}) => ({ sessionId: 'c1', modified: new Date().toISOString(), ...over });
 const term = (over = {}) => chat({ sessionId: 't1', type: 'terminal', ...over });
@@ -102,4 +102,45 @@ test('the side panel never opens over a terminal', () => {
     /sidePanelVisible = computed\(\(\) =>\s*\n\s*!!store\.sidePanelTab && !!store\.headerSession && !headerIsTerminal\.value/,
     'sidePanelVisible no longer excludes terminals',
   );
+});
+
+// ── Empty project groups ──────────────────────────────────────────
+//
+// A project with nothing surviving the filters is a collapsible header with
+// nothing behind it. One with no sessions at all is one on every tab, forever —
+// it was briefly exempted on the unfiltered list, which is how empty groups
+// came back to Recent twice.
+
+const ptys = (...ids) => new Set(ids);
+
+test('a project with no sessions at all is never listed, filters or none', () => {
+  const empty = { projectPath: '/p', sessions: [] };
+  assert.equal(projectHasVisibleSessions(empty, {}), false);
+  assert.equal(projectHasVisibleSessions(empty, { showArchived: true }), false);
+  assert.equal(projectHasVisibleSessions(empty, { showStarredOnly: true }), false);
+});
+
+test('a project whose only sessions are archived is not listed by default', () => {
+  const project = { projectPath: '/p', sessions: [{ sessionId: 'a', archived: true }] };
+  assert.equal(projectHasVisibleSessions(project, {}), false);
+  assert.equal(projectHasVisibleSessions(project, { showArchived: true }), true);
+});
+
+test('a project with one live session is listed', () => {
+  const project = { projectPath: '/p', sessions: [{ sessionId: 'a' }] };
+  assert.equal(projectHasVisibleSessions(project, {}), true);
+});
+
+// The rules are filterSessions', by calling it — not a second copy.
+test('the running filter is the same one sessions are judged by', () => {
+  const project = { projectPath: '/p', sessions: [{ sessionId: 'a' }, { sessionId: 'b' }] };
+  const opts = { showRunningOnly: true, activePtyIds: ptys('b') };
+  assert.equal(projectHasVisibleSessions(project, opts), true);
+  assert.equal(projectHasVisibleSessions(project, { ...opts, activePtyIds: ptys('z') }), false);
+});
+
+test('a malformed project is not listed rather than throwing', () => {
+  for (const project of [null, undefined, {}, { sessions: null }]) {
+    assert.equal(projectHasVisibleSessions(project, {}), false);
+  }
 });

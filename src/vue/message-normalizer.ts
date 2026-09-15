@@ -51,7 +51,13 @@ export type ViewItem =
   // cumulative within that request, not an increment. A turn makes one request
   // per tool round trip, so only the reader knows which to add and which to
   // replace; see noteUsage in SessionSdkApp.vue.
-  | { kind: 'usage'; phase: 'start' | 'delta'; inputTokens: number; outputTokens: number }
+  | {
+    kind: 'usage';
+    phase: 'start' | 'delta';
+    inputTokens: number;
+    cachedTokens: number;
+    outputTokens: number;
+  }
   | { kind: 'turn_end'; ok: boolean; text: string }
   | { kind: 'delta'; target: 'text' | 'thinking' | 'other'; text: string }
   | { kind: 'silent'; reason: string }
@@ -297,10 +303,13 @@ function usageOf(frame: StreamFrame | undefined): ViewItem | null {
   return {
     kind: 'usage',
     phase,
-    // Cached reads count: they were still read, and they are still billed.
-    inputTokens: num(usage.input_tokens)
-      + num(usage.cache_read_input_tokens)
-      + num(usage.cache_creation_input_tokens),
+    // Split, because they mean different things to a reader: fresh material the
+    // model had to read, versus prompt it re-read from cache. On a turn with
+    // many tool round trips the cached figure is nearly the whole prompt, every
+    // time — adding the two together produced a headline in the millions that
+    // grew with the number of round trips rather than with the work.
+    inputTokens: num(usage.input_tokens) + num(usage.cache_creation_input_tokens),
+    cachedTokens: num(usage.cache_read_input_tokens),
     outputTokens: num(usage.output_tokens),
   };
 }

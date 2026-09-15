@@ -54,3 +54,19 @@ export function filterSessions(sessions, {
   if (searchMatchIds) out = out.filter(s => searchMatchIds.has(s.sessionId));
   return out;
 }
+
+/**
+ * Does this project have anything to show in the session list right now?
+ *
+ * A project with nothing surviving the filters is a collapsible header with
+ * nothing behind it — and a project with no sessions at all is one on every
+ * tab, forever. It was briefly kept on the unfiltered list on the grounds that
+ * a freshly added project needs somewhere to start work; the Projects tab is
+ * that somewhere, and it lists every project with its own + button.
+ *
+ * Same rules as filterSessions, by calling it: the two used to be written out
+ * twice and the copy in the sidebar is where this rule drifted.
+ */
+export function projectHasVisibleSessions(project, options) {
+  return filterSessions(project?.sessions, options).length > 0;
+}

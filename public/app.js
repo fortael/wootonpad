@@ -826,6 +826,11 @@ async function openSession(session, customOptions) {
 
   // Open terminal in main process
   const resumeOptions = customOptions || await resolveDefaultSessionOptions({ projectPath });
+  // A plain terminal is a shell, not a conversation: no transcript to render as
+  // chat, no Claude process behind it. The project's "Chat view" setting is
+  // about its Claude sessions and used to follow a terminal into one too —
+  // reopening an old terminal came up as an empty chat.
+  if (window.isPlainTerminal?.(session)) delete resumeOptions.mode;
   const result = await window.api.openTerminal(sessionId, projectPath, false, resumeOptions);
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
@@ -1350,6 +1355,24 @@ initAccounts();
 // App.vue calls these when the user interacts with the sidebar shell
 // (tabs, filters, search). Each callback syncs local app.js state and
 // triggers whatever data loading or rendering is needed.
+/**
+ * Stop showing a session that is no longer in the list.
+ *
+ * Archiving already kills the PTY, but the view it was drawn in stayed: the row
+ * left the sidebar and a dead terminal went on filling the main area, which is
+ * what "archive all" looked like leaving a session hanging. Deleting has always
+ * done this; archiving has the same obligation.
+ */
+function retireOpenSession(id) {
+  destroySession(id);
+  activePtyIds.delete(id);
+  if (window.vueStore?.boardPreviewId === id) window.vueStore.boardPreviewId = null;
+  if (activeSessionId === id) {
+    setActiveSession(null);
+    placeholder.style.display = '';
+  }
+}
+
 window.__sb = {
   onTabChange(tabName) {
     activeTab = tabName;
@@ -1534,6 +1557,7 @@ window.__sb = {
       pollActiveSessions();
     }
     await window.api.archiveSession(id, newVal);
+    if (newVal) retireOpenSession(id);
     session.archived = newVal;
     loadProjects();
   },
@@ -1644,6 +1668,7 @@ window.__sb = {
     for (const s of active) {
       if (activePtyIds.has(s.sessionId)) await window.api.stopSession(s.sessionId);
       await window.api.archiveSession(s.sessionId, 1);
+      retireOpenSession(s.sessionId);
       s.archived = 1;
     }
     pollActiveSessions();

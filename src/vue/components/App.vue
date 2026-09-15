@@ -807,6 +807,10 @@ onMounted(async () => {
     openFile: (relPath) => projectViewerRef.value?.openFile(relPath),
   };
   window.vueApp = { setTab };
+  // app.js is a classic script and cannot import the module this lives in, but
+  // "is this a shell rather than a conversation" must have one answer — see
+  // session-filter.js.
+  window.isPlainTerminal = isPlainTerminal;
   window.vueJsonlViewer = {
     open: (s) => jsonlRef.value?.open(s),
     openSubagent: (sessionId, agent) => jsonlRef.value?.openSubagent(sessionId, agent),

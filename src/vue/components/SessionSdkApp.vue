@@ -548,15 +548,32 @@ function elapsedLabel(ms) {
   return `${Math.floor(mins / 60)}h ${mins % 60}m`;
 }
 
+/**
+ * What the turn has cost, in one number that survives being read quickly.
+ *
+ * The written count, not the billed total. A turn is one request per tool round
+ * trip and each re-sends the whole prompt — at an 800k context that is 800k of
+ * input per trip, nearly all of it re-read from cache. Summed, it reached
+ * fifteen million beside a context window reading 812k, which is a number that
+ * grows with round trips rather than with work and reads as a bug even when the
+ * arithmetic is right. What was actually produced is the honest headline; the
+ * rest is in the tooltip for when the question really is what it cost.
+ */
 function paintWorking() {
   if (!workingEl) return;
-  const { input, output } = turnTokens.value;
-  const tokens = input + output;
+  const { input, cached, output } = turnTokens.value;
   workingEl.querySelector('.sbx-working__label').textContent = activity.value || 'Working';
   workingEl.querySelector('.sbx-working__meta').textContent = [
     turnStartedAt ? elapsedLabel(Date.now() - turnStartedAt) : '',
-    tokens ? `${shortCount(tokens)} tokens` : '',
+    output ? `${shortCount(output)} written` : '',
   ].filter(Boolean).join(' · ');
+  const sent = input + cached;
+  workingEl.title = output || sent
+    ? [
+      `${output.toLocaleString()} tokens written`,
+      sent && `${sent.toLocaleString()} sent — ${cached.toLocaleString()} cached, ${input.toLocaleString()} new`,
+    ].filter(Boolean).join('\n')
+    : '';
 }
 
 function setWorking(on) {
@@ -597,30 +614,34 @@ watch([activity, turnTokens], paintWorking);
 // its own prompt. So finished requests are added up, and the one in flight is
 // replaced on every frame, because `message_delta` reports the answer so far
 // rather than an increment.
-let tokensDone = { input: 0, output: 0 };
-let tokensNow = { input: 0, output: 0 };
+const ZERO_TOKENS = { input: 0, cached: 0, output: 0 };
+let tokensDone = { ...ZERO_TOKENS };
+let tokensNow = { ...ZERO_TOKENS };
 
 function resetTokens() {
-  tokensDone = { input: 0, output: 0 };
-  tokensNow = { input: 0, output: 0 };
-  turnTokens.value = { input: 0, output: 0 };
+  tokensDone = { ...ZERO_TOKENS };
+  tokensNow = { ...ZERO_TOKENS };
+  turnTokens.value = { ...ZERO_TOKENS };
 }
 
 function noteUsage(item) {
   if (item.phase === 'start') {
     tokensDone = {
       input: tokensDone.input + tokensNow.input,
+      cached: tokensDone.cached + tokensNow.cached,
       output: tokensDone.output + tokensNow.output,
     };
-    tokensNow = { input: item.inputTokens, output: item.outputTokens };
+    tokensNow = { input: item.inputTokens, cached: item.cachedTokens, output: item.outputTokens };
   } else {
     tokensNow = {
       input: Math.max(tokensNow.input, item.inputTokens),
+      cached: Math.max(tokensNow.cached, item.cachedTokens),
       output: Math.max(tokensNow.output, item.outputTokens),
     };
   }
   turnTokens.value = {
     input: tokensDone.input + tokensNow.input,
+    cached: tokensDone.cached + tokensNow.cached,
     output: tokensDone.output + tokensNow.output,
   };
 }

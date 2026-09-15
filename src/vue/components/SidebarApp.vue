@@ -38,6 +38,7 @@
 import { computed } from 'vue';
 import { store } from '../store.js';
 import ProjectGroup from './ProjectGroup.vue';
+import { projectHasVisibleSessions } from '../session-filter.js';
 
 const props = defineProps({
   callbacks: { type: Object, required: true },
@@ -89,29 +90,16 @@ const visibleProjects = computed(() => {
       })
       .filter(Boolean);
   } else {
-    // Hide projects with no sessions surviving the active filters — except a
-    // project that has no sessions at all, which is a real project you have
-    // just added and the one place to start work in it is its own + button.
-    // Under a filter (Active, Pinned, Today, Archived) it is correctly absent:
-    // nothing in it can satisfy one.
-    const unfiltered = !store.showArchived && !store.showStarredOnly
-      && !store.showRunningOnly && !store.showTodayOnly;
-    projects = projects.filter(p => {
-      if (unfiltered && p.sessions.length === 0) return true;
-      let sessions = store.showArchived ? p.sessions : p.sessions.filter(s => !s.archived);
-      if (store.showStarredOnly) sessions = sessions.filter(s => s.starred);
-      if (store.showRunningOnly) sessions = sessions.filter(s => store.activePtyIds.has(s.sessionId));
-      if (store.showTodayOnly) {
-        const now = new Date();
-        const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-        sessions = sessions.filter(s => {
-          if (!s.modified) return false;
-          const d = new Date(s.modified);
-          return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` === todayStr;
-        });
-      }
-      return sessions.length > 0;
-    });
+    // A project with nothing surviving the filters is a collapsible header with
+    // nothing behind it, so it is not listed. The rules are filterSessions' —
+    // written out a second time here, they drifted.
+    projects = projects.filter(p => projectHasVisibleSessions(p, {
+      showArchived: store.showArchived,
+      showStarredOnly: store.showStarredOnly,
+      showRunningOnly: store.showRunningOnly,
+      showTodayOnly: store.showTodayOnly,
+      activePtyIds: store.activePtyIds,
+    }));
   }
 
   return projects.filter(p => !worktreeSet.value.has(p.projectPath));
