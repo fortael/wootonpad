@@ -75,7 +75,7 @@
           <!-- ── App shell — mirrors src/vue/components/App.vue ──────── -->
           <div class="sbx-shell">
             <TopNavApp
-              :tabs="store.sidebarCollapsed ? [] : TABS"
+              :tabs="TABS"
               :active-id="store.activeTab"
               :theme="store.theme"
               :sidebar-collapsed="store.sidebarCollapsed"
@@ -95,11 +95,10 @@
                 v-if="store.sidebarCollapsed"
                 :tabs="TABS"
                 :active-id="store.activeTab"
-                :projects="attentionProjects"
-                :active-project="store.attentionProject"
-                @select="setTab"
-                @select-project="onSelectAttentionProject"
-                @settings="onGlobalSettings"
+                @open-session="onSelectUnread"
+                @open-plan="planCallbacks.openPlan"
+                @open-project="projectsCallbacks.openProject"
+                @open-account="(acc) => accountsCallbacks.openAccountViewer(acc.id)"
                 @expand="store.sidebarCollapsed = false"
               />
 
@@ -734,33 +733,6 @@ function toggleTheme() {
 }
 
 // ── Active-session rail ──────────────────────────────────────────
-const ATTENTION_ORDER = { waiting: 0, done: 1, running: 2, idle: 3 };
-
-const attentionProjects = computed(() => {
-  const out = [];
-  for (const p of store.projects) {
-    const live = p.sessions.filter(s => store.activePtyIds.has(s.sessionId));
-    if (!live.length) continue;
-    let status = 'idle';
-    let reason = 'open';
-    if (live.some(s => store.attentionSessions.has(s.sessionId))) {
-      status = 'waiting'; reason = 'needs input';
-    } else if (live.some(s => store.responseReadySessions.has(s.sessionId))) {
-      status = 'done'; reason = 'response ready';
-    } else if (live.some(s => store.sessionBusyState.get(s.sessionId))) {
-      status = 'running'; reason = 'working';
-    }
-    out.push({
-      projectPath: p.projectPath,
-      name: p.projectPath.split('/').filter(Boolean).pop() || p.projectPath,
-      status,
-      reason,
-      count: live.length,
-    });
-  }
-  return out.sort((a, b) => ATTENTION_ORDER[a.status] - ATTENTION_ORDER[b.status]);
-});
-
 // Same set the app's rail shows — one entry per live or unread session, from
 // the mock store rather than a live one.
 const unreadRows = computed(() =>

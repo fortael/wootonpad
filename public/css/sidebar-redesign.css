@@ -309,6 +309,13 @@
   display: none;
 }
 
+/* Something is cut off to the right. The scrollbar is hidden, so without this
+   a narrow sidebar simply ended and the entries past the edge did not exist as
+   far as anyone could tell. Set from the component — see measure(). */
+.sbx-unread__rail.has-more {
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+
 /* Each avatar carries its status colour as --sbx-tone so the monogram and
    the count badge can both read it without an inline style. */
 .sbx-unread__avatar {
@@ -512,9 +519,8 @@
   object-fit: cover;
 }
 
-/* Open state (active or hovered) reveals the meta column and hides the
-   badge. Width intentionally snaps 30px → auto, matching the mockup, which
-   transitions only background, border-color and padding. */
+/* The name, revealed on hover and only there. Width snaps 30px → auto, which
+   is why only background, border-color and padding transition. */
 .sbx-unread__meta {
   display: none;
   flex-direction: column;
@@ -530,15 +536,20 @@
   font-weight: var(--weight-semibold);
 }
 
+/* The session you have open: marked, not expanded.
+   It used to widen to fit its name, which pushed everything after it out past
+   the scroll edge — and a rail whose other entries you cannot see is not
+   telling you what is running, which is its whole job. So the open one is a
+   filled chip with its status ring at full strength, the same 30px as the
+   rest, and its name is on hover like everyone else's. */
 .sbx-unread__avatar--open {
-  width: auto;
-  padding: 0 10px 0 var(--space-1);
   background: var(--surface-card-hover);
   border-color: var(--border-default);
 }
 
-.sbx-unread__avatar--open .sbx-unread__meta {
-  display: flex;
+.sbx-unread__avatar--open .sbx-unread__monogram {
+  box-shadow: 0 0 0 var(--border-width-thick) var(--sbx-tone),
+              0 0 0 calc(var(--border-width-thick) + 1px) var(--surface-card);
 }
 
 @media (hover: hover) {

@@ -147,10 +147,8 @@
    --orange-600. Fills and glows are already handled above. */
 [data-theme='light'] .sbx-topnav__tab.is-active .sbx-topnav__tab-underline,
 [data-theme='light'] .sbx-filtertabs__tab--active .sbx-filtertabs__underline,
-[data-theme='light'] .sbx-rail__btn.is-active::before,
 .theme-light .sbx-topnav__tab.is-active .sbx-topnav__tab-underline,
-.theme-light .sbx-filtertabs__tab--active .sbx-filtertabs__underline,
-.theme-light .sbx-rail__btn.is-active::before {
+.theme-light .sbx-filtertabs__tab--active .sbx-filtertabs__underline {
   background: var(--orange-600);
 }
 
@@ -167,9 +165,9 @@
 }
 
 [data-theme='light'] .sbx-commandbar__field:focus-within,
-[data-theme='light'] .sbx-rail__project.is-active,
+[data-theme='light'] .sbx-rail__item.is-active,
 .theme-light .sbx-commandbar__field:focus-within,
-.theme-light .sbx-rail__project.is-active {
+.theme-light .sbx-rail__item.is-active {
   border-color: var(--orange-600);
 }
 

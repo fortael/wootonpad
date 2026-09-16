@@ -1,8 +1,11 @@
 <template>
   <div class="sbx-shell">
   <!-- ── TOP NAV ────────────────────────────────────────────────── -->
+  <!-- The tabs stay put when the sidebar collapses: the rail below shows what
+       is *inside* the active tab, so moving the tabs into it as well would
+       leave nowhere to switch from. -->
   <TopNavApp
-    :tabs="store.sidebarCollapsed ? [] : TABS"
+    :tabs="TABS"
     :active-id="store.activeTab"
     :theme="store.theme"
     :sidebar-collapsed="store.sidebarCollapsed"
@@ -23,11 +26,10 @@
     v-if="store.sidebarCollapsed"
     :tabs="TABS"
     :active-id="store.activeTab"
-    :projects="attentionProjects"
-    :active-project="store.attentionProject"
-    @select="setTab"
-    @select-project="onSelectAttentionProject"
-    @settings="onGlobalSettings"
+    @open-session="openRailSession"
+    @open-plan="planCallbacks.openPlan"
+    @open-project="projectsCallbacks.openProject"
+    @open-account="onRailAccount"
     @expand="store.sidebarCollapsed = false"
   />
 
@@ -207,10 +209,7 @@
   </div><!-- /.sbx-shell__body -->
   </div><!-- /.sbx-shell -->
 
-  <!-- Status bar and grid cards rendered via Teleport into their existing container elements -->
-  <Teleport to="#status-bar">
-    <StatusBarApp ref="statusBarRef" />
-  </Teleport>
+  <!-- Grid cards rendered via Teleport into their existing container element -->
   <Teleport to="#vue-grid-cards">
     <GridCardsApp ref="gridCardsRef" />
   </Teleport>
@@ -238,13 +237,12 @@ import SessionSdkApp from './SessionSdkApp.vue';
 import { loadSidePanelTab } from '../side-panel-tabs.js';
 import { isPlainTerminal } from '../session-filter.js';
 import { matchProjectPaths } from '../project-search.js';
-import { OPEN_ORDER, mostUrgent, worstColumn, wantsAttention, activeSessions, stateFromStore } from '../session-column.js';
+import { wantsAttention, activeSessions, stateFromStore } from '../session-column.js';
 import { parseRateLimitEvent } from '../rate-limits.js';
 import PlansApp from './PlansApp.vue';
 import AccountsApp from './AccountsApp.vue';
 import AccountDropdownApp from './AccountDropdownApp.vue';
 import ProjectsApp from './ProjectsApp.vue';
-import StatusBarApp from './StatusBarApp.vue';
 import GridCardsApp from './GridCardsApp.vue';
 import SettingsPanelApp from './SettingsPanelApp.vue';
 import ProjectViewerApp from './ProjectViewerApp.vue';
@@ -262,7 +260,6 @@ const plansRef = ref(null);
 const accountsRef = ref(null);
 const accountDropdownRef = ref(null);
 const projectsRef = ref(null);
-const statusBarRef = ref(null);
 const gridCardsRef = ref(null);
 const projectViewerRef = ref(null);
 const jsonlRef = ref(null);
@@ -454,37 +451,6 @@ function toggleTheme() {
   applyTheme(store.theme === 'light' ? 'dark' : 'light');
 }
 
-// ── Active-session rail ──────────────────────────────────────────
-// One entry per project that currently has a live session, worst status first
-// so the projects wanting an answer sit at the front of the rail.
-const REASONS = {
-  waiting: 'needs input', done: 'response ready', running: 'working', idle: 'active',
-};
-
-const attentionProjects = computed(() => {
-  const state = stateFromStore(store);
-  const out = [];
-  for (const p of store.projects) {
-    const live = p.sessions.filter(s => store.activePtyIds.has(s.sessionId));
-    if (!live.length) continue;
-    const status = worstColumn(live, state);
-    out.push({
-      projectPath: p.projectPath,
-      name: p.projectPath.split('/').filter(Boolean).pop() || p.projectPath,
-      status,
-      // Everything in this list is live, so 'idle' still reads as active —
-      // saying otherwise would contradict the session header.
-      reason: REASONS[status],
-      count: live.length,
-      recency: Math.max(...live.map(s => new Date(s.modified || 0).getTime() || 0)),
-    });
-  }
-  // Waiting first, then the most recent within each band — the rail is a
-  // worklist, so its front should always be the next thing to deal with.
-  return out.sort((a, b) =>
-    OPEN_ORDER[a.status] - OPEN_ORDER[b.status] || b.recency - a.recency);
-});
-
 // ── Plan meters ──────────────────────────────────────────────────
 //
 // The 5-hour and 7-day limits belong to the account, not to any one chat, so
@@ -567,20 +533,10 @@ function openRailSession(session) {
   if (session) window.__sb?.openSession?.(session);
 }
 
-// The collapsed rail still addresses entries by display name; it and the store
-// speak projectPath.
-function onSelectAttentionProject(projectPath) {
-  store.attentionProject = projectPath;
-  // The rail is on every tab, so a click from Plans or Projects has to take
-  // you where the session actually lives.
-  if (store.activeTab !== 'sessions') setTab('sessions');
-  const project = store.projects.find(p => p.projectPath === projectPath);
-  const live = project?.sessions.filter(s => store.activePtyIds.has(s.sessionId)) || [];
-  if (!live.length) return;
-  // Not the newest — the most urgent. A project with a dozen live sessions has
-  // one that is actually holding a dialog, and that is the one the click means.
-  const target = mostUrgent(live, stateFromStore(store));
-  if (target) window.__sb?.openSession?.(target);
+// The collapsed rail's accounts list hands over the account; the viewer wants
+// its id.
+function onRailAccount(account) {
+  if (account?.id) window.__sb?.openAccountViewer?.(account.id);
 }
 
 // ── Tab switching ────────────────────────────────────────────────
@@ -786,11 +742,6 @@ onMounted(async () => {
     setSearch: (q) => projectsRef.value?.setSearch(q),
     clearActive: () => projectsRef.value?.clearActive(),
     updateProjectInfo: (path, info) => projectsRef.value?.updateProjectInfo(path, info),
-  });
-  Object.assign(window.vueStatusBar, {
-    setInfo: (text) => statusBarRef.value?.setInfo(text),
-    setActivity: (text, type) => statusBarRef.value?.setActivity(text, type),
-    setUpdater: (text, duration) => statusBarRef.value?.setUpdater(text, duration),
   });
   // GridCardsApp exposes addCard/updateCard/removeCard/clearAll directly
   window.vueGrid = gridCardsRef.value;

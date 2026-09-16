@@ -153,6 +153,7 @@ import { store } from '../store.js';
 import SbIcon from './SbIcon.vue';
 import ProjectAvatar from './ProjectAvatar.vue';
 import { filterSessions } from '../session-filter.js';
+import { boardFilters as filtersForBoard, boardProjectRows } from '../board-projects.js';
 import { sessionTitle } from '../session-title.js';
 import { focusLevel } from '../board-focus.js';
 
@@ -165,41 +166,11 @@ const props = defineProps({
 // furthest from the user's attention.
 const MAX_SUMMARIZED = 12;
 
-// Same rules SessionBoardApp applies, minus the project filter — these counts
-// are what you would see *if* you picked that project, which is the only
-// reading that lets you move between them.
-const boardFilters = computed(() => ({
-  showArchived: store.showArchived,
-  showStarredOnly: store.showStarredOnly,
-  showRunningOnly: store.showRunningOnly,
-  showTodayOnly: store.showTodayOnly,
-  searchMatchIds: store.searchMatchIds,
-  activePtyIds: store.activePtyIds,
-  // Matching the board itself — these counts have to be the number of cards
-  // picking that project would show, terminals included in neither.
-  showTerminals: false,
-}));
+// Shared with the collapsed rail, which draws this same list as avatars —
+// see board-projects.js.
+const boardFilters = computed(() => filtersForBoard(store));
 
-const rows = computed(() => {
-  const out = [];
-  for (const project of store.projects) {
-    // Same rule as the board itself: a project the query named counts all of
-    // its sessions, not just the ones whose titles matched too.
-    const filters = store.searchMatchProjectPaths?.has(project.projectPath)
-      ? { ...boardFilters.value, searchMatchIds: null }
-      : boardFilters.value;
-    const count = filterSessions(project.sessions, filters).length;
-    if (!count) continue;
-    out.push({
-      projectPath: project.projectPath,
-      name: project.projectPath.split('/').filter(Boolean).pop() || project.projectPath,
-      count,
-      // The new-session popover needs the project itself, not just its path.
-      project,
-    });
-  }
-  return out.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
-});
+const rows = computed(() => boardProjectRows(store));
 
 const total = computed(() => rows.value.reduce((n, r) => n + r.count, 0));
 

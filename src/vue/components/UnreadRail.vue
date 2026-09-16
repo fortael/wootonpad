@@ -10,7 +10,13 @@
       <span class="sbx-unread__count">{{ rows.length }}</span>
     </div>
 
-    <div v-if="rows.length" class="sbx-unread__rail">
+    <div
+      v-if="rows.length"
+      ref="railRef"
+      class="sbx-unread__rail"
+      :class="{ 'has-more': hasMore }"
+      @scroll.passive="measure"
+    >
       <button
         v-for="row in rows"
         :key="row.sessionId"
@@ -57,7 +63,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue';
+import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import ProjectAvatar from './ProjectAvatar.vue';
 import { sessionTitle } from '../session-title.js';
 
@@ -111,4 +117,40 @@ const rows = computed(() => (props.items || []).map((item) => {
 // Only the unread half lights the header's dot. The rail being full of working
 // sessions is not something to deal with.
 const unreadCount = computed(() => rows.value.filter((row) => row.unread).length);
+
+// ── There is more to the right ────────────────────────────────────
+//
+// The rail scrolls with its scrollbar hidden, so a sidebar narrow enough to cut
+// the list off said nothing about it. A fade at the edge is the whole hint —
+// but only while something is actually cut off, otherwise it dims the last
+// avatar for no reason.
+const railRef = ref(null);
+const hasMore = ref(false);
+let observer = null;
+
+function measure() {
+  const el = railRef.value;
+  if (!el) { hasMore.value = false; return; }
+  hasMore.value = el.scrollWidth - el.scrollLeft - el.clientWidth > 2;
+}
+
+// The sidebar is resizable, so width changes without the window changing.
+onMounted(() => {
+  measure();
+  if (typeof ResizeObserver === 'function') {
+    observer = new ResizeObserver(measure);
+    if (railRef.value) observer.observe(railRef.value);
+  }
+});
+
+onBeforeUnmount(() => { observer?.disconnect(); observer = null; });
+
+watch(() => rows.value.length, () => {
+  nextTick(() => {
+    measure();
+    // The rail is created on the first entry and destroyed with the last, so
+    // the element the observer is watching is not always the same one.
+    if (observer && railRef.value) { observer.disconnect(); observer.observe(railRef.value); }
+  });
+});
 </script>

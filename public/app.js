@@ -723,7 +723,6 @@ async function loadProjects({ resort = false } = {}) {
   await pollActiveSessions();
   refreshSidebar({ resort });
   refreshHeaderSession();
-  renderDefaultStatus();
 }
 
 /**
@@ -1206,25 +1205,12 @@ window.api.onProjectsChanged(() => {
   }, 300);
 });
 
-// Status bar
-function renderDefaultStatus() {
-  const totalSessions = cachedAllProjects.reduce((n, p) => n + p.sessions.length, 0);
-  const totalProjects = cachedAllProjects.length;
-  const running = activePtyIds.size;
-  const parts = [];
-  if (running > 0) parts.push(`${running} running`);
-  parts.push(`${totalSessions} sessions`);
-  parts.push(`${totalProjects} projects`);
-  window.vueStatusBar?.setInfo(parts.join(' \u00b7 '));
-}
-
-window.api.onStatusUpdate((text, type) => {
-  window.vueStatusBar?.setActivity(text, type);
-});
-
 // --- Auto-update status + toast ---
-function setUpdaterStatus(text, duration) {
-  window.vueStatusBar?.setUpdater(text, duration);
+// The status bar these lines used to be written into is gone. The one state
+// that has to reach the user — a downloaded update waiting for a restart —
+// has its own toast below; the rest are progress notes and go to the console.
+function setUpdaterStatus(text) {
+  console.info('[updater]', text);
 }
 const updaterHandler = (type, data) => {
   switch (type) {
@@ -1667,7 +1653,7 @@ window.__sb = {
     const projectPath = sessionMap.get(id)?.projectPath || pendingSessions.get(id)?.projectPath || null;
     const result = await window.api.deleteSession(id, projectPath);
     if (!result?.ok) {
-      window.vueStatusBar?.setActivity('Delete failed: ' + (result?.error || 'unknown error'), 'error');
+      alert('Delete failed: ' + (result?.error || 'unknown error'));
       return;
     }
     destroySession(id);

@@ -139,12 +139,19 @@ onUnmounted(() => {
 });
 
 defineExpose({
+  // This is the one account list that is loaded at startup rather than when a
+  // tab is opened, so it is also where the store copy the collapsed rail reads
+  // comes from.
   setAccounts(list, activeId, usageObj) {
     accounts.value = list;
-    if (activeId !== undefined) activeAccountId.value = activeId;
+    store.accounts = list || [];
+    if (activeId !== undefined) {
+      activeAccountId.value = activeId;
+      store.activeAccountId = activeId;
+    }
     if (usageObj !== undefined) usage.value = usageObj;
   },
-  setActiveAccount(id) { activeAccountId.value = id; },
+  setActiveAccount(id) { activeAccountId.value = id; store.activeAccountId = id; },
   setUsage(usageObj) { usage.value = { ...usageObj }; },
   close,
 });

@@ -273,10 +273,14 @@ async function loadWslHomes() {
 defineExpose({
   setAccounts(list, activeId) {
     accounts.value = list;
-    if (activeId !== undefined) activeAccountId.value = activeId;
+    store.accounts = list || [];
+    if (activeId !== undefined) {
+      activeAccountId.value = activeId;
+      store.activeAccountId = activeId;
+    }
     loadWslHomes();
   },
-  setActiveAccount(id) { activeAccountId.value = id; },
+  setActiveAccount(id) { activeAccountId.value = id; store.activeAccountId = id; },
   setUsage(usageObj) { usage.value = { ...usageObj }; },
   setSearch(q) { searchQuery.value = q || ''; },
 });

@@ -140,6 +140,13 @@ export const store = reactive({
   // is in that file" belongs beside the conversation, not in place of it.
   sidePanelFile: null,
 
+  // Mirrored out of the tab panels that own them, because the collapsed rail
+  // draws the same lists while those panels are folded away. The panels stay
+  // the source of truth — these are written on their way in.
+  plans: [],
+  accounts: [],
+  activeAccountId: 'default',
+
   // Project avatars: projectPath → data: URL string
   avatarDataUrls: {},
 });

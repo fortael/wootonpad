@@ -75,8 +75,12 @@ test('the board asks for the terminal-free set', () => {
   assert.match(sfc('SessionBoardApp.vue'), /showTerminals:\s*false/, 'the board draws terminals again');
 });
 
+// The sidebar and the collapsed rail both draw this list, so the option lives
+// in the module they share rather than in either component.
 test("the board's sidebar counts match the board", () => {
-  assert.match(sfc('BoardSidebarApp.vue'), /showTerminals:\s*false/, 'the counts include terminals the board will not draw');
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', 'src', 'vue', 'board-projects.js'), 'utf8');
+  assert.match(source, /showTerminals:\s*false/, 'the counts include terminals the board will not draw');
 });
 
 // The sessions list must NOT pass it — a terminal you launched has to appear

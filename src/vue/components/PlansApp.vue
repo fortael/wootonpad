@@ -320,7 +320,9 @@ function openPlan(plan) {
 defineExpose({
   // Plans are reloaded whenever the tab is opened or the account changes, and
   // notes are scoped to the same account — so they refresh on the same beat.
-  setPlans(list) { plans.value = list; refreshNotes(); },
+  // The store copy is what the collapsed rail draws: this panel is folded away
+  // by then, but it is still the thing that loaded the list.
+  setPlans(list) { plans.value = list; store.plans = list || []; refreshNotes(); },
   setActive(filename) { activePlan.value = filename; activeNote.value = null; },
   clearActive() { activePlan.value = null; activeNote.value = null; },
   refreshNotes,

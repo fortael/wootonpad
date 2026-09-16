@@ -467,7 +467,6 @@ window.vuePlans = {};
 window.vueAccounts = {};
 window.vueProjects = {};
 window.vuePlanViewer = {};
-window.vueStatusBar = {};
 window.vueAccountDropdown = {};
 window.vueGrid = {};
 window.vueDialogs = {};

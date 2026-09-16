@@ -199,12 +199,6 @@
   margin: 2px 0;
 }
 
-.sbx-rail__nav {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
 .sbx-rail__btn {
   position: relative;
   width: 38px;
@@ -221,19 +215,10 @@
   transition: background var(--duration-fast) var(--ease-standard);
 }
 .sbx-rail__btn:hover { background: var(--surface-card); }
-.sbx-rail__btn.is-active { background: var(--surface-card-hover); }
-.sbx-rail__btn.is-active::before {
-  content: '';
-  position: absolute;
-  left: -6px;
-  top: 9px;
-  bottom: 9px;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--orange-500);
-}
 
-.sbx-rail__projects {
+/* The folded sidebar's contents — whatever the active tab lists, one avatar
+   per row. The full name is the hover tooltip; there is no room for it here. */
+.sbx-rail__items {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -245,9 +230,9 @@
   padding: 2px 0;
   scrollbar-width: none;
 }
-.sbx-rail__projects::-webkit-scrollbar { width: 0; }
+.sbx-rail__items::-webkit-scrollbar { width: 0; }
 
-.sbx-rail__project {
+.sbx-rail__item {
   position: relative;
   width: 34px;
   height: 34px;
@@ -264,8 +249,17 @@
   transition: opacity var(--duration-fast) var(--ease-standard),
               border-color var(--duration-fast) var(--ease-standard);
 }
-.sbx-rail__project:hover { opacity: 1; border-color: var(--border-default); }
-.sbx-rail__project.is-active { opacity: 1; border-color: var(--orange-500); }
+.sbx-rail__item:hover { opacity: 1; border-color: var(--border-default); }
+.sbx-rail__item.is-active { opacity: 1; border-color: var(--orange-500); }
+
+.sbx-rail__empty {
+  margin: 0;
+  padding: 0 4px;
+  font-size: var(--text-2xs);
+  line-height: 1.3;
+  text-align: center;
+  color: var(--text-disabled);
+}
 
 .sbx-rail__avatar {
   width: 26px;
@@ -280,6 +274,10 @@
   color: var(--text-on-accent);
   overflow: hidden;
 }
+
+/* Plans and accounts have no folder to hash a colour out of, so the monogram
+   is built from the name itself — same palette, same square. */
+.sbx-rail__avatar--mono { flex-shrink: 0; }
 
 .sbx-rail__dot {
   position: absolute;
@@ -311,9 +309,6 @@
   border: 2px solid var(--surface-panel);
   box-sizing: content-box;
 }
-
-.sbx-rail__spacer { flex: none; }
-.sbx-rail__spacer.is-flex { flex: 1; }
 
 /* ── Plans empty state ───────────────────────────────────────────────────
    The plans directory follows the active account, so the empty state names
