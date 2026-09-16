@@ -159,10 +159,16 @@ function pluginCommandArgv(action, options = {}) {
       return ['plugin', 'install', plugin, '--scope', scope, '--yes'];
     case 'uninstall':
       return ['plugin', 'uninstall', plugin, '--scope', scope];
+    // The CLI auto-detects the scope from its cwd when none is given, which is
+    // only right for a user-scoped plugin. For one installed against a checkout
+    // the caller knows the answer, and passing it means a project-scoped plugin
+    // is switched off where it was switched on — not in the account's
+    // settings.json, which never mentioned it.
     case 'enable':
-      return ['plugin', 'enable', plugin];
     case 'disable':
-      return ['plugin', 'disable', plugin];
+      return options.scope && SCOPES.includes(options.scope)
+        ? ['plugin', action, plugin, '--scope', options.scope]
+        : ['plugin', action, plugin];
     default:
       throw new Error(`Unknown plugin action: ${action}`);
   }

@@ -53,6 +53,125 @@ function makeInlineContent(className, bodyContent) {
   return wrapper;
 }
 
+// ── Fenced code, as a block worth looking at ──────────────────────
+//
+// A fence used to render as the browser's own `<pre>`: grey text on a grey
+// slab, indistinguishable from the tool output above it and from the prose
+// around it. It now gets a frame, the language it is in, colour from the
+// language's own parser — see highlightCodeToHtml in codemirror-setup.js — and
+// the one control anybody actually wants from a code block.
+//
+// Highlighting is best-effort: an unknown fence, an unparsable block or one
+// too long to bother with renders plain inside the same frame.
+
+const COPY_LABEL = 'Copy';
+const COPIED_LABEL = 'Copied';
+
+function copyCodeBlock(button) {
+  const block = button.closest('.jsonl-code');
+  const source = block?.querySelector('pre');
+  if (!source) return;
+  const label = button.querySelector('.jsonl-code__label') || button;
+  navigator.clipboard?.writeText(source.textContent || '').then(() => {
+    label.textContent = COPIED_LABEL;
+    button.classList.add('is-done');
+    clearTimeout(Number(button.dataset.copyTimer));
+    button.dataset.copyTimer = String(setTimeout(() => {
+      label.textContent = COPY_LABEL;
+      button.classList.remove('is-done');
+    }, 1400));
+  }).catch(() => {
+    label.textContent = 'Failed';
+    setTimeout(() => { label.textContent = COPY_LABEL; }, 1400);
+  });
+}
+
+/** Wrap every fenced block in `container`, colouring what can be coloured. */
+function enhanceCodeBlocks(container) {
+  if (!container) return container;
+  for (const pre of container.querySelectorAll('pre')) {
+    // Tool bodies are their own thing — the terminal, the diff — and they are
+    // not markdown. Only what marked produced is touched.
+    const code = pre.firstElementChild;
+    if (!code || code.tagName !== 'CODE' || pre.parentElement?.classList.contains('jsonl-code')) continue;
+
+    const declared = (code.className.match(/language-([\w+#.-]+)/) || [])[1] || '';
+    const known = window.normalizeCodeLanguage?.(declared) || '';
+    const html = window.highlightCodeToHtml?.(code.textContent, declared);
+    if (html) code.innerHTML = html;
+
+    const block = document.createElement('div');
+    block.className = 'jsonl-code';
+    const head = document.createElement('div');
+    head.className = 'jsonl-code__head';
+    head.innerHTML = '<span class="jsonl-code__lang">'
+      + escHtml(known || declared || 'code')
+      + '</span><button type="button" class="jsonl-code__copy" aria-label="Copy code">'
+      + `<span class="jsonl-code__label">${COPY_LABEL}</span></button>`;
+
+    pre.replaceWith(block);
+    block.appendChild(head);
+    block.appendChild(pre);
+  }
+  return container;
+}
+
+/** Markdown into an element, with its code blocks made into code blocks. */
+function setRichText(el, text) {
+  el.innerHTML = renderJsonlText(text);
+  enhanceCodeBlocks(el);
+  return el;
+}
+
+// ── Clicks, delegated ─────────────────────────────────────────────
+//
+// One listener for the whole renderer rather than a closure per node. Both of
+// the things it handles sit inside a tool's body, and a folded body is kept as
+// HTML and rebuilt when it is opened — see collapseToolBlock. A handler bound
+// to the node itself does not survive that round trip; a rule matching on the
+// class does.
+function openLightbox(src) {
+  if (!src) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'jsonl-screenshot-fullscreen';
+  const full = document.createElement('img');
+  full.src = src;
+  overlay.appendChild(full);
+  overlay.onclick = () => overlay.remove();
+  document.body.appendChild(overlay);
+}
+
+function onRendererClick(event) {
+  const target = event.target;
+  if (!target?.closest) return;
+
+  const copy = target.closest('.jsonl-code__copy');
+  if (copy) {
+    copyCodeBlock(copy);
+    return;
+  }
+
+  // makeCollapsible's own header: the body is its next sibling.
+  const toggle = target.closest('.jsonl-toggle');
+  if (toggle) {
+    const body = toggle.nextElementSibling;
+    if (body?.classList.contains('jsonl-tool-body')) {
+      const showing = body.style.display !== 'none';
+      body.style.display = showing ? 'none' : '';
+      toggle.classList.toggle('expanded', !showing);
+    }
+    return;
+  }
+
+  const img = target.closest('.jsonl-clickable-img');
+  if (img) openLightbox(img.getAttribute('src'));
+}
+
+if (typeof document !== 'undefined' && !document.__jsonlClickDelegate) {
+  document.__jsonlClickDelegate = true;
+  document.addEventListener('click', onRendererClick);
+}
+
 function makeCollapsible(className, headerText, bodyContent, startExpanded) {
   const wrapper = document.createElement('div');
   wrapper.className = className;
@@ -61,17 +180,14 @@ function makeCollapsible(className, headerText, bodyContent, startExpanded) {
   header.textContent = headerText;
   const body = document.createElement('pre');
   body.className = 'jsonl-tool-body';
+  // Inline, so the open/closed state is part of the markup and survives a
+  // fold-and-rebuild.
   body.style.display = startExpanded ? '' : 'none';
   if (typeof bodyContent === 'string') {
     body.textContent = bodyContent;
   } else {
     try { body.textContent = JSON.stringify(bodyContent, null, 2); } catch { body.textContent = String(bodyContent); }
   }
-  header.onclick = () => {
-    const showing = body.style.display !== 'none';
-    body.style.display = showing ? 'none' : '';
-    header.classList.toggle('expanded', !showing);
-  };
   wrapper.appendChild(header);
   wrapper.appendChild(body);
   return wrapper;
@@ -99,6 +215,39 @@ function toolBlock(color, label, summary, content) {
   return el;
 }
 
+// ── Folding ───────────────────────────────────────────────────────
+//
+// A folded body is taken out of the document, not hidden inside it. `display:
+// none` costs nothing to lay out, but the nodes and their text stay in the
+// tree, and in a chat almost every tool call is folded: measured on one
+// 418-message session, 60 folded blocks were holding 240 nodes and ~172 KB of
+// text that nothing was going to look at. What is kept instead is the markup
+// that produced them, as one string, and the body is built back from it when
+// the row is opened.
+//
+// The cost is that handlers bound to nodes inside a body do not survive the
+// round trip, which is why the two that exist are delegated — see
+// onRendererClick. Anything new inside a tool body has to go the same way.
+//
+/** @type {WeakMap<HTMLElement, { html: string }>} the markup of a folded body */
+const foldedBodies = new WeakMap();
+
+function stashToolBody(el, body) {
+  foldedBodies.set(el, { html: body.innerHTML });
+  body.remove();
+  el.classList.remove('is-open');
+}
+
+function unstashToolBody(el, folded) {
+  const body = document.createElement('div');
+  body.className = 'jsonl-tool-content';
+  body.innerHTML = folded.html;
+  el.appendChild(body);
+  foldedBodies.delete(el);
+  el.classList.add('is-open');
+  return body;
+}
+
 /**
  * Fold a tool block's body away and make its header the toggle.
  *
@@ -116,13 +265,34 @@ function collapseToolBlock(el) {
   if (!header || !body || body.parentNode !== el) return el;
 
   el.classList.add('jsonl-tool-block--foldable');
-  body.style.display = 'none';
+  stashToolBody(el, body);
   header.onclick = () => {
-    const showing = body.style.display !== 'none';
-    body.style.display = showing ? 'none' : '';
-    el.classList.toggle('is-open', !showing);
+    const folded = foldedBodies.get(el);
+    if (folded) unstashToolBody(el, folded);
+    else {
+      const open = el.querySelector('.jsonl-tool-content');
+      if (open) stashToolBody(el, open);
+    }
   };
   return el;
+}
+
+/**
+ * Write into a tool's body, open or folded.
+ *
+ * A result arrives seconds after its call and by then the row is folded, so
+ * this is the normal path rather than the exception: the markup is parsed into
+ * a scratch node, `fn` appends to that, and what comes out replaces the stash.
+ * Synchronous on purpose — `fn` must be done appending when it returns.
+ */
+function withToolContent(toolEl, fn) {
+  const folded = foldedBodies.get(toolEl);
+  if (!folded) return fn(toolContent(toolEl));
+  const scratch = document.createElement('div');
+  scratch.innerHTML = folded.html;
+  const out = fn(scratch);
+  folded.html = scratch.innerHTML;
+  return out;
 }
 
 function shortPath(p) {
@@ -635,13 +805,19 @@ const toolRenderers = {
   Bash(input) {
     const cmd = input.command || '';
     const pre = document.createElement('pre');
-    pre.className = 'jsonl-tool-cmd-block';
+    // Opened, a shell call is a terminal: the line that was typed, and what
+    // came back under it. The two panes are drawn off these classes — the
+    // answer is appended into the same body later, by applyToolResult, so the
+    // block is marked here and the stylesheet does the rest.
+    pre.className = 'jsonl-tool-cmd-block jsonl-term__in';
     pre.textContent = cmd;
     // The header is all there is while the call is folded, and "Bash" alone
     // was the one row in the transcript you could not identify without opening
     // it — every other tool names its file or its pattern.
     const head = truncateCommand(cmd);
-    return toolBlock(TOOL_COLOR.Bash, 'Bash', head ? '<code>' + escHtml(head) + '</code>' : null, pre);
+    const el = toolBlock(TOOL_COLOR.Bash, 'Bash', head ? '<code>' + escHtml(head) + '</code>' : null, pre);
+    el.classList.add('jsonl-tool-block--bash');
+    return el;
   },
 
   Grep(input) {
@@ -760,13 +936,15 @@ function renderToolUse(block) {
 
 function renderLocalCommand({ cmd, output }) {
   const pre = document.createElement('pre');
-  pre.className = 'jsonl-tool-cmd-block';
+  pre.className = 'jsonl-tool-cmd-block jsonl-term__in';
   pre.textContent = cmd;
 
   const head = truncateCommand(cmd);
   const el = toolBlock(TOOL_COLOR.Bash, 'Bash',
     '<span class="jsonl-tool-detail">local</span>'
     + (head ? ' <code>' + escHtml(head) + '</code>' : ''), pre);
+  // A command the user typed is the same two panes as one the model ran.
+  el.classList.add('jsonl-tool-block--bash');
 
   if (output) {
     let contentEl = el.querySelector('.jsonl-tool-content');
@@ -776,7 +954,7 @@ function renderLocalCommand({ cmd, output }) {
       el.appendChild(contentEl);
     }
     const resultPre = document.createElement('pre');
-    resultPre.className = 'jsonl-tool-cmd-block';
+    resultPre.className = 'jsonl-tool-cmd-block jsonl-term__out';
     resultPre.textContent = output;
     contentEl.appendChild(resultPre);
   }
@@ -1034,19 +1212,11 @@ function extractResultText(data) {
  * @param {string} src   a `data:` or `file:` URL
  * @param {string} [extra] one more class, for the callers that style it
  */
+// Opening it full size is handled by the delegate above, off the class.
 function makeChatImage(src, extra) {
   const img = document.createElement('img');
   img.className = 'jsonl-tool-screenshot jsonl-clickable-img' + (extra ? ` ${extra}` : '');
   img.src = src;
-  img.onclick = () => {
-    const overlay = document.createElement('div');
-    overlay.className = 'jsonl-screenshot-fullscreen';
-    const full = document.createElement('img');
-    full.src = src;
-    overlay.appendChild(full);
-    overlay.onclick = () => overlay.remove();
-    document.body.appendChild(overlay);
-  };
   return img;
 }
 
@@ -1114,11 +1284,58 @@ function unwrapResult(data) {
     : { content: data, isError: false };
 }
 
+// ── What a shell call cost the context ────────────────────────────
+//
+// A command's output goes into the conversation whole, and the ones that eat a
+// window are not the ones that look expensive: `git log` is four lines, one
+// `go test ./...` is four thousand. Folded, nothing on the row said so.
+//
+// No token count is written down anywhere — a Bash result carries stdout,
+// stderr and a return code and nothing else — so this is an estimate from the
+// output's length at four characters to the token, and it says `~` because of
+// that.
+//
+// The bands are calibrated, not guessed: across 3537 shell results in the eight
+// largest transcripts on this machine the median call was ~97 tokens and the
+// 75th percentile ~292. 400 / 1200 / 3000 puts 82% of calls in the quiet grey,
+// 16% in amber, 2% in orange and 0.2% in red — so the colour means "unusual"
+// rather than "large", which is the only way it is worth looking at.
+const CHARS_PER_TOKEN = 4;
+const WEIGHT_BANDS = [
+  { from: 3000, cls: ' is-red' },
+  { from: 1200, cls: ' is-orange' },
+  { from: 400, cls: ' is-amber' },
+];
+
+function markToolWeight(toolEl, content) {
+  // Bash only. The bands are the shape of *shell* output; a Read of a long file
+  // is legitimately thousands of tokens and would sit permanently in red.
+  if (!toolEl?.classList?.contains('jsonl-tool-block--bash')) return;
+  const header = toolEl.querySelector('.jsonl-tool-header');
+  if (!header) return;
+
+  const text = typeof content === 'string' ? content : (extractResultText(content) || '');
+  const tokens = Math.round(text.length / CHARS_PER_TOKEN);
+  if (!tokens) return;
+
+  let chip = header.querySelector('.jsonl-tool-weight');
+  if (!chip) {
+    chip = document.createElement('span');
+    // Before the duration, which stays pinned to the right edge of the row.
+    header.insertBefore(chip, header.querySelector('.jsonl-tool-took'));
+  }
+  chip.className = 'jsonl-tool-weight' + (WEIGHT_BANDS.find(b => tokens >= b.from)?.cls || '');
+  chip.textContent = '~' + shortTokenCount(tokens);
+  chip.title = `${text.length.toLocaleString()} characters of output`
+    + ` — roughly ${tokens.toLocaleString()} tokens of context`;
+}
+
 /** The tool's answer, into the call it belongs to, marked if it failed. */
 function applyToolResult(toolEl, data) {
   const { content, isError } = unwrapResult(data);
-  renderToolResult(content, toolContent(toolEl));
+  withToolContent(toolEl, (body) => renderToolResult(content, body));
   if (isError) markToolFailed(toolEl, content);
+  markToolWeight(toolEl, content);
   return isError;
 }
 
@@ -1235,6 +1452,9 @@ function renderOrphanResult(content, opts = {}) {
     body.children.length ? body : null,
   );
   el.classList.add('jsonl-tool-block--orphan');
+  // Output with no command above it is still shell output. One pane instead of
+  // two, which is the honest shape: the line that was typed is not here.
+  if (name === 'Bash') el.classList.add('jsonl-tool-block--bash');
   // So it can stop being an orphan. Pages load upward, so the call this
   // answers may well arrive after it — see adoptOrphanResults.
   if (opts.toolUseId) el.dataset.orphanFor = opts.toolUseId;
@@ -1264,11 +1484,15 @@ function adoptOrphanResults(container) {
     const call = container.querySelector(`[data-tool-use-id="${CSS.escape(id)}"]`);
     if (!call || !call.classList.contains('jsonl-tool-block')) continue;
 
-    const target = toolContent(call);
-    for (const node of Array.from(orphan.querySelector('.jsonl-tool-content')?.childNodes || [])) {
-      target.appendChild(node);
-    }
-    if (orphan.dataset.orphanError) markToolFailed(call, target.textContent || '');
+    // The call may already be folded, in which case its body is a string and
+    // the move goes through a scratch node — see withToolContent.
+    const text = withToolContent(call, (target) => {
+      for (const node of Array.from(orphan.querySelector('.jsonl-tool-content')?.childNodes || [])) {
+        target.appendChild(node);
+      }
+      return target.textContent || '';
+    });
+    if (orphan.dataset.orphanError) markToolFailed(call, text);
     if (!call.classList.contains('jsonl-tool-block--foldable')) collapseToolBlock(call);
 
     // The block was wrapped in an entry of its own; an entry with nothing left
@@ -1301,7 +1525,7 @@ function renderUserPrompt(prompt) {
   if (text) {
     const body = document.createElement('div');
     body.className = 'jsonl-text';
-    body.innerHTML = renderJsonlText(text);
+    setRichText(body, text);
     decorateMentions(body);
     el.appendChild(body);
   }
@@ -1508,7 +1732,7 @@ function renderViewItems(items, toolResults, opts) {
         el.className = 'jsonl-entry ' + (item.role === 'user' ? 'jsonl-user' : 'jsonl-assistant');
         const text = document.createElement('div');
         text.className = 'jsonl-text';
-        text.innerHTML = renderJsonlText(item.text.trim());
+        setRichText(text, item.text.trim());
         // Only what the user wrote: a path Claude mentions in prose is already
         // a tool call two rows down, and the sentence is not the way to it.
         if (item.role === 'user') decorateMentions(text);
@@ -1761,7 +1985,7 @@ function renderJsonlEntry(entry, toolResultMap, opts) {
       }
       const textEl = document.createElement('div');
       textEl.className = 'jsonl-text';
-      textEl.innerHTML = renderJsonlText(block.text.trim());
+      setRichText(textEl, block.text.trim());
       if (visualRole === 'user') decorateMentions(textEl);
       div.appendChild(textEl);
     } else if (block.type === 'tool_use') {

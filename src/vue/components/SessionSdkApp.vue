@@ -932,6 +932,23 @@ async function send() {
   startTurnWatchdog();
   nextTick(() => { autoGrow(); inputRef.value?.focus(); });
 
+  // A stopped session has no process to take this. Stopping one is how you put
+  // a conversation down, and typing into it is how you pick it back up — so
+  // the prompt starts the session rather than bouncing off it with "the
+  // session is gone", which is what it used to do.
+  if (!store.activePtyIds?.has(sessionId.value)) {
+    activity.value = 'Resuming';
+    const back = await window.__sb?.resumeSession?.(sessionId.value);
+    if (!back) {
+      busy.value = false;
+      append(renderViewItems([{
+        kind: 'notice', level: 'error',
+        text: 'This session could not be started again, so that prompt was not sent.',
+      }], null, { at: Date.now() }));
+      return;
+    }
+  }
+
   const res = await window.api.sdkSendPrompt(sessionId.value, content);
   // The echo is already on screen, so a refusal has to say so out loud rather
   // than leave a message sitting there that nothing will ever answer.

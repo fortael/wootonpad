@@ -32,11 +32,12 @@
         <span class="sbx-unread__stack">
           <ProjectAvatar class="sbx-unread__monogram" :project-path="row.projectPath" />
           <!-- The session's own status mark, repeated small in the corner — the
-               spinning arc and the orange dot the sidebar row already draws. A
-               finished or idle session has none: the count says it is unread,
-               and an idle one is making no claim at all. -->
+               spinning arc, the orange dot and the blue one the sidebar row
+               already draws. Idle is the only lane without one: it is making
+               no claim. The mark matters most on hover, where the expanding
+               pill takes the count away and this is all that is left. -->
           <span
-            v-if="row.status === 'running' || row.status === 'waiting'"
+            v-if="row.status !== 'idle'"
             class="sbx-unread__pip"
             :class="`sbx-unread__pip--${row.status}`"
           ></span>
@@ -69,6 +70,9 @@ const REASONS = {
   done: 'response ready',
   idle: 'running, idle',
 };
+// A finished turn you have already opened is not "response ready" — that is
+// the thing the dimming says, and the tooltip should not contradict it.
+const READ_REASONS = { done: 'answered' };
 
 const props = defineProps({
   // [{ sessionId, projectPath, project, status, unread, session }] —
@@ -98,7 +102,8 @@ const rows = computed(() => (props.items || []).map((item) => {
     name,
     // The hover label is short by design, so the tooltip carries what it left
     // out: which project, and why the session is on the rail at all.
-    title: `${item.project ? item.project + ' — ' : ''}${name} — ${REASONS[status]}`
+    title: `${item.project ? item.project + ' — ' : ''}${name} — `
+      + ((!unread && READ_REASONS[status]) || REASONS[status])
       + (unread ? ' — unread' : ''),
   };
 }));

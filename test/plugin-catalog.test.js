@@ -135,3 +135,25 @@ test('a plugin command is an argv, and only for arguments that are plugin refere
     ['plugin', 'install', 'demo', '--scope', 'user', '--yes'],
   );
 });
+
+// Enable and disable carry the scope when the caller knows it. Without one the
+// CLI auto-detects from its cwd, which is the account's home and not the
+// checkout a project-scoped plugin was installed against — so a plugin enabled
+// in a project read as disabled and could not be switched off from here.
+test('enable and disable name the scope they are about', () => {
+  assert.deepEqual(
+    pluginCommandArgv('enable', { plugin: 'demo@mkt', scope: 'project' }),
+    ['plugin', 'enable', 'demo@mkt', '--scope', 'project'],
+  );
+  assert.deepEqual(
+    pluginCommandArgv('disable', { plugin: 'demo@mkt', scope: 'local' }),
+    ['plugin', 'disable', 'demo@mkt', '--scope', 'local'],
+  );
+  // No scope stays no scope: the CLI's auto-detect is the right answer when
+  // the caller has nothing better, and 'user' would be a guess.
+  assert.deepEqual(pluginCommandArgv('enable', { plugin: 'demo@mkt' }), ['plugin', 'enable', 'demo@mkt']);
+  assert.deepEqual(
+    pluginCommandArgv('disable', { plugin: 'demo@mkt', scope: 'root' }),
+    ['plugin', 'disable', 'demo@mkt'],
+  );
+});

@@ -840,11 +840,14 @@ function uninstallPlugin(p) {
   return runPluginCommand(p.key, 'uninstall', { plugin: p.key, scope: p.scope }, `Uninstalled ${p.name}`);
 }
 
+// The scope goes with it. Without one the CLI guesses from its own working
+// directory, which is the account's home and not the checkout a project-scoped
+// plugin is installed against — main.js runs the command in that checkout.
 function setPluginEnabled(p, enabled) {
   return runPluginCommand(
     p.key,
     enabled ? 'enable' : 'disable',
-    { plugin: p.key },
+    { plugin: p.key, scope: p.scope },
     `${enabled ? 'Enabled' : 'Disabled'} ${p.name}`,
   );
 }

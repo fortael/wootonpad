@@ -892,17 +892,26 @@ async function showTerminalHeader(session) {
 async function openSession(session, customOptions) {
   const { sessionId, projectPath } = session;
 
-  // If already open, handle closed-session cleanup or just show it
+  // If already open, handle closed-session cleanup or just show it.
+  //
+  // Asking for it *with options* — "Resume with config…", or a prompt typed
+  // into a session whose process is gone — is a launch and not a re-show. An
+  // SDK session has no PTY to exit, so stopping one leaves its view here with
+  // `closed` unset, and this branch used to swallow the request whole: the
+  // options were dropped on the floor and the session merely brought forward.
   if (openSessions.has(sessionId)) {
     const entry = openSessions.get(sessionId);
-    if (entry.closed) {
-      destroySession(sessionId);
-      if (session.type === 'terminal') {
-        launchTerminalSession({ projectPath: session.projectPath });
-        return;
-      }
-    } else {
+    const relaunch = entry.closed
+      || (!!customOptions && !window.isPlainTerminal?.(session));
+    if (!relaunch) {
       showSession(sessionId);
+      return;
+    }
+    destroySession(sessionId);
+    // A plain terminal has no conversation to resume — it is a shell, and the
+    // only thing to do with a dead one is open another.
+    if (entry.closed && session.type === 'terminal') {
+      launchTerminalSession({ projectPath: session.projectPath });
       return;
     }
   }
@@ -1706,6 +1715,20 @@ window.__sb = {
   launchConfig: (id) => {
     const session = sessionMap.get(id);
     if (session && typeof showResumeSessionDialog === 'function') showResumeSessionDialog(session);
+  },
+
+  // Start a process for a session that has none, on the project's own defaults.
+  // Sending a message is the ordinary way to pick a conversation back up, so
+  // the composer calls this rather than refusing the prompt — see send() in
+  // SessionSdkApp.vue. Already running is success: there is nothing to do.
+  resumeSession: async (id) => {
+    const session = sessionMap.get(id);
+    if (!session) return false;
+    if (activePtyIds.has(id)) return true;
+    const options = await resolveDefaultSessionOptions({ projectPath: session.projectPath });
+    await openSession(session, options);
+    await pollActiveSessions();
+    return activePtyIds.has(id);
   },
 
   renameSession: async (id, name) => {

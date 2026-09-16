@@ -659,10 +659,22 @@
    sentences it read as five interruptions. */
 .sbx-sdk__body .jsonl-toolgroup {
   margin: var(--space-3) 0;
+  /* The shade alone was tried and is not enough: against prose either side of
+     it the run has no edge to end on, and the rows read as loose text. The
+     terminal inside a Bash row has an outline of its own, inset from this one
+     — a box inside a box, but the inner one is a different kind of thing. */
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--surface-card) 55%, transparent);
   overflow: hidden;
+}
+
+/* The per-tool colour dot. The row already names its tool in the next word,
+   and in a group of nine the column of dots read as decoration rather than as
+   information. A failed call still says so — the name goes red, the row tints,
+   and the exit status is written on it. */
+.sbx-sdk__body .jsonl-tool-bullet {
+  display: none;
 }
 
 .sbx-sdk__body .jsonl-toolgroup > .jsonl-tool-block {
@@ -698,6 +710,127 @@
 .sbx-sdk__body .jsonl-tool-summary {
   min-width: 0;
   white-space: nowrap;
+}
+
+/* What the command's output cost the context, beside how long it took. An
+   estimate from the output's length — see markToolWeight, which also explains
+   where the three cut points come from. Grey is the 82% of calls that are
+   ordinary; the colour is there to be scanned past, not read. */
+.jsonl-tool-weight {
+  margin-left: auto;
+  padding-left: var(--space-2);
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-disabled);
+  cursor: help;
+}
+
+/* The duration already claims the slack with a margin of its own; with two of
+   them the free space is split and both end up mid-row. */
+.jsonl-tool-weight + .jsonl-tool-took {
+  margin-left: 0;
+}
+
+/* The light theme steps the -500 accents down for white surfaces — see
+   theme-light.css — and the -600s are only defined there. */
+.jsonl-tool-weight.is-amber  { color: var(--amber-600, var(--amber-500)); }
+.jsonl-tool-weight.is-orange { color: var(--orange-600, var(--orange-500)); }
+.jsonl-tool-weight.is-red    { color: var(--red-600, var(--red-500)); font-weight: var(--weight-semibold); }
+
+/* ─── A shell call, drawn as a shell ────────────────────────────── */
+
+/*
+   Opened, a Bash call is a terminal: the line that was typed, and what came
+   back under it. It used to be two anonymous slabs of monospace hanging off
+   the same left rail every other tool uses, with nothing saying which was the
+   command — and the command is the half you are looking for.
+
+   Deliberately quiet. No border of its own: the row already sits inside the
+   tool group's box, and a second frame around the output made the loudest
+   thing in a turn the one that is usually least interesting. What separates
+   the two panes is a shade and a hairline, which is enough.
+*/
+.sbx-sdk__body .jsonl-tool-block--bash > .jsonl-tool-content {
+  margin: var(--space-1) var(--space-2) var(--space-2);
+  padding: 0;
+  /* Its own outline, in place of the left rail every other tool hangs off.
+     The group around it is frameless, so this is the only edge in the run and
+     it reads as the terminal's own rather than as another box. */
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  /* The app's own backdrop, which is darker than the card in the dark theme
+     and lighter than it in the light one — a terminal either way, without a
+     colour of its own to fight the prose around it. */
+  background: var(--surface-app);
+}
+
+/* Both panes: flat, flush, and scrolling on their own. */
+.sbx-sdk__body .jsonl-tool-block--bash .jsonl-term__in,
+.sbx-sdk__body .jsonl-tool-block--bash .jsonl-term__out,
+.sbx-sdk__body .jsonl-tool-block--bash .jsonl-tool-result > .jsonl-tool-body {
+  margin: 0;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-5);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  max-height: 240px;
+  overflow: auto;
+}
+
+/* The typed line. Brighter than its answer and carrying the prompt, because
+   between a command and two hundred lines of output it is the shorter half
+   and the one worth finding first. */
+.sbx-sdk__body .jsonl-tool-block--bash .jsonl-term__in {
+  position: relative;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--surface-card) 45%, transparent);
+}
+
+/* Absolute, not a text prefix: the command wraps, and every wrapped line has
+   to line up under the first rather than under the sigil. */
+.sbx-sdk__body .jsonl-tool-block--bash .jsonl-term__in::before {
+  content: '$';
+  position: absolute;
+  left: var(--space-2);
+  top: var(--space-2);
+  color: var(--status-running);
+  font-weight: var(--weight-semibold);
+}
+
+/* What came back. The result arrives later and through the generic path, so
+   it is the wrapper that has to be undone as well as the pane inside it. */
+.sbx-sdk__body .jsonl-tool-block--bash .jsonl-tool-result,
+.sbx-sdk__body .jsonl-tool-block--bash .jsonl-term__out {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  border-top: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+.sbx-sdk__body .jsonl-tool-block--bash .jsonl-tool-result > .jsonl-tool-body,
+.sbx-sdk__body .jsonl-tool-block--bash .jsonl-term__out {
+  color: var(--text-tertiary);
+}
+
+/* A non-zero exit, on the pane that explains it. The header carries the code;
+   this is so the output half is findable in a group of nine opened calls. */
+.sbx-sdk__body .jsonl-tool-block--bash.jsonl-tool-block--failed .jsonl-tool-result,
+.sbx-sdk__body .jsonl-tool-block--bash.jsonl-tool-block--failed .jsonl-term__out {
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--red-500) 55%, transparent);
+}
+
+/* An orphan result has no command pane — the call is in the part of the
+   session above this window — so its one pane is the whole terminal. */
+.sbx-sdk__body .jsonl-tool-block--bash.jsonl-tool-block--orphan .jsonl-tool-result {
+  border-top: 0;
 }
 
 /* ─── A call that came back failed ──────────────────────────────── */
@@ -980,10 +1113,18 @@
               left var(--duration-fast) var(--ease-standard);
 }
 
-/* A compact is the loudest thing on the rail: it is the only mark that says
-   part of the session is not merely unloaded but gone from the model. */
+/* A compact is the only mark that says part of the session is not merely
+   unloaded but gone from the model, so it is the one that has to be legible at
+   a glance — and it was orange next to a red error. At two and three pixels on
+   an 8px strip those are the same alarm colour, and the two marks that mean
+   the most different things were the pair that ran together.
+
+   Blue rather than indigo: the thumb is indigo, and the day rule below already
+   gave up that colour for the same reason. The light theme steps the -500
+   accents down for white surfaces — see theme-light.css — and --blue-600 is
+   only defined there, so this is one declaration that is right in both. */
 .sbx-timeline__notch.is-compact {
-  background: var(--orange-500);
+  background: var(--blue-600, var(--blue-500));
   height: 3px;
 }
 

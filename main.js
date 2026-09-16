@@ -2737,7 +2737,13 @@ function accountUserConfigPath(account) {
 }
 
 function accountInventoryArgs(account) {
-  return { configDir: account.configDir, userConfigPath: accountUserConfigPath(account) };
+  return {
+    configDir: account.configDir,
+    userConfigPath: accountUserConfigPath(account),
+    // Bound to this account rather than the selected one: the inventory is
+    // read for whichever account the panel is showing.
+    hostPath: p => accountHostPath(account, p),
+  };
 }
 
 // Rule 3 of the WSL contract: a stdio server configured in a distribution's
@@ -2814,13 +2820,17 @@ const PLUGIN_COMMAND_TIMEOUT_MS = 180000;
 // project. The WSL flavour runs inside the distribution, where both the home
 // and the binary actually live — its Windows configDir would mean nothing
 // there, so CLAUDE_CONFIG_DIR is left off, exactly as the PTY spawn does.
-function runAccountClaude(account, argv, { timeoutMs = PLUGIN_COMMAND_TIMEOUT_MS } = {}) {
+//
+// `cwd` is for the commands that are about a checkout rather than the account:
+// `plugin enable --scope project` writes into the project the CLI finds from
+// where it is standing, so it has to stand in the right one.
+function runAccountClaude(account, argv, { timeoutMs = PLUGIN_COMMAND_TIMEOUT_MS, cwd = null } = {}) {
   const { spawn } = require('child_process');
   const distro = accountWslDistro(account);
   const [file, args, options] = distro
-    ? ['wsl.exe', wslExecArgs(distro, account.wslHome || null, ['claude', ...argv]), {}]
+    ? ['wsl.exe', wslExecArgs(distro, cwd || account.wslHome || null, ['claude', ...argv]), {}]
     : [resolveClaudeBinary(), argv, {
-      cwd: os.homedir(),
+      cwd: (cwd && accountHostPath(account, cwd)) || os.homedir(),
       env: {
         ...process.env,
         PATH: claudeChildPath(),
@@ -2877,6 +2887,24 @@ ipcMain.handle('get-plugin-catalog', (_event, accountId, options) => {
   }
 });
 
+// The checkout a project- or local-scoped command is about. Looked up in the
+// inventory rather than taken from the renderer: the cwd decides which
+// settings file the CLI rewrites, and it should only ever be a directory this
+// account already has that plugin installed against.
+function pluginProjectCwd(account, options) {
+  const scope = options?.scope;
+  if (scope !== 'project' && scope !== 'local') return null;
+  const key = String(options?.plugin || '');
+  if (!key) return null;
+  try {
+    const row = mcpInventory.readMcpInventory(accountInventoryArgs(account))
+      .plugins.find(p => p.key === key && p.projectPath);
+    return row?.projectPath || null;
+  } catch {
+    return null;
+  }
+}
+
 // install / uninstall / enable / disable / add-marketplace. The argv is built
 // and validated in plugin-catalog; nothing from the renderer reaches execFile
 // unchecked, and there is no shell in the path.
@@ -2889,8 +2917,9 @@ ipcMain.handle('plugin-command', async (_event, accountId, action, options) => {
   } catch (err) {
     return { ok: false, error: err.message };
   }
-  log.info('[plugins]', account.id, argv.join(' '));
-  const result = await runAccountClaude(account, argv);
+  const cwd = action === 'add-marketplace' ? null : pluginProjectCwd(account, options);
+  log.info('[plugins]', account.id, argv.join(' '), cwd ? `(in ${cwd})` : '');
+  const result = await runAccountClaude(account, argv, { cwd });
   if (!result.ok) log.warn('[plugins] failed:', result.error);
   return result;
 });

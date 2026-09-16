@@ -169,8 +169,13 @@ import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue';
 import SbSwitch from './SbSwitch.vue';
 import { sessionTitle } from '../session-title.js';
 
+// The CLI's modes, in the order they escalate — the same set the settings panel
+// offers and the same one session-controls.js will read back out of a
+// transcript. `auto` was missing here, so a session running on it could not be
+// resumed onto it and the dialog silently offered to change the mode.
 const PERM_MODES = [
   { value: null, label: 'Default', desc: 'Prompt for all actions' },
+  { value: 'auto', label: 'Auto', desc: 'A classifier answers what it can; the rest still reach you' },
   { value: 'acceptEdits', label: 'Accept Edits', desc: 'Auto-accept file edits, prompt for others' },
   { value: 'plan', label: 'Plan Mode', desc: 'Read-only exploration, no writes' },
   { value: 'dontAsk', label: "Don't Ask", desc: 'Auto-deny tools not explicitly allowed' },

@@ -152,12 +152,44 @@ function pluginProvides(installPath) {
   return { provides, manifest, mcpServers: mcp || null };
 }
 
-function readPlugins(configDir, enabledMap) {
+// Where a project- or local-scoped install records that it is switched on:
+// `<projectPath>/.claude/settings.json`, and its .local sibling. `claude plugin
+// install --scope project` writes the enable there and not into the account, so
+// reading the account's settings.json alone reported every project-scoped
+// plugin as disabled while Claude was loading it on every session — and the
+// Enable button then came back with "already enabled".
+const PROJECT_SETTINGS_FILES = ['settings.json', 'settings.local.json'];
+
+function projectEnabledPlugins(projectPath, toHost, cache) {
+  if (cache.has(projectPath)) return cache.get(projectPath);
+  const dir = path.join(toHost(projectPath), '.claude');
+  const merged = {};
+  for (const file of PROJECT_SETTINGS_FILES) {
+    Object.assign(merged, readJson(path.join(dir, file))?.enabledPlugins || {});
+  }
+  cache.set(projectPath, merged);
+  return merged;
+}
+
+// Settings precedence, the CLI's own: the checkout decides for a plugin it
+// mentions, the account decides for everything else. An account-level `false`
+// does not switch off a plugin a project turned on.
+function pluginEnabled(key, record, enabledMap, toHost, cache) {
+  const projectPath = record?.projectPath;
+  if (projectPath && (record?.scope === 'project' || record?.scope === 'local')) {
+    const inProject = projectEnabledPlugins(projectPath, toHost, cache);
+    if (key in inProject) return inProject[key] === true;
+  }
+  return enabledMap[key] === true;
+}
+
+function readPlugins(configDir, enabledMap, toHost = (p => p)) {
   const installed = readJson(path.join(configDir, 'plugins', 'installed_plugins.json'));
   const marketplaces = readJson(path.join(configDir, 'plugins', 'known_marketplaces.json')) || {};
   const rows = [];
   const pluginServers = [];
   const seen = new Set();
+  const projectCache = new Map();
 
   for (const [key, records] of Object.entries(installed?.plugins || {})) {
     const list = Array.isArray(records) ? records : [records];
@@ -168,6 +200,7 @@ function readPlugins(configDir, enabledMap) {
         ? pluginProvides(installPath)
         : { provides: {}, manifest: null, mcpServers: null };
       seen.add(key);
+      const enabled = pluginEnabled(key, record, enabledMap, toHost, projectCache);
       rows.push({
         id: serverId('plugin', record?.projectPath || record?.scope || '', key),
         key,
@@ -180,13 +213,13 @@ function readPlugins(configDir, enabledMap) {
         projectPath: record?.projectPath || null,
         installPath,
         installed: !installPath || exists(installPath),
-        enabled: enabledMap[key] === true,
+        enabled,
         description: manifest?.description || '',
         provides,
       });
       // A plugin's own MCP servers, named the way the CLI names them, so a
       // "needs auth" line in Claude's own output points at the same row here.
-      if (mcpServers && enabledMap[key] === true) {
+      if (mcpServers && enabled) {
         for (const [name, config] of Object.entries(mcpServers)) {
           if (!config || typeof config !== 'object') continue;
           pluginServers.push(describeServer({
@@ -234,7 +267,11 @@ function readPlugins(configDir, enabledMap) {
 // `userConfigPath` is passed in rather than derived: for the default account
 // Claude keeps .claude.json in the home directory, for every other one it sits
 // inside the config dir, and only the caller knows which account this is.
-function readMcpInventory({ configDir, userConfigPath, maxProjectServers = 200 }) {
+//
+// `hostPath` is rule 2 of the WSL contract: a project path recorded by the CLI
+// is POSIX, and reading a file under it on Windows needs the UNC view. Bound to
+// this account by the caller, not to whichever is selected.
+function readMcpInventory({ configDir, userConfigPath, maxProjectServers = 200, hostPath }) {
   const settingsPath = path.join(configDir, 'settings.json');
   const localSettingsPath = path.join(configDir, 'settings.local.json');
   const mcpJsonPath = path.join(configDir, '.mcp.json');
@@ -302,7 +339,7 @@ function readMcpInventory({ configDir, userConfigPath, maxProjectServers = 200 }
   }
 
   const enabledMap = { ...(settings.enabledPlugins || {}), ...(localSettings.enabledPlugins || {}) };
-  const { plugins, pluginServers } = readPlugins(configDir, enabledMap);
+  const { plugins, pluginServers } = readPlugins(configDir, enabledMap, hostPath);
   servers.push(...pluginServers);
 
   const rank = s => (s.scope === 'project' ? 2 : s.scope === 'plugin' ? 1 : 0);

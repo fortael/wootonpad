@@ -143,9 +143,28 @@ async function showNewSessionDialog(project) {
   window.vueDialogs?.openNewSession(project, effective, (options) => launchNewSession(project, options));
 }
 
+// The dialog owns four things — permission mode, Chrome, the pre-launch command
+// and the extra directories — and nothing else. Everything else a session needs
+// to start comes from the project's defaults, and building the option set by
+// hand from the dialog alone dropped the rest: without `mode` the CLI came back
+// as a terminal rather than as the chat this session had been, and the model
+// and effort went with it.
 async function showResumeSessionDialog(session) {
   const effective = await window.api.getEffectiveSettings(session.projectPath);
-  window.vueDialogs?.openResumeSession(session, effective, (options) => openSession(session, options));
+  window.vueDialogs?.openResumeSession(session, effective, async (answers) => {
+    const options = await resolveDefaultSessionOptions({ projectPath: session.projectPath });
+    // Resuming never makes a worktree: the session already lives somewhere.
+    delete options.worktree;
+    delete options.worktreeName;
+    // The dialog's answer replaces the default for everything it asked about,
+    // including "off" — which is why these go before the merge rather than
+    // being conditionally assigned after it.
+    delete options.permissionMode;
+    delete options.dangerouslySkipPermissions;
+    delete options.chrome;
+    delete options.preLaunchCmd;
+    openSession(session, Object.assign(options, answers));
+  });
 }
 
 function showAddProjectDialog() {

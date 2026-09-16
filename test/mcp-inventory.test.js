@@ -191,3 +191,122 @@ test('a definition from the renderer is validated before it can reach a file', (
   assert.equal(name, 'demo');
   assert.deepEqual(config, { type: 'stdio', command: 'npx', args: ['-y', 'pkg'], env: { TOKEN: '1' } });
 });
+
+// ── Where a project-scoped plugin is switched on ──────────────────
+//
+// `claude plugin install --scope project` records the install in the account's
+// installed_plugins.json but the *enable* in the checkout's own
+// .claude/settings.json. Reading only the account's settings reported every
+// one of them as disabled while Claude was loading them on every session, and
+// the Enable button came back with "already enabled".
+
+test('a project-scoped plugin is enabled by the checkout, not by the account', () => {
+  const home = makeHome();
+  const project = path.join(home.dir, 'work', 'repo');
+  try {
+    const installPath = path.join(home.configDir, 'plugins', 'cache', 'mkt', 'demo', '1.0.0');
+    fs.mkdirSync(installPath, { recursive: true });
+    write(path.join(home.configDir, 'plugins', 'installed_plugins.json'), {
+      version: 2,
+      plugins: { 'demo@mkt': [{ scope: 'project', projectPath: project, installPath, version: '1.0.0' }] },
+    });
+    // The account has never heard of it.
+    write(path.join(home.configDir, 'settings.json'), {});
+    write(path.join(project, '.claude', 'settings.json'), { enabledPlugins: { 'demo@mkt': true } });
+
+    const inv = readMcpInventory({ configDir: home.configDir, userConfigPath: home.userConfigPath });
+    assert.equal(inv.plugins.find(p => p.key === 'demo@mkt').enabled, true);
+  } finally {
+    fs.rmSync(home.dir, { recursive: true, force: true });
+  }
+});
+
+test('the checkout can switch one off that the account switched on', () => {
+  const home = makeHome();
+  const project = path.join(home.dir, 'work', 'repo');
+  try {
+    const installPath = path.join(home.configDir, 'plugins', 'cache', 'mkt', 'demo', '1.0.0');
+    fs.mkdirSync(installPath, { recursive: true });
+    write(path.join(home.configDir, 'plugins', 'installed_plugins.json'), {
+      version: 2,
+      plugins: { 'demo@mkt': [{ scope: 'project', projectPath: project, installPath }] },
+    });
+    write(path.join(home.configDir, 'settings.json'), { enabledPlugins: { 'demo@mkt': true } });
+    write(path.join(project, '.claude', 'settings.json'), { enabledPlugins: { 'demo@mkt': false } });
+
+    const inv = readMcpInventory({ configDir: home.configDir, userConfigPath: home.userConfigPath });
+    assert.equal(inv.plugins.find(p => p.key === 'demo@mkt').enabled, false);
+  } finally {
+    fs.rmSync(home.dir, { recursive: true, force: true });
+  }
+});
+
+// `--scope local` is the same file pair, one step more private.
+test('a local-scoped plugin is read from the checkout too', () => {
+  const home = makeHome();
+  const project = path.join(home.dir, 'work', 'repo');
+  try {
+    const installPath = path.join(home.configDir, 'plugins', 'cache', 'mkt', 'demo', '1.0.0');
+    fs.mkdirSync(installPath, { recursive: true });
+    write(path.join(home.configDir, 'plugins', 'installed_plugins.json'), {
+      version: 2,
+      plugins: { 'demo@mkt': [{ scope: 'local', projectPath: project, installPath }] },
+    });
+    write(path.join(home.configDir, 'settings.json'), {});
+    write(path.join(project, '.claude', 'settings.local.json'), { enabledPlugins: { 'demo@mkt': true } });
+
+    const inv = readMcpInventory({ configDir: home.configDir, userConfigPath: home.userConfigPath });
+    assert.equal(inv.plugins.find(p => p.key === 'demo@mkt').enabled, true);
+  } finally {
+    fs.rmSync(home.dir, { recursive: true, force: true });
+  }
+});
+
+// A user-scoped install is the account's business wherever it is being run.
+test('a user-scoped plugin ignores whatever a checkout says', () => {
+  const home = makeHome();
+  const project = path.join(home.dir, 'work', 'repo');
+  try {
+    const installPath = path.join(home.configDir, 'plugins', 'cache', 'mkt', 'demo', '1.0.0');
+    fs.mkdirSync(installPath, { recursive: true });
+    write(path.join(home.configDir, 'plugins', 'installed_plugins.json'), {
+      version: 2,
+      plugins: { 'demo@mkt': [{ scope: 'user', projectPath: project, installPath }] },
+    });
+    write(path.join(home.configDir, 'settings.json'), { enabledPlugins: { 'demo@mkt': true } });
+    write(path.join(project, '.claude', 'settings.json'), { enabledPlugins: { 'demo@mkt': false } });
+
+    const inv = readMcpInventory({ configDir: home.configDir, userConfigPath: home.userConfigPath });
+    assert.equal(inv.plugins.find(p => p.key === 'demo@mkt').enabled, true);
+  } finally {
+    fs.rmSync(home.dir, { recursive: true, force: true });
+  }
+});
+
+// Rule 2 of the WSL contract: the recorded project path is POSIX, and reading
+// a file under it on the Windows side needs the UNC view of the distribution.
+test('the project path goes through hostPath before it reaches the disk', () => {
+  const home = makeHome();
+  const real = path.join(home.dir, 'work', 'repo');
+  try {
+    const installPath = path.join(home.configDir, 'plugins', 'cache', 'mkt', 'demo', '1.0.0');
+    fs.mkdirSync(installPath, { recursive: true });
+    write(path.join(home.configDir, 'plugins', 'installed_plugins.json'), {
+      version: 2,
+      plugins: { 'demo@mkt': [{ scope: 'project', projectPath: '/home/zakhar/repo', installPath }] },
+    });
+    write(path.join(home.configDir, 'settings.json'), {});
+    write(path.join(real, '.claude', 'settings.json'), { enabledPlugins: { 'demo@mkt': true } });
+
+    const seen = [];
+    const inv = readMcpInventory({
+      configDir: home.configDir,
+      userConfigPath: home.userConfigPath,
+      hostPath: (p) => { seen.push(p); return p === '/home/zakhar/repo' ? real : p; },
+    });
+    assert.equal(inv.plugins.find(p => p.key === 'demo@mkt').enabled, true);
+    assert.deepEqual(seen, ['/home/zakhar/repo']);
+  } finally {
+    fs.rmSync(home.dir, { recursive: true, force: true });
+  }
+});

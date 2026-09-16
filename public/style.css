@@ -3074,6 +3074,168 @@ body { display: flex; flex-direction: column; }
   color: var(--text-secondary);
 }
 
+/* ─── A fenced block ────────────────────────────────────────────── */
+
+/* Code used to be the browser's own <pre>: grey on grey, the same shape as the
+   tool output above it and as the quote below it. A frame with the language on
+   it is what makes a block of code findable while scrolling past a wall of
+   prose — and the copy button is the only thing anyone ever wants from one.
+
+   See enhanceCodeBlocks in message-render.js for what builds it, and
+   highlightCodeToHtml in codemirror-setup.js for the colour. */
+.jsonl-code {
+  margin: var(--space-2) 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  background: var(--surface-app);
+  overflow: hidden;
+}
+
+.jsonl-code__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 1px var(--space-1) 1px var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--surface-card) 45%, transparent);
+}
+
+.jsonl-code__lang {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--text-disabled);
+}
+
+/* Quiet until the block is under the pointer, but never hidden: a control that
+   only exists on hover is a control nobody knows about. */
+.jsonl-code__copy {
+  flex: none;
+  padding: 2px var(--space-2);
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-disabled);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity var(--duration-fast) var(--ease-standard),
+              background var(--duration-fast) var(--ease-standard);
+}
+
+.jsonl-code:hover .jsonl-code__copy { opacity: 1; }
+
+.jsonl-code__copy:hover {
+  background: var(--surface-card-hover);
+  color: var(--text-primary);
+}
+
+.jsonl-code__copy.is-done {
+  opacity: 1;
+  color: var(--status-running);
+}
+
+/* The <pre> keeps the scrolling and gives up everything else to the frame. */
+.jsonl-text .jsonl-code pre,
+.jsonl-code pre {
+  margin: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  padding: var(--space-2) var(--space-3);
+  overflow-x: auto;
+  color: var(--text-primary);
+  /* Go and Makefiles indent with tabs, and the browser's default eight columns
+     spends a third of a chat-width line on the first level. */
+  tab-size: 4;
+}
+
+/* ─── Syntax tokens ─────────────────────────────────────────────── */
+
+/* `tok-*` is what @lezer/highlight's classHighlighter emits. The light theme
+   steps the -500 accents down for white surfaces — see theme-light.css — and
+   the -600s are only defined there, so each of these is one declaration that
+   is right in both. */
+.jsonl-code .tok-comment,
+.jsonl-code .tok-lineComment,
+.jsonl-code .tok-blockComment,
+.jsonl-code .tok-docComment {
+  color: var(--text-disabled);
+  font-style: italic;
+}
+
+.jsonl-code .tok-keyword,
+.jsonl-code .tok-controlKeyword,
+.jsonl-code .tok-definitionKeyword,
+.jsonl-code .tok-moduleKeyword,
+.jsonl-code .tok-operatorKeyword,
+.jsonl-code .tok-modifier,
+.jsonl-code .tok-self {
+  color: var(--purple-600, var(--purple-400));
+}
+
+.jsonl-code .tok-string,
+.jsonl-code .tok-docString,
+.jsonl-code .tok-character,
+.jsonl-code .tok-attributeValue,
+.jsonl-code .tok-regexp {
+  color: var(--green-600, var(--green-500));
+}
+
+.jsonl-code .tok-number,
+.jsonl-code .tok-integer,
+.jsonl-code .tok-float,
+.jsonl-code .tok-bool,
+.jsonl-code .tok-null,
+.jsonl-code .tok-atom,
+.jsonl-code .tok-unit,
+.jsonl-code .tok-escape {
+  color: var(--orange-600, var(--orange-400));
+}
+
+.jsonl-code .tok-function,
+.jsonl-code .tok-macroName,
+.jsonl-code .tok-labelName {
+  color: var(--blue-600, var(--blue-500));
+}
+
+.jsonl-code .tok-typeName,
+.jsonl-code .tok-className,
+.jsonl-code .tok-namespace,
+.jsonl-code .tok-tagName {
+  color: var(--amber-600, var(--amber-500));
+}
+
+.jsonl-code .tok-propertyName,
+.jsonl-code .tok-attributeName {
+  color: var(--indigo-600, var(--indigo-400));
+}
+
+.jsonl-code .tok-operator,
+.jsonl-code .tok-punctuation,
+.jsonl-code .tok-bracket,
+.jsonl-code .tok-separator,
+.jsonl-code .tok-meta,
+.jsonl-code .tok-processingInstruction {
+  color: var(--text-tertiary);
+}
+
+.jsonl-code .tok-link,
+.jsonl-code .tok-url {
+  color: var(--text-link);
+}
+
+.jsonl-code .tok-invalid {
+  color: var(--red-600, var(--red-500));
+}
+
+.jsonl-code .tok-strong { font-weight: var(--weight-semibold); }
+.jsonl-code .tok-emphasis { font-style: italic; }
+
 .jsonl-inline-code {
   background: var(--surface-card-hover);
   padding: 1px var(--space-1);

@@ -3,7 +3,10 @@ import { EditorState, StateField, StateEffect, Compartment } from '@codemirror/s
 import { defaultKeymap, indentWithTab, history, historyKeymap } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
-import { syntaxHighlighting, HighlightStyle, indentOnInput, bracketMatching, foldGutter, foldKeymap } from '@codemirror/language';
+import { syntaxHighlighting, HighlightStyle, indentOnInput, bracketMatching, foldGutter, foldKeymap, StreamLanguage } from '@codemirror/language';
+import { highlightCode, classHighlighter } from '@lezer/highlight';
+import { shell } from '@codemirror/legacy-modes/mode/shell';
+import { php } from '@codemirror/lang-php';
 import { highlightSelectionMatches } from '@codemirror/search';
 import { dracula } from '@ddietr/codemirror-themes/theme/dracula';
 import { tags } from '@lezer/highlight';
@@ -597,6 +600,121 @@ function createReadOnlyMergeViewer(parent, originalContent, modifiedContent, fil
   });
 }
 
+// ── Static syntax highlighting ──────────────────────────────────────
+//
+// A fenced block in the chat, coloured without an editor: the language's own
+// Lezer parser produces a tree, `highlightCode` walks it, and what comes out is
+// a string of spans carrying `tok-*` classes for the stylesheet to colour.
+//
+// Not a CodeMirror instance per block, deliberately. The chat holds a couple of
+// hundred entries at a time and an editor apiece would be a view, a state and a
+// scroller each — for text nobody is going to edit. This costs one parse, once,
+// at render.
+//
+// The languages are the ones this bundle already carries. An unknown fence is
+// not an error: it renders plain, inside the same frame, with the same copy
+// button.
+
+const LANGUAGE_FACTORIES = {
+  javascript: () => javascript(),
+  jsx: () => javascript({ jsx: true }),
+  typescript: () => javascript({ typescript: true }),
+  tsx: () => javascript({ jsx: true, typescript: true }),
+  python: () => python(),
+  json: () => json(),
+  html: () => html(),
+  css: () => css(),
+  go: () => go(),
+  rust: () => rust(),
+  java: () => java(),
+  php: () => php(),
+  xml: () => xml(),
+  yaml: () => yaml(),
+  sql: () => sql(),
+  cpp: () => cpp(),
+  markdown: () => markdown(),
+  // The most common fence in this app's own transcripts, and the one CodeMirror
+  // has no Lezer grammar for — the legacy stream mode is the whole answer.
+  shell: () => StreamLanguage.define(shell),
+};
+
+/** What people actually type after the three backticks. */
+const LANGUAGE_ALIASES = {
+  js: 'javascript', mjs: 'javascript', cjs: 'javascript', node: 'javascript',
+  ts: 'typescript',
+  py: 'python', python3: 'python',
+  rs: 'rust',
+  yml: 'yaml',
+  golang: 'go',
+  md: 'markdown',
+  htm: 'html',
+  c: 'cpp', 'c++': 'cpp', h: 'cpp', hpp: 'cpp', objc: 'cpp',
+  sh: 'shell', bash: 'shell', zsh: 'shell', console: 'shell', shellsession: 'shell',
+  postgres: 'sql', postgresql: 'sql', mysql: 'sql', sqlite: 'sql',
+  jsonc: 'json',
+  svg: 'xml',
+  php5: 'php', php7: 'php', php8: 'php',
+};
+
+const languageCache = new Map();
+
+function normalizeLanguage(name) {
+  const key = String(name || '').trim().toLowerCase();
+  if (!key) return '';
+  const resolved = LANGUAGE_ALIASES[key] || key;
+  return LANGUAGE_FACTORIES[resolved] ? resolved : '';
+}
+
+function languageFor(name) {
+  const key = normalizeLanguage(name);
+  if (!key) return null;
+  if (!languageCache.has(key)) {
+    let lang = null;
+    try {
+      const support = LANGUAGE_FACTORIES[key]();
+      // javascript() and friends return a LanguageSupport; StreamLanguage.define
+      // returns the Language itself.
+      lang = support?.language || support || null;
+    } catch { lang = null; }
+    languageCache.set(key, lang);
+  }
+  return languageCache.get(key);
+}
+
+// Long enough for anything worth reading in a chat bubble. Past it the parse
+// stops being free and the block is almost certainly a dumped file.
+const MAX_HIGHLIGHT_CHARS = 20000;
+
+function escapeForHighlight(text) {
+  return text.replace(/[&<>]/g, ch => (ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : '&gt;'));
+}
+
+/**
+ * @param {string} code  the block's text
+ * @param {string} name  the word after the backticks
+ * @returns {string|null} HTML with `tok-*` spans, or null to render it plain
+ */
+function highlightCodeToHtml(code, name) {
+  if (typeof code !== 'string' || !code || code.length > MAX_HIGHLIGHT_CHARS) return null;
+  const language = languageFor(name);
+  if (!language) return null;
+  let out = '';
+  try {
+    highlightCode(
+      code,
+      language.parser.parse(code),
+      classHighlighter,
+      (text, classes) => {
+        out += classes ? `<span class="${classes}">${escapeForHighlight(text)}</span>` : escapeForHighlight(text);
+      },
+      () => { out += '\n'; },
+    );
+  } catch {
+    return null;
+  }
+  return out;
+}
+
 // ── Exports ─────────────────────────────────────────────────────────
 
 window.createPlanEditor = createPlanEditor;
@@ -610,6 +728,8 @@ window.CMEditorView = EditorView;
 window.CMEditorState = EditorState;
 window.CMMergeView = MergeView;
 window.cmOpenGotoLine = openGotoLine;
+window.highlightCodeToHtml = highlightCodeToHtml;
+window.normalizeCodeLanguage = normalizeLanguage;
 
 marked.setOptions({ breaks: true, gfm: true });
 window.marked = marked;

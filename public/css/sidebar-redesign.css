@@ -351,6 +351,13 @@
   opacity: 1;
 }
 
+/* Idle is last in the order and last in the eye: a live process with nothing
+   happening in it, no mark of its own, kept on the rail only because it is
+   one keystroke from being the session you are working in. */
+.sbx-unread__avatar--idle.is-read {
+  opacity: 0.55;
+}
+
 /* The avatar and its corner marks as one body, so the bounce moves all three
    and the marks stay pinned to the corners of what is moving. */
 .sbx-unread__stack {
@@ -383,10 +390,10 @@
 
 .sbx-unread__pip {
   position: absolute;
-  left: -2px;
-  bottom: -2px;
-  width: 7px;
-  height: 7px;
+  left: -3px;
+  bottom: -3px;
+  width: 8px;
+  height: 8px;
   border-radius: var(--radius-full);
   box-sizing: border-box;
   /* Punched out of the avatar rather than floating over it. */
@@ -408,15 +415,42 @@
   animation: sbx-pip-pulse 1.4s ease-in-out infinite;
 }
 
+/* A finished turn, in the blue the sidebar row uses for one. This is the mark
+   that has to exist: hovering expands the avatar into a pill and takes the
+   count with it, and without this the one lane that was actually asking for
+   something lost its only mark exactly when you reached for it. */
+.sbx-unread__pip--done {
+  background: var(--blue-500);
+  animation: sbx-pip-pulse 1.4s ease-in-out infinite;
+}
+
+/* Read: still marked — the lane is still worth seeing — but no longer moving.
+   Pulsing is the rail asking for something, and this one has been answered. */
+.sbx-unread__avatar.is-read .sbx-unread__pip--done {
+  animation: none;
+  opacity: 0.8;
+}
+
+/* The pip is punched out of the avatar with the widget's own background, so
+   it has to follow the avatar when hover and open change it. */
+.sbx-unread__avatar:hover .sbx-unread__pip,
+.sbx-unread__avatar--open .sbx-unread__pip {
+  outline-color: var(--surface-card-hover);
+}
+
 @keyframes sbx-pip-pulse {
-  0%, 100% { opacity: 1;    transform: scale(1); }
-  50%      { opacity: 0.45; transform: scale(0.78); }
+  0%, 100% { opacity: 1;   transform: scale(1); }
+  50%      { opacity: 0.5; transform: scale(0.72); }
 }
 
 /* Always 1: one entry per session, and a session has one unread turn or none.
    It is a mark, not arithmetic — but it reads as a count because that is the
    shape every unread badge has, and it is the only thing on the avatar that
-   says "there is something here to read". */
+   says "there is something here to read".
+
+   Red in every lane, not the lane's own tone: this is the Dock's badge, and
+   the one thing it has always meant is "unread", never "which kind". The ring
+   around the avatar is where the lane is already said. */
 .sbx-unread__badge {
   position: absolute;
   top: -4px;
@@ -429,8 +463,11 @@
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-full);
-  background: var(--sbx-tone);
-  color: var(--text-on-accent);
+  /* The light theme steps the -500 accents down for white surfaces — see the
+     contrast rule at the top of theme-light.css — and --red-600 is only
+     defined there, so this is one declaration that is correct in both. */
+  background: var(--red-600, var(--red-500));
+  color: #fff;
   font-family: var(--font-mono);
   font-size: 9px;
   font-weight: var(--weight-bold);
@@ -442,7 +479,8 @@
 @media (prefers-reduced-motion: reduce) {
   .sbx-unread__avatar--waiting .sbx-unread__stack,
   .sbx-unread__pip--running,
-  .sbx-unread__pip--waiting {
+  .sbx-unread__pip--waiting,
+  .sbx-unread__pip--done {
     animation: none;
   }
 }

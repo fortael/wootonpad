@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  columnOf, mostUrgent, worstColumn, wantsAttention, unreadSessions, OPEN_ORDER,
+  columnOf, mostUrgent, worstColumn, wantsAttention, unreadSessions, activeSessions, OPEN_ORDER,
 } = require('../src/vue/session-column.js');
 
 const state = (over = {}) => ({
@@ -223,4 +223,91 @@ test('nothing unread is an empty list, not a missing one', () => {
 test('an id with no session behind it is skipped', () => {
   const rows = unreadSessions([proj('/x/one', [sess('a')])], state({ attention: ['a', 'ghost'] }));
   assert.deepEqual(rows.map(r => r.sessionId), ['a']);
+});
+
+// ── The active rail ───────────────────────────────────────────────
+//
+// The same widget, asking a wider question. Unread-only meant it emptied
+// itself the moment you read the last turn — blank while five sessions were
+// running — so it now carries the live ones too, dimmed, and the count is what
+// distinguishes them.
+
+test('the rail carries the live sessions as well as the unread ones', () => {
+  const s = state({ attention: ['a'], responseReady: ['b'], busy: ['c'], readPending: ['d'] });
+  const projects = [proj('/x/one', [sess('a'), sess('b'), sess('c'), sess('d'), sess('e')])];
+  const rows = activeSessions(projects, s, new Set(['e']));
+
+  assert.deepEqual(rows.map(r => r.sessionId).sort(), ['a', 'b', 'c', 'd', 'e']);
+});
+
+// The lane a session is in is the same answer the board's columns get.
+test('each entry is in the lane columnOf puts it in', () => {
+  const s = state({ attention: ['a'], responseReady: ['b'], busy: ['c'], readPending: ['d'] });
+  const rows = activeSessions(
+    [proj('/x/one', [sess('a'), sess('b'), sess('c'), sess('d'), sess('e')])], s, ['e'],
+  );
+  const lane = Object.fromEntries(rows.map(r => [r.sessionId, r.status]));
+  assert.deepEqual(lane, { a: 'waiting', b: 'done', c: 'running', d: 'done', e: 'idle' });
+});
+
+// The count badge is the whole point of showing read ones at all.
+test('unread is blocked or finished-and-not-read, and nothing else', () => {
+  const s = state({ attention: ['a'], responseReady: ['b'], busy: ['c'], readPending: ['d'] });
+  const rows = activeSessions(
+    [proj('/x/one', [sess('a'), sess('b'), sess('c'), sess('d'), sess('e')])], s, ['e'],
+  );
+  const unread = Object.fromEntries(rows.map(r => [r.sessionId, r.unread]));
+  assert.deepEqual(unread, { a: true, b: true, c: false, d: false, e: false });
+});
+
+test('the order is waiting, done, running, idle', () => {
+  const s = state({ attention: ['w'], responseReady: ['d'], busy: ['r'] });
+  const rows = activeSessions(
+    [proj('/x/one', [sess('i'), sess('r'), sess('d'), sess('w')])], s, ['i'],
+  );
+  assert.deepEqual(rows.map(r => r.sessionId), ['w', 'd', 'r', 'i']);
+});
+
+// Two finished turns, one of them opened. Both are done; only one still wants
+// reading, and it goes first however long ago it landed.
+test('inside a lane the unread one comes first', () => {
+  const s = state({ responseReady: ['fresh'], readPending: ['seen'] });
+  const rows = activeSessions([proj('/x/one', [
+    sess('seen', '2026-01-09'),
+    sess('fresh', '2026-01-01'),
+  ])], s, []);
+  assert.deepEqual(rows.map(r => r.sessionId), ['fresh', 'seen']);
+});
+
+test('otherwise the most recently active comes first', () => {
+  const s = state({ busy: ['old', 'new'] });
+  const rows = activeSessions([proj('/x/one', [
+    sess('old', '2026-01-01'),
+    sess('new', '2026-01-09'),
+  ])], s, []);
+  assert.deepEqual(rows.map(r => r.sessionId), ['new', 'old']);
+});
+
+// The sidebar has thousands of rows and this widget is 40px tall.
+test('a session that is neither live nor unread is not on the rail', () => {
+  assert.deepEqual(activeSessions([proj('/x/one', [sess('a')])], state(), []), []);
+  assert.deepEqual(activeSessions([proj('/x/one', [sess('a')])], state(), null), []);
+});
+
+test('nothing running is an empty list, not a missing one', () => {
+  assert.deepEqual(activeSessions([], state({ busy: ['a'] }), ['a']), []);
+  assert.deepEqual(activeSessions(null, state({}), null), []);
+});
+
+test('a live id with no session behind it is skipped', () => {
+  const rows = activeSessions([proj('/x/one', [sess('a')])], state(), ['a', 'ghost']);
+  assert.deepEqual(rows.map(r => r.sessionId), ['a']);
+});
+
+test('a rail entry carries its project and the session itself', () => {
+  const session = sess('a', '2026-01-01');
+  const rows = activeSessions([proj('/Users/me/Projects/thing', [session])], state(), ['a']);
+  assert.equal(rows[0].projectPath, '/Users/me/Projects/thing');
+  assert.equal(rows[0].project, 'thing');
+  assert.equal(rows[0].session, session, 'the row cannot open the session it names');
 });

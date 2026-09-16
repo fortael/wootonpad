@@ -543,7 +543,7 @@ import CollapsedRailApp from '../vue/components/CollapsedRailApp.vue';
 import CommandBar from '../vue/components/CommandBar.vue';
 import FilterTabs from '../vue/components/FilterTabs.vue';
 import UnreadRail from '../vue/components/UnreadRail.vue';
-import { unreadSessions, stateFromStore } from '../vue/session-column.js';
+import { activeSessions, stateFromStore } from '../vue/session-column.js';
 import SidebarApp from '../vue/components/SidebarApp.vue';
 import SessionHeaderApp from '../vue/components/SessionHeaderApp.vue';
 import SpotlightApp from '../vue/components/SpotlightApp.vue';
@@ -761,9 +761,10 @@ const attentionProjects = computed(() => {
   return out.sort((a, b) => ATTENTION_ORDER[a.status] - ATTENTION_ORDER[b.status]);
 });
 
-// Same set the app's rail shows — one entry per unread session, from the
-// mock store rather than a live one.
-const unreadRows = computed(() => unreadSessions(store.projects, stateFromStore(store)));
+// Same set the app's rail shows — one entry per live or unread session, from
+// the mock store rather than a live one.
+const unreadRows = computed(() =>
+  activeSessions(store.projects, stateFromStore(store), store.activePtyIds));
 
 function onSelectUnread(session) {
   if (session?.projectPath) onSelectAttentionProject(session.projectPath);
