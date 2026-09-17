@@ -1106,8 +1106,10 @@ async function generateCommitMsg(style = 'short') {
 async function doCommit() {
   if (!commitMessage.value.trim()) return;
   gitBusy.value = true;
-  // The boxes in the tree decide — see ChangeTree.vue.
-  const res = await window.api.gitCommit(viewedPath.value, commitMessage.value.trim(), commitPaths.value);
+  // The boxes in the tree decide — see ChangeTree.vue. Copied flat: a ref
+  // holding an array hands back a reactive Proxy, which structured clone
+  // refuses — see the same call in SessionSidePanelApp.vue.
+  const res = await window.api.gitCommit(viewedPath.value, commitMessage.value.trim(), [...commitPaths.value]);
   gitBusy.value = false;
   if (res.ok) { showGitMsg('Committed'); commitMessage.value = ''; await reload(); }
   else showGitMsg(res.error || 'Commit failed', true);

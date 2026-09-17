@@ -8,7 +8,7 @@ const LONG_WINDOW = 1_000_000;
 // `[1m]` suffix when the long context is in play, which read-session-file.js
 // turns into contextLimit. Sessions indexed before that, or too short to have
 // written a cost-state, fall back to the app-wide guess below.
-export const inferredWindowLimit = computed(() => {
+const inferredWindowLimit = computed(() => {
   for (const project of store.projects) {
     for (const session of project.sessions || []) {
       if (session.contextLimit) return session.contextLimit;
@@ -18,7 +18,7 @@ export const inferredWindowLimit = computed(() => {
   return STANDARD_WINDOW;
 });
 
-export function contextLimitFor(session) {
+function contextLimitFor(session) {
   return session?.contextLimit || inferredWindowLimit.value;
 }
 

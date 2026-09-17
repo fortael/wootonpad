@@ -9,15 +9,6 @@
 // One answer, one precedence order, used by both.
 
 /**
- * Precedence, not a partition: a session can carry more than one of these marks
- * at once. Blocked-on-the-user outranks everything — it is the only state that
- * cannot progress without a human. Running outranks done because a session you
- * opened and then sent back to work is working, not finished; otherwise a read
- * turn would pin it in DONE for the whole next turn.
- */
-export const COLUMN_PRECEDENCE = ['waiting', 'running', 'done', 'idle'];
-
-/**
  * The order to open them in, which is not the order to rank them by. Once a
  * session is placed, "what should I look at first" puts a finished turn ahead
  * of one still being written: the finished one wants reading, the running one

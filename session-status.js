@@ -302,8 +302,4 @@ class SessionStatusTracker {
 
 module.exports = {
   SessionStatusTracker,
-  SessionStatus,
-  EVENT_STATE,
-  NOTIFICATION_STATE,
-  STATES,
 };

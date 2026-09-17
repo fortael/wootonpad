@@ -1265,19 +1265,8 @@ function getAccountById(id) {
   return accounts.find(a => a.id === id) || { id: 'default', name: 'Default', configDir: '' };
 }
 
-function buildUsageChips(usage) {
-  if (!usage || usage._error || usage._rateLimited) return [];
-  const chips = [];
-  if (usage.session != null) chips.push(`${usage.session}% 5h`);
-  return chips;
-}
-
 function updateAccountDropdown() {
   window.vueAccountDropdown?.setAccounts(accounts, activeAccountId, accountsUsage);
-}
-
-function closeAccountDropdown() {
-  window.vueAccountDropdown?.close();
 }
 
 async function openAccountHomeSession(account) {
@@ -1315,12 +1304,6 @@ async function switchAccount(id) {
   // The detail panel labels one account "Active" — that badge just moved.
   if (activeTab === 'accounts') window.vueAccountViewer?.reload();
   // accountSwitching stays true — cleared in onProjectsChanged once new data arrives
-}
-
-// makeGroup is defined in utils.js (loaded first)
-// Keep old name as alias for any remaining callers
-function makePanelHeader(titleText, btnLabel, onBtnClick) {
-  return makeGroup(titleText, btnLabel, onBtnClick).group;
 }
 
 function renderAccountsPanel() {

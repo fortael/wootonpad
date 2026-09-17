@@ -20,7 +20,7 @@
  * Media types the Messages API accepts as an `image` block. Anything else —
  * SVG, HEIC, a TIFF out of a scanner — is a file, and goes as a path.
  */
-export const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 
 /**
  * Longest edge an attached image is scaled down to.

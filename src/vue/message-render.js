@@ -1541,23 +1541,8 @@ function renderUserPrompt(prompt) {
 export {
   escHtml,
   renderJsonlText,
-  formatDuration,
-  makeInlineContent,
-  makeCollapsible,
-  toolBlock,
   collapseToolBlock,
-  shortPath,
-  renderMcpAction,
-  renderToolUse,
-  renderLocalCommand,
-  mergeLocalCommandBlocks,
-  extractImages,
-  extractResultText,
-  makeChatImage,
-  renderToolResult,
   applyToolResult,
-  markToolFailed,
-  renderOrphanResult,
   adoptOrphanResults,
   // Exported for their own tests: they are the only part of the orphan block
   // that is a decision rather than markup.
@@ -1565,16 +1550,10 @@ export {
   resultCost,
   unwrapResult,
   renderUserPrompt,
-  getEntryText,
   mergeLocalCommandEntries,
-  makeThinking,
-  decorateMentions,
-  makeWhen,
   refreshWhen,
   dayKey,
   refreshDayMarkers,
-  renderAskRecord,
-  toolContent,
   groupOfEntry,
   mergeToolGroups,
   mergeSlashOutput,
@@ -2054,4 +2033,4 @@ function renderJsonlEntry(entry, toolResultMap, opts) {
 
 export { renderJsonlEntry };
 
-export { renderViewItems, renderUnknown, renderNotice };
+export { renderViewItems };

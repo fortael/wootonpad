@@ -7,6 +7,10 @@ design/
 *.db-shm
 public/codemirror-bundle.js
 public/vue-bundle.js
+# vite lib mode emits the SFCs' scoped CSS next to the bundle; index.html does
+# not load it and every rule in it is already in style.css unscoped.
+public/switchboard.css
+public/wootonpad.css
 .DS_Store
 *.pem
 .env

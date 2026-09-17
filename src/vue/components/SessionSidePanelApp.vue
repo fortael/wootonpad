@@ -567,10 +567,6 @@ const pushedCommits = computed(() => {
 
 // The basename is the part worth reading in a 380px column, so it is kept
 // whole and only the directory is allowed to truncate.
-function dirOf(p) {
-  const i = p.lastIndexOf('/');
-  return i === -1 ? '' : p.slice(0, i + 1);
-}
 function baseOf(p) {
   const i = p.lastIndexOf('/');
   return i === -1 ? p : p.slice(i + 1);
@@ -859,7 +855,11 @@ async function doCommit() {
   try {
     // The boxes in the tree decide. Everything is checked unless it was
     // unchecked, so the usual case sends the whole list.
-    const res = await window.api.gitCommit(projectPath.value, message, commitPaths.value);
+    //
+    // Copied flat before it crosses IPC: a ref holding an array hands back a
+    // reactive Proxy, and the structured clone behind ipcRenderer.invoke cannot
+    // serialise one — "An object could not be cloned", and no commit.
+    const res = await window.api.gitCommit(projectPath.value, message, [...commitPaths.value]);
     if (res?.ok) {
       showGitMsg('Committed');
       commitMessage.value = '';

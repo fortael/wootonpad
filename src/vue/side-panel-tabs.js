@@ -2,7 +2,7 @@
 // and the panel that renders them cannot drift apart.
 import { store } from './store.js';
 
-export const TAB_KEY = 'sessionSidePanelTab';
+const TAB_KEY = 'sessionSidePanelTab';
 
 export const TABS = [
   { id: 'changes', label: 'Uncommitted changes', icon: 'file-diff' },

@@ -256,43 +256,6 @@
   padding-right: 0;
 }
 
-/* IconButton — borderless square, soft card hover (IconButton.jsx). */
-.sbx-sesshead__iconbtn {
-  width: var(--hit-xs);
-  height: var(--hit-xs);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  padding: 0;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition:
-    background var(--duration-fast) var(--ease-standard),
-    color var(--duration-fast) var(--ease-standard);
-}
-
-.sbx-sesshead__iconbtn:hover {
-  background: var(--surface-card);
-}
-
-.sbx-sesshead__iconbtn:active {
-  background: var(--surface-card-hover);
-}
-
-.sbx-sesshead__iconbtn:focus-visible {
-  outline: none;
-  box-shadow: var(--shadow-focus-ring);
-}
-
-.sbx-sesshead__iconbtn--danger:hover {
-  color: var(--status-danger);
-  background: color-mix(in srgb, var(--status-danger) 10%, transparent);
-}
-
 /* Narrow windows: the identity block keeps both its lines — the model's
    title has its own row now and is no longer competing for width — and the
    count/time pair in the controls is what folds away. */
@@ -370,11 +333,23 @@
    gradient dissolves through. At 96px the working row — which is always the
    last thing in the transcript — sat inside that gradient and was read as
    half-faded rather than as "still running". */
+/* How wide the conversation is allowed to get. One number, used by the
+   transcript and by the composer under it so they cannot drift apart. */
+.sbx-sdk {
+  --sbx-chat-max: 1200px;
+}
+
 .sbx-sdk__body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-8, 40px) var(--space-5) 150px;
+  /* Capped as padding rather than as a width on the entries: the scrollbar
+     stays at the edge of the pane where it belongs, and each entry keeps its
+     own alignment inside the column — a user bubble is still pushed to the
+     right of it, a tool group still fills it. On a wide monitor a line of
+     prose was running the whole width of the screen, which is a paragraph
+     nobody can track back to the start of. */
+  padding: var(--space-8, 40px) max(var(--space-5), calc((100% - var(--sbx-chat-max)) / 2)) 150px;
   /* A streaming answer repaints this on a cadence. Containment keeps that
      inside the transcript instead of invalidating the layout of the sidebar,
      the board and everything else in the document. */
@@ -489,7 +464,10 @@
   font-size: var(--text-lg);
   line-height: 1;
   text-align: center;
-  color: var(--blue-500);
+  /* The app's accent — the colour the active tab underlines itself with, and
+     the one thing on screen that means "this is happening now". It was blue,
+     which is also the colour of a Bash row and of the transcript's thumb. */
+  color: var(--orange-600, var(--orange-500));
 }
 
 .sbx-working__spinner::before {
@@ -612,7 +590,8 @@
   font-size: var(--text-sm);
   line-height: 1;
   text-align: center;
-  color: var(--indigo-400);
+  /* Same accent as the working row's spinner: both are the same statement. */
+  color: var(--orange-600, var(--orange-500));
 }
 
 .sbx-think__spark::before {
@@ -1253,7 +1232,8 @@
   left: 0;
   right: 0;
   bottom: 0;
-  padding: 0 var(--space-5) var(--space-4);
+  /* Lined up with the transcript above it — see .sbx-sdk__body. */
+  padding: 0 max(var(--space-5), calc((100% - var(--sbx-chat-max)) / 2)) var(--space-4);
   background: var(--surface-panel);
   /* A dialog grows this box upward, and out of flow it would keep growing past
      the top of the pane — over the board, under the splitter and the floating
@@ -1490,13 +1470,6 @@
 }
 
 .sbx-sdk__stop .sb-icon { display: block; }
-
-/* Borrowed from the transcript viewer so an unknown message reads as the same
-   kind of object as everything around it, just flagged. */
-.jsonl-unknown > .jsonl-collapsible-header,
-.jsonl-unknown .jsonl-collapsible-header {
-  color: var(--orange-500);
-}
 
 .jsonl-notice {
   font-size: var(--text-2xs);

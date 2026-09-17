@@ -179,6 +179,4 @@ module.exports = {
   searchCatalog,
   pluginCommandArgv,
   OFFICIAL_MARKETPLACE,
-  PLUGIN_REF_RE,
-  MARKETPLACE_SOURCE_RE,
 };

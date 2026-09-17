@@ -14,7 +14,7 @@
 import { fitWithin, isImageType, MAX_IMAGE_BYTES } from './composer-attachments.js';
 
 /** A blob's bytes as base64, without the `data:` prefix the API does not take. */
-export function readAsBase64(blob) {
+function readAsBase64(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(reader.error || new Error('unreadable'));
@@ -36,7 +36,7 @@ export function readAsBase64(blob) {
  *
  * @returns {Promise<{ blob: Blob, mediaType: string } | null>}
  */
-export async function refit(file) {
+async function refit(file) {
   let bitmap;
   try { bitmap = await createImageBitmap(file); } catch { return null; }
   try {

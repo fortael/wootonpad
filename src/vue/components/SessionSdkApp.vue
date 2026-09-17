@@ -215,7 +215,7 @@ import { modelLabels, defaultModelValue } from '../model-name.js';
 import { controlsFromTranscript } from '../session-controls.js';
 import {
   renderViewItems, renderJsonlEntry, renderJsonlText, mergeLocalCommandEntries,
-  refreshWhen, toolContent, mergeToolGroups, groupOfEntry, markToolDuration,
+  refreshWhen, mergeToolGroups, groupOfEntry, markToolDuration,
   applyToolResult, collapseToolBlock, refreshDayMarkers, refreshStamps, dayKey,
   adoptOrphanResults,
   mergeSlashOutput, renderUserPrompt,

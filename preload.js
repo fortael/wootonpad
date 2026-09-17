@@ -27,7 +27,6 @@ contextBridge.exposeInMainWorld('api', {
   // never in a project. Every call takes a bare filename; the main process
   // resolves it inside that directory and refuses anything that escapes.
   getNotes: () => ipcRenderer.invoke('get-notes'),
-  getNotesDir: () => ipcRenderer.invoke('get-notes-dir'),
   readNote: (filename) => ipcRenderer.invoke('read-note', filename),
   saveNote: (filePath, content) => ipcRenderer.invoke('save-note', filePath, content),
   createNote: (options) => ipcRenderer.invoke('create-note', options),
@@ -73,11 +72,9 @@ contextBridge.exposeInMainWorld('api', {
   // Settings
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key, value) => ipcRenderer.invoke('set-setting', key, value),
-  deleteSetting: (key) => ipcRenderer.invoke('delete-setting', key),
 
   // Multi-account
   getAccounts: () => ipcRenderer.invoke('get-accounts'),
-  saveAccounts: (accounts) => ipcRenderer.invoke('save-accounts', accounts),
   createAccount: (name) => ipcRenderer.invoke('create-account', name),
   discoverWslClaudeHomes: () => ipcRenderer.invoke('discover-wsl-claude-homes'),
   createWslAccount: (distro, name) => ipcRenderer.invoke('create-wsl-account', distro, name),
@@ -105,8 +102,6 @@ contextBridge.exposeInMainWorld('api', {
   pluginCommand: (id, action, options) => ipcRenderer.invoke('plugin-command', id, action, options),
   getHomedir: () => ipcRenderer.invoke('get-homedir'),
   getEffectiveSettings: (projectPath) => ipcRenderer.invoke('get-effective-settings', projectPath),
-  getScheduleCreatorCommand: () => ipcRenderer.invoke('get-schedule-creator-command'),
-  createScheduleSession: (projectPath) => ipcRenderer.invoke('create-schedule-session', projectPath),
   runScheduleNow: (filePath) => ipcRenderer.invoke('run-schedule-now', filePath),
   getShellProfiles: () => ipcRenderer.invoke('get-shell-profiles'),
 
@@ -215,10 +210,6 @@ contextBridge.exposeInMainWorld('api', {
   onProjectInfoLoading: (callback) => {
     ipcRenderer.on('project-info-loading', (_event, path) => callback(path));
   },
-  onStatusUpdate: (callback) => {
-    ipcRenderer.on('status-update', (_event, text, type) => callback(text, type));
-  },
-
   // File drag-and-drop
   getPathForFile: (file) => webUtils.getPathForFile(file),
 
@@ -230,7 +221,6 @@ contextBridge.exposeInMainWorld('api', {
 
   // Auto-updater
   updaterCheck: () => ipcRenderer.invoke('updater-check'),
-  updaterDownload: () => ipcRenderer.invoke('updater-download'),
   updaterInstall: () => ipcRenderer.invoke('updater-install'),
   onUpdaterEvent: (callback) => subscribe('updater-event', callback),
 

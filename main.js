@@ -1,5 +1,4 @@
 const { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } = require('electron');
-const { Worker } = require('worker_threads');
 const { stripInheritedClaudeEnv } = require('./claude-env');
 const path = require('path');
 const fs = require('fs');
@@ -22,7 +21,7 @@ if (!app.isPackaged) {
 
 const log = require('electron-log');
 // getFolderIndexMtimeMs moved to session-cache.js
-const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles } = require('./mcp-bridge');
+const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer } = require('./mcp-bridge');
 const { startHookServer, stopHookServer } = require('./hook-server');
 const { buildHookSettings } = require('./hook-settings');
 const { SessionStatusTracker } = require('./session-status');
@@ -76,7 +75,7 @@ const cleanPtyEnv = Object.fromEntries(
 
 // Shell profiles → shell-profiles.js
 const {
-  discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell,
+  getShellProfiles, resolveShell, isWindows, isWslShell,
   windowsToWslPath, shellArgs,
   wslToWindowsPath, isPosixAbsolutePath, probeWslClaudeHome, discoverWslClaudeHomes, wslExecArgs,
   withWslEnv, wslDistroFromUncPath, projectJoin,
@@ -829,7 +828,7 @@ function initSessionCache() {
 
 initSessionCache();
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, populateCacheFromFilesystem,
-        buildProjectSets, notifyRendererProjectsChanged, sendStatus, populateCacheViaWorker } = sessionCache;
+        buildProjectSets, notifyRendererProjectsChanged, populateCacheViaWorker } = sessionCache;
 
 
 // --- IPC: browse-folder ---
@@ -2075,12 +2074,6 @@ function activeNotesDir() {
 
 ipcMain.handle('get-notes', () => accountNotes.listNotes(activeNotesDir()));
 
-ipcMain.handle('get-notes-dir', () => {
-  const account = getActiveAccount();
-  const dir = activeNotesDir();
-  return { dir, exists: fs.existsSync(dir), accountName: account.name, accountId: account.id };
-});
-
 ipcMain.handle('read-note', (_event, filename) => accountNotes.readNote(activeNotesDir(), filename));
 
 ipcMain.handle('save-note', (_event, filePath, content) => accountNotes.saveNote(activeNotesDir(), filePath, content));
@@ -2431,22 +2424,9 @@ ipcMain.handle('set-setting', (_event, key, value) => {
   return { ok: true };
 });
 
-ipcMain.handle('delete-setting', (_event, key) => {
-  deleteSetting(key);
-  return { ok: true };
-});
-
 // --- Multi-account IPCs ---
 
 ipcMain.handle('get-accounts', () => getAccounts());
-
-ipcMain.handle('save-accounts', (_event, accounts) => {
-  const withDefault = accounts.find(a => a.id === 'default')
-    ? accounts
-    : [DEFAULT_ACCOUNT, ...accounts];
-  setSetting('accounts', withDefault);
-  return { ok: true };
-});
 
 ipcMain.handle('create-account', (_event, name) => {
   const { randomUUID } = require('crypto');
@@ -4077,10 +4057,6 @@ ipcMain.handle('get-app-version', () => app.getVersion());
 ipcMain.handle('updater-check', () => {
   if (!autoUpdater) return { available: false, dev: true };
   return autoUpdater.checkForUpdates();
-});
-ipcMain.handle('updater-download', () => {
-  if (!autoUpdater) return;
-  return autoUpdater.downloadUpdate();
 });
 ipcMain.handle('updater-install', () => {
   if (!autoUpdater) return;

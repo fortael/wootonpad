@@ -197,8 +197,5 @@ function stopHookServer() {
 module.exports = {
   startHookServer,
   stopHookServer,
-  findFreePort,
-  MAX_BODY_BYTES,
   HEADER_TOKEN,
-  HOOK_PATH,
 };

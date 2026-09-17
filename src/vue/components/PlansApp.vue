@@ -246,7 +246,10 @@ async function createNote() {
   if (saving.value) return;
   saving.value = true;
   try {
-    const res = await window.api.createNote({ title: newTitle.value.trim(), projects: newProjects.value });
+    // Copied flat: the ref hands back a reactive Proxy, and structured clone
+    // refuses one even nested in a plain object — see doCommit in
+    // SessionSidePanelApp.vue for the same trap.
+    const res = await window.api.createNote({ title: newTitle.value.trim(), projects: [...newProjects.value] });
     if (!res?.ok) return;
     creating.value = false;
     newTitle.value = '';

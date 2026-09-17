@@ -22,7 +22,7 @@
 import { projectName } from './project-search.js';
 import { fuzzyMatch, isTightMatch } from './fuzzy-match.js';
 
-export const SPOTLIGHT_LIMITS = {
+const SPOTLIGHT_LIMITS = {
   projects: 6,      // only while searching; an empty query lists them all
   sessions: 12,
   plans: 5,

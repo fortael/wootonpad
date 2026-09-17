@@ -324,10 +324,5 @@ module.exports = {
   deleteNote,
   toggleTodo,
   setNoteProjects,
-  noteTodos,
-  noteBlocks,
-  parseNote,
-  parseProjects,
   ensureDir,
-  NOTE_FILE_RE,
 };

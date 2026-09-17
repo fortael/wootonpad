@@ -15,7 +15,7 @@
    Every colour, spacing, radius and font-size is a token from the :root
    block at the top of public/style.css.
 
-   Load order: after css/session-view.css (it extends .sbx-sesshead__iconbtn).
+   Load order: after css/session-view.css (it reads --sbx-sesshead-h).
    ═══════════════════════════════════════════════════════════════════ */
 
 /* Fallback: the inline style on #terminal-area normally supplies this. */
@@ -256,19 +256,6 @@
   flex: 1 1 auto;
   display: flex;
   align-items: baseline;
-}
-
-.sbx-sidepanel__filedir {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-disabled);
-}
-
-.sbx-sidepanel__filebase {
-  flex: 0 0 auto;
 }
 
 .sbx-sidepanel .pv-container-ports {

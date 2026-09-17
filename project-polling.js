@@ -153,8 +153,6 @@ function activeProjectPaths(sessionProjectPaths, metaByPath) {
 }
 
 module.exports = {
-  COMPOSE_FILENAMES,
-  COMPOSE_PARENT_LEVELS,
   COMPOSE_RECHECK_MS,
   TTL,
   detectCompose,

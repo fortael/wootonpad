@@ -495,7 +495,4 @@ module.exports = {
   addMcpServer,
   removeMcpServer,
   normalizeServerDefinition,
-  parseServerId,
-  transportOf,
-  SECRET_KEY_RE,
 };

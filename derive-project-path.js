@@ -25,17 +25,6 @@ function extractCwdFromJsonl(filePath) {
   return null;
 }
 
-function resolveWorktreePath(cwd) {
-  if (!cwd) return cwd;
-  // Detect worktree paths: <project>/.claude-worktrees/<name>, <project>/.worktrees/<name>, or <project>/.claude/worktrees/<name>
-  const worktreeMatch = cwd.match(/^(.+?)\/\.(?:claude\/worktrees|claude-worktrees|worktrees)\/[^/]+\/?$/);
-  if (worktreeMatch) {
-    const parent = worktreeMatch[1];
-    if (fs.existsSync(parent)) return parent;
-  }
-  return cwd;
-}
-
 /**
  * Resolve `-Users-me-Projects-wooton-pad` back to `/Users/me/Projects/wooton-pad`
  * by walking the filesystem, one level per matched segment.

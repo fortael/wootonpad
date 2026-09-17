@@ -778,49 +778,6 @@ body { display: flex; flex-direction: column; }
   flex: 1;
 }
 
-/* Shared panel header (title + optional action button) */
-.panel-section-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--space-2);
-  flex-shrink: 0;
-}
-
-.panel-section-header:not(:first-child) {
-  margin-top: var(--space-4);
-}
-
-.panel-section-title {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  color: var(--text-disabled);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-wide);
-}
-
-.panel-section-btn {
-  background: var(--surface-card);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-tertiary);
-}
-
-.panel-section-btn:hover {
-  background: var(--surface-card-hover);
-  color: var(--text-secondary);
-}
-
-/* Keep old name as alias — used elsewhere in accounts panel */
-.accounts-section-title {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  color: var(--text-disabled);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-wide);
-  margin: var(--space-2) 0 var(--space-1);
-}
-.accounts-section-title:first-child { margin-top: 0; }
-
 /* .account-item overrides the session-item flex layout (higher specificity needed) */
 
 .session-item.account-item .session-row {
@@ -844,40 +801,9 @@ body { display: flex; flex-direction: column; }
   border-color: color-mix(in srgb, var(--green-500) 30%, transparent);
 }
 
-.account-card-header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.account-row-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--status-idle);
-  flex-shrink: 0;
-}
-
 .account-item.active .account-row-dot {
   background: var(--indigo-400);
   box-shadow: 0 0 6px color-mix(in srgb, var(--indigo-400) 60%, transparent);
-}
-
-.account-card-name-wrap {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-
-.account-card-name {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .account-item.active .account-card-name { color: var(--indigo-300, var(--indigo-300)); }
@@ -924,25 +850,6 @@ body { display: flex; flex-direction: column; }
 .account-open-btn:hover {
   background: var(--surface-card-hover);
   color: var(--text-primary);
-}
-
-.account-card-meta {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  margin-top: var(--space-1);
-  padding-left: var(--space-4);
-}
-
-.account-row-dir {
-  font-size: var(--text-xs);
-  font-family: var(--font-mono);
-  color: var(--text-disabled);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 1;
-  min-width: 0;
 }
 
 .account-usage-block {
@@ -1017,17 +924,6 @@ body { display: flex; flex-direction: column; }
   background: var(--surface-card);
   border: 1px solid var(--border-subtle);
 }
-
-/* Primary — submits the add-account form. */
-.accounts-add-btn {
-  align-self: flex-start;
-  background: var(--gradient-primary);
-  box-shadow: var(--glow-orange);
-  border: none;
-  color: var(--text-on-accent);
-}
-
-.accounts-add-btn:hover { box-shadow: 0 1px 0 color-mix(in srgb, var(--white) 20%, transparent) inset, 0 0 0 1px color-mix(in srgb, var(--orange-500) 70%, transparent), 0 4px 18px color-mix(in srgb, var(--orange-500) 55%, transparent); }
 
 .accounts-add-section {
   padding: var(--space-2) var(--space-3) var(--space-3);
@@ -1104,32 +1000,6 @@ body { display: flex; flex-direction: column; }
   gap: 0;
   border-bottom: 1px solid var(--border-subtle);
   align-items: center;
-}
-
-.sidebar-tab {
-  background: none;
-  border: none;
-  border-bottom: 2px solid transparent;
-  color: var(--text-tertiary);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-semibold);
-  padding: var(--space-2) var(--space-3);
-  cursor: pointer;
-  transition: all var(--duration-base) var(--ease-standard);
-  font-family: inherit;
-  letter-spacing: var(--tracking-normal);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.sidebar-tab svg {
-  width: 18px;
-  height: 18px;
-}
-
-.sidebar-tab:hover {
-  color: var(--text-secondary);
 }
 
 .sidebar-tab.active {
@@ -1209,10 +1079,6 @@ body { display: flex; flex-direction: column; }
 
 #search-clear:hover {
   color: var(--text-secondary);
-}
-
-#search-bar.has-query #search-clear {
-  display: flex;
 }
 
 #search-titles-toggle {
@@ -2046,98 +1912,6 @@ body { display: flex; flex-direction: column; }
   flex-shrink: 0;
 }
 
-.vsh-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
-.vsh-identity {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  flex: 1;
-  overflow: hidden;
-}
-
-/* Avatar — works for both <img> (ProjectAvatar) and <span> (fallback) */
-.vsh-avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-xs);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  color: var(--white);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  letter-spacing: var(--tracking-normal);
-}
-.vsh-avatar:is(img) { display: block; }
-
-.vsh-info {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-/* Title row: project-path › session-name */
-.vsh-title-row {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-1);
-  min-width: 0;
-}
-
-.vsh-project-path {
-  font-size: var(--text-2xs);
-  color: var(--text-tertiary);
-  white-space: nowrap;
-  flex-shrink: 1;
-  min-width: 0;
-  max-width: 130px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.vsh-sep {
-  font-size: var(--text-2xs);
-  color: var(--text-disabled);
-  flex-shrink: 0;
-}
-
-.vsh-session-name {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-  flex: 1;
-}
-
-/* Status row: ● status · msgs · time · id */
-.vsh-status-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-
-.vsh-status-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-disabled);
-  flex-shrink: 0;
-}
-
 .vsh-status-dot.running {
   background: var(--status-running);
   box-shadow: 0 0 6px color-mix(in srgb, var(--status-running) 40%, transparent);
@@ -2162,70 +1936,9 @@ body { display: flex; flex-direction: column; }
   50% { opacity: 0.4; }
 }
 
-.vsh-status-label {
-  font-size: var(--text-2xs);
-  color: var(--text-tertiary);
-  font-weight: var(--weight-medium);
-}
-
-.vsh-dot-sep {
-  font-size: var(--text-2xs);
-  color: var(--text-disabled);
-}
-
 .vsh-msg-count,
 .vsh-time,
-.vsh-session-id {
-  font-size: var(--text-2xs);
-  color: var(--text-disabled);
-}
 
-.vsh-session-id {
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-}
-
-/* Subtitle row: ai-title / pty-title */
-.vsh-subtitle-row {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.vsh-ai-title {
-  font-size: var(--text-2xs);
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-style: italic;
-}
-
-.vsh-pty-title {
-  font-size: var(--text-2xs);
-  color: var(--text-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-style: italic;
-}
-
-.vsh-controls {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  flex-shrink: 0;
-}
-
-.vsh-shell-badge {
-  font-size: var(--text-2xs);
-  color: var(--text-tertiary);
-  background: var(--surface-overlay);
-  padding: 1px var(--space-2);
-  border-radius: var(--radius-xs);
-  font-family: var(--font-mono);
-}
 /* ─────────────────────────────────────────────────────────────── */
 
 #terminals {
@@ -3215,10 +2928,6 @@ body { display: flex; flex-direction: column; }
   overflow: hidden;
 }
 
-.jsonl-tool-call {
-  border: 1px solid color-mix(in srgb, var(--text-code-emphasis) 15%, transparent);
-}
-
 .jsonl-tool-result {
   border: 1px solid color-mix(in srgb, var(--indigo-400) 12%, transparent);
 }
@@ -3504,14 +3213,6 @@ body { display: flex; flex-direction: column; }
   color: var(--text-secondary);
 }
 
-.memory-schedule-icon {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  margin-top: var(--space-1);
-  color: var(--status-warning);
-}
-
 .schedule-play-btn {
   flex-shrink: 0;
   opacity: 0;
@@ -3548,38 +3249,6 @@ body { display: flex; flex-direction: column; }
 @keyframes spin-schedule {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
-}
-
-.memory-file-count {
-  font-size: var(--text-2xs);
-  color: var(--text-tertiary);
-  background: var(--surface-card);
-  padding: 1px var(--space-2);
-  border-radius: var(--radius-sm);
-  margin-left: var(--space-1);
-}
-
-.memory-source-badge {
-  display: inline-block;
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-wide);
-  padding: 2px var(--space-2);
-  border-radius: var(--radius-xs);
-  line-height: 1;
-  vertical-align: middle;
-  margin-right: var(--space-2);
-}
-
-.memory-source-badge.source-claude-home {
-  background: color-mix(in srgb, var(--indigo-400) 15%, transparent);
-  color: var(--indigo-400);
-}
-
-.memory-source-badge.source-project {
-  background: color-mix(in srgb, var(--status-running) 12%, transparent);
-  color: var(--status-running);
 }
 
 /* Collapse/expand for memory groups */
@@ -3830,14 +3499,6 @@ body { display: flex; flex-direction: column; }
   display: flex;
   align-items: center;
   gap: var(--space-2);
-}
-
-/* --- Hint (below control area, full-width) --- */
-.settings-hint {
-  font-size: var(--text-2xs);
-  color: var(--text-tertiary);
-  margin: -2px 0 var(--space-2);
-  padding-left: var(--space-5);
 }
 
 /* --- Use-global checkbox --- */
@@ -4645,16 +4306,6 @@ body.hide-avatars .grid-card-avatar {
   border-radius: 50%;
 }
 
-/* ===== Projects management panel ===== */
-.projects-search-wrap {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 0 var(--space-3) var(--space-3);
-}
-
-.projects-search-input { flex: 1; min-width: 0; }
-
 /* .project-item inherits session-item layout; only override what differs */
 .project-item {
   cursor: default;
@@ -5013,11 +4664,6 @@ body.hide-avatars .grid-card-avatar {
   letter-spacing: var(--tracking-wide);
 }
 
-.pv-avatar--img {
-  object-fit: cover;
-  display: block;
-}
-
 .pv-avatar--large {
   width: 56px;
   height: 56px;
@@ -5154,52 +4800,6 @@ body.hide-avatars .grid-card-avatar {
   color: var(--text-primary);
 }
 
-.pv-body {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-3) var(--space-4) var(--space-5);
-}
-
-.pv-section {
-  margin-bottom: var(--space-5);
-}
-
-.pv-section-title {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-wide);
-  color: var(--text-disabled);
-  margin-bottom: var(--space-2);
-}
-
-.pv-subsection-title {
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  color: var(--text-tertiary);
-  margin: var(--space-3) 0 var(--space-2);
-}
-
-.pv-branch {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-size: var(--text-xs);
-  color: var(--text-secondary);
-  background: var(--surface-card);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-xs);
-  padding: var(--space-1) var(--space-2);
-  margin-bottom: var(--space-3);
-}
-
-.pv-diff-stats {
-  display: flex;
-  gap: var(--space-3);
-  font-size: var(--text-xs);
-  margin-bottom: var(--space-3);
-}
-
 .pv-added { color: var(--diff-added); }
 .pv-deleted { color: var(--diff-deleted); }
 
@@ -5254,20 +4854,6 @@ body.hide-avatars .grid-card-avatar {
 .pv-file-row--clickable.loading {
   opacity: 0.5;
   pointer-events: none;
-}
-
-.pv-commit-list {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.pv-commit-row {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  padding: var(--space-1) 0;
-  border-bottom: 1px solid var(--border-subtle);
 }
 
 .pv-commit-hash {
@@ -5518,11 +5104,6 @@ body.hide-avatars .grid-card-avatar {
   gap: var(--space-2);
   margin-top: var(--space-2);
 }
-.pv-commit-btns {
-  display: flex;
-  gap: var(--space-2);
-}
-.pv-gen-btn { flex-shrink: 0; }
 .pv-action-btn {
   background: var(--gradient-primary);
   box-shadow: var(--glow-orange);
@@ -5542,11 +5123,6 @@ body.hide-avatars .grid-card-avatar {
 .pv-push-btn:hover:not(:disabled) {
   filter: none;
   background: color-mix(in srgb, var(--status-warning) 20%, transparent);
-}
-.pv-push-btn--inline {
-  margin-left: auto;
-  padding: 2px var(--space-2);
-  font-size: var(--text-2xs);
 }
 
 /* ── Git user identity ──────────────────────────────────────────── */

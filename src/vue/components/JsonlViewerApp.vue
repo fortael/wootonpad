@@ -12,11 +12,7 @@ import { store } from '../store.js';
 import { sessionTitle } from '../session-title.js';
 // How a thinking block, a tool call or a screenshot looks now lives in one
 // place, shared with the SDK-backed session view — see message-render.js.
-import {
-  escHtml, renderJsonlText, formatDuration, makeCollapsible, renderToolUse,
-  renderLocalCommand, mergeLocalCommandBlocks, mergeLocalCommandEntries,
-  renderToolResult, renderJsonlEntry,
-} from '../message-render.js';
+import { escHtml, mergeLocalCommandEntries, renderJsonlEntry } from '../message-render.js';
 
 const title = ref('Message History');
 const sessionId = ref('');

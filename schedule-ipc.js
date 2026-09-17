@@ -3,7 +3,6 @@ const { ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const crypto = require('crypto');
 const { encodeProjectPath } = require('./encode-project-path');
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
@@ -13,7 +12,6 @@ const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 // home. main.js injects the real resolvers; the defaults preserve the previous
 // single-home behaviour.
 let ctx = {
-  getProjectsDir: () => path.join(CLAUDE_DIR, 'projects'),
   getCommandsDir: () => path.join(CLAUDE_DIR, 'commands'),
   // A schedule file lives in the project, so its path carries the project's
   // flavour and needs translating before a Windows read.
@@ -102,30 +100,6 @@ Default permission-mode is \`acceptEdits\`. Always include at least \`Read\` and
 - If the user wants to see existing schedules, list any \`schedule-*.md\` files in \`.claude/commands/\`
 `;
 
-const SCHEDULE_WELCOME_MESSAGE = `## WootonPad Scheduled Task Creator
-
-Welcome! This session will help you create a **scheduled task** that runs automatically on a cron schedule using Claude Code.
-
-### How it works
-- Describe **what** you want the task to do and **when** it should run
-- I'll generate a schedule file with the right cron expression and prompt
-- The schedule file gets saved to this project's \`.claude/commands/\` directory as a command — so it can also be run manually from any Claude session using \`/schedule-<name>\`
-- Once saved, it appears in the **brain tab** with a clock icon where you can edit it directly
-- To edit, you can also ask use this schedule claude session to ask to edit existing commands.
-- WootonPad runs matching schedules automatically in the background — each run creates a session grouped under the task's slug
-
-### What you can configure
-- **The prompt** — what Claude should do each time the task runs
-- **The schedule** — any cron pattern (e.g. "every weekday at 9am", "hourly", "first Monday of the month")
-- **CLI settings** — model, permission mode, budget cap, allowed tools, additional directories
-
-### To get started
-Just describe the task you have in mind, or try one of these:
-- **"What are my existing schedules?"** — list just the scheduled tasks
-- **"Edit schedule-hn-digest to run every 5 minutes instead of hourly"** — modify an existing schedule
-- **"Create a task that runs the test suite every morning at 8am"** — create a new one
-- **"Disable schedule-repo-health"** — toggle a schedule off`;
-
 function ensureScheduleCreatorCommand() {
   try {
     const commandsDir = ctx.getCommandsDir();
@@ -142,63 +116,6 @@ function ensureScheduleCreatorCommand() {
 function init(log, runCommand) {
   const { parseFrontmatter, createScheduleSession, buildScheduleCommand } = require('./schedule-runner');
 
-  ipcMain.handle('get-schedule-creator-command', () => {
-    try {
-      const commandPath = path.join(ctx.getCommandsDir(), 'create-switchboard-schedule.md');
-      ensureScheduleCreatorCommand();
-      return fs.readFileSync(commandPath, 'utf8');
-    } catch (err) {
-      log.error('[schedule] Failed to read schedule command:', err);
-      return null;
-    }
-  });
-
-  ipcMain.handle('create-schedule-session', (_event, projectPath) => {
-    try {
-      ensureScheduleCreatorCommand();
-      const commandPath = path.join(ctx.getCommandsDir(), 'create-switchboard-schedule.md');
-      const systemPrompt = fs.readFileSync(commandPath, 'utf8');
-
-      const sessionId = crypto.randomUUID();
-      const msgId = crypto.randomUUID();
-      const timestamp = new Date().toISOString();
-      const folder = encodeProjectPath(projectPath);
-      const claudeProjectDir = path.join(ctx.getProjectsDir(), folder);
-
-      fs.mkdirSync(claudeProjectDir, { recursive: true });
-      const jsonlPath = path.join(claudeProjectDir, `${sessionId}.jsonl`);
-
-      const snapshot = JSON.stringify({
-        type: 'file-history-snapshot',
-        messageId: msgId,
-        snapshot: { messageId: msgId, trackedFileBackups: {}, timestamp },
-        isSnapshotUpdate: false,
-      });
-
-      const assistantMsg = JSON.stringify({
-        parentUuid: null,
-        isSidechain: false,
-        userType: 'external',
-        cwd: projectPath,
-        sessionId,
-        version: '1.0.0',
-        gitBranch: 'main',
-        slug: 'create-schedule',
-        type: 'assistant',
-        message: { role: 'assistant', content: [{ type: 'text', text: SCHEDULE_WELCOME_MESSAGE }] },
-        uuid: msgId,
-        timestamp,
-      });
-
-      fs.writeFileSync(jsonlPath, snapshot + '\n' + assistantMsg + '\n');
-      log.info(`[schedule] Pre-created schedule session ${sessionId} for ${projectPath}`);
-
-      return { sessionId, systemPrompt };
-    } catch (err) {
-      log.error('[schedule] Failed to create schedule session:', err);
-      return null;
-    }
-  });
   ipcMain.handle('run-schedule-now', (_event, filePath) => {
     try {
       // filePath is canonical — for a WSL project it is the POSIX path

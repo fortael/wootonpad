@@ -403,12 +403,11 @@ function notifyRendererProjectsChanged() {
   }
 }
 
-function sendStatus(text, type) {
-  if (text) log.info(`[status] (${type || 'info'}) ${text}`);
-  const mw = getMainWindow();
-  if (mw && !mw.isDestroyed()) {
-    mw.webContents.send('status-update', text, type || 'info');
-  }
+// The scan used to narrate itself into a status bar in the renderer. The bar is
+// gone; the narration is still the only trace a slow first index leaves, so it
+// stays as a log line.
+function logStatus(text, type) {
+  log.info(`[status] (${type || 'info'}) ${text}`);
 }
 
 // --- Worker-based cache population (non-blocking) ---
@@ -417,7 +416,7 @@ let populatingCache = false;
 function populateCacheViaWorker() {
   if (populatingCache) return;
   populatingCache = true;
-  sendStatus('Scanning projects\u2026', 'active');
+  logStatus('Scanning projects\u2026', 'active');
 
   const worker = new Worker(path.join(__dirname, 'workers', 'scan-projects.js'), {
     workerData: { projectsDir: PROJECTS_DIR, accountId },
@@ -426,18 +425,18 @@ function populateCacheViaWorker() {
   worker.on('message', (msg) => {
     // Progress updates from worker
     if (msg.type === 'progress') {
-      sendStatus(msg.text, 'active');
+      logStatus(msg.text, 'active');
       return;
     }
 
     if (!msg.ok) {
       console.error('Worker scan error:', msg.error);
-      sendStatus('Scan failed: ' + msg.error, 'error');
+      logStatus('Scan failed: ' + msg.error, 'error');
       populatingCache = false;
       return;
     }
 
-    sendStatus(`Indexing ${msg.results.length} projects\u2026`, 'active');
+    logStatus(`Indexing ${msg.results.length} projects\u2026`, 'active');
 
     // Write results to DB on main thread (fast)
     const currentAccountId = msg.accountId || accountId;
@@ -474,15 +473,13 @@ function populateCacheViaWorker() {
     }
 
     populatingCache = false;
-    sendStatus(`Indexed ${sessionCount} sessions across ${msg.results.length} projects`, 'done');
-    // Clear status after a few seconds
-    setTimeout(() => sendStatus(''), 5000);
+    logStatus(`Indexed ${sessionCount} sessions across ${msg.results.length} projects`, 'done');
     notifyRendererProjectsChanged();
   });
 
   worker.on('error', (err) => {
     console.error('Worker error:', err);
-    sendStatus('Worker error: ' + err.message, 'error');
+    logStatus('Worker error: ' + err.message, 'error');
     populatingCache = false;
   });
 
@@ -494,7 +491,7 @@ function populateCacheViaWorker() {
     if (populatingCache) {
       populatingCache = false;
       if (code !== 0) {
-        sendStatus('Scan worker exited unexpectedly', 'error');
+        logStatus('Scan worker exited unexpectedly', 'error');
       }
     }
   });
@@ -508,6 +505,5 @@ module.exports = {
   populateCacheFromFilesystem,
   buildProjectSets,
   notifyRendererProjectsChanged,
-  sendStatus,
   populateCacheViaWorker,
 };
