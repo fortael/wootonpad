@@ -36,6 +36,8 @@ const {
 const sdkSession = require('./sdk-session');
 const { fetchAndTransformUsage, getOAuthToken, probeUsage } = require('./claude-auth');
 const mcpInventory = require('./mcp-inventory');
+const gitPushLinks = require('./git-push-links');
+const gitStaging = require('./git-staging');
 const { probeMcpServer } = require('./mcp-probe');
 const accountNotes = require('./account-notes');
 const pluginCatalog = require('./plugin-catalog');
@@ -1192,7 +1194,7 @@ ipcMain.handle('get-project-detail', (_event, projectPath) => {
     });
     return execFileSync(file, args, options).trim();
   };
-  const detail = { branch: null, upstream: null, remoteUrl: null, tags: [], worktreePaths: [], commits: [], unpushedCommits: [], changedFiles: [], totalAdded: 0, totalDeleted: 0, containers: [], readmePath: null };
+  const detail = { branch: null, upstream: null, remoteUrl: null, tags: [], worktreePaths: [], commits: [], unpushedCommits: [], changedFiles: [], untrackedFiles: [], totalAdded: 0, totalDeleted: 0, containers: [], readmePath: null };
   for (const name of ['README.md', 'readme.md', 'Readme.md', 'README.rst', 'README']) {
     const fp = projectJoin(projectPath, name);
     if (fs.existsSync(hostPath(fp))) { detail.readmePath = fp; break; }
@@ -1266,6 +1268,14 @@ ipcMain.handle('get-project-detail', (_event, projectPath) => {
         return match ? match[1].trim() : null;
       }).filter(Boolean);
     } catch { detail.worktreePaths = []; }
+    // What a commit from here will deliberately leave behind. The list below
+    // is `git diff HEAD` — tracked changes — and a commit stages exactly that,
+    // so untracked files are not in either. Counted rather than silently
+    // dropped: a new file you meant to commit should not go missing quietly.
+    try {
+      const others = sh(['git', ...gitStaging.untrackedArgv()], { timeout: 5000 });
+      detail.untrackedFiles = others ? others.split('\n').filter(Boolean).slice(0, 200) : [];
+    } catch { detail.untrackedFiles = []; }
     const numstat = sh(['git', 'diff', '--numstat', 'HEAD'], { timeout: 5000 });
     if (numstat) {
       detail.changedFiles = numstat.split('\n').filter(Boolean).map(line => {
@@ -1404,26 +1414,80 @@ ipcMain.handle('git-pull', (_event, projectPath) => {
   } catch (e) { return { ok: false, error: e.stderr || e.message }; }
 });
 
-ipcMain.handle('git-commit', (_event, projectPath, message) => {
+// Track files that are not tracked yet — the one thing the panel used to send
+// people to a terminal for. Only what the untracked list offered: every path is
+// checked here rather than at the call site, because these arrive from the
+// renderer and end up as arguments to git.
+ipcMain.handle('git-add', (_event, projectPath, paths) => {
+  const list = (Array.isArray(paths) ? paths : [paths])
+    .map(p => String(p || '').trim())
+    .filter(Boolean);
+  if (!list.length) return { ok: false, error: 'nothing to add' };
+  if (!safeRepoPaths(list)) return { ok: false, error: 'refusing those paths' };
   try {
-    projectGit(projectPath, ['add', '-A']);
-    projectGit(projectPath, ['commit', '-m', message]);
+    projectGit(projectPath, ['add', '--', ...list]);
+    return { ok: true, added: list.length };
+  } catch (e) { return { ok: false, error: e.stderr || e.message }; }
+});
+
+/** Repo-relative, inside the repo, and not an option. */
+function safeRepoPaths(paths) {
+  const list = (Array.isArray(paths) ? paths : []).map(p => String(p || '').trim()).filter(Boolean);
+  for (const p of list) {
+    if (p.startsWith('-') || p.startsWith('/') || /^[A-Za-z]:/.test(p) || p.split('/').includes('..')) return null;
+  }
+  return list;
+}
+
+// Stages tracked changes only — see git-staging.js for why this is not `-A`.
+// With `paths`, commits exactly those: the panel's checkboxes, which is the
+// one way to leave a change out of this commit without stashing it.
+ipcMain.handle('git-commit', (_event, projectPath, message, paths) => {
+  try {
+    const only = paths === undefined || paths === null ? null : safeRepoPaths(paths);
+    if (only === null && paths) return { ok: false, error: 'refusing those paths' };
+    if (only && !only.length) return { ok: false, error: 'nothing selected to commit' };
+    if (only) {
+      projectGit(projectPath, gitStaging.commitPathsArgv(message, only));
+    } else {
+      projectGit(projectPath, gitStaging.stageArgv());
+      projectGit(projectPath, gitStaging.commitArgv(message));
+    }
     return { ok: true };
   } catch (e) { return { ok: false, error: e.stderr || e.message }; }
 });
 
+// A push, with both streams kept.
+//
+// Everything a forge says after a push — "to create a merge request, visit…" —
+// arrives on stderr as `remote:` lines, and execFileSync hands back stdout
+// only, so all of it used to be dropped on the floor. spawnSync keeps both.
+function projectGitBoth(projectPath, argv, opts = {}) {
+  const { spawnSync } = require('child_process');
+  const [file, args, options] = projectExecFile(['git', ...argv], projectPath, {
+    encoding: 'utf8', timeout: 30000, ...opts,
+  });
+  const run = spawnSync(file, args, options);
+  const output = `${run.stdout || ''}${run.stderr || ''}`;
+  return { ok: run.status === 0, output, error: run.status === 0 ? null : (run.stderr || run.error?.message || `git ${argv[0]} failed`) };
+}
+
 ipcMain.handle('git-push', (_event, projectPath) => {
   try {
-    return { ok: true, output: projectGit(projectPath, ['push'], { timeout: 30000 }) };
-  } catch (e) {
-    // try push with set-upstream
-    try {
+    let run = projectGitBoth(projectPath, ['push']);
+    if (!run.ok) {
+      // The normal state of a branch before its first push — see
+      // src/vue/git-push-target.js, which is why the button is not disabled.
       const branch = projectGit(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD'], {
         timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'],
       }).trim();
-      const out2 = projectGit(projectPath, ['push', '--set-upstream', 'origin', branch], { timeout: 30000 });
-      return { ok: true, output: out2 };
-    } catch (e2) { return { ok: false, error: e2.stderr || e2.message }; }
+      run = projectGitBoth(projectPath, ['push', '--set-upstream', 'origin', branch]);
+    }
+    if (!run.ok) return { ok: false, error: run.error };
+    // Whatever the server offered to do next, for the button the panel shows.
+    return { ok: true, output: run.output, link: gitPushLinks.bestPushLink(run.output) };
+  } catch (e) {
+    return { ok: false, error: e.stderr || e.message };
   }
 });
 

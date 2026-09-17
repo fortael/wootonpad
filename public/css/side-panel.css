@@ -928,3 +928,318 @@
   cursor: text;
 }
 .sbx-todo__text:hover { color: var(--text-secondary); }
+
+/* ─── The forge's answer to a push ──────────────────────────────── */
+
+/* Every forge replies to a push by telling you what to do next — "to create a
+   merge request, visit…" — on stderr, in the `remote:` lines. The terminal
+   shows it and this app used to throw it away. See git-push-links.js.
+
+   Its own row rather than a chip in the git bar: it is the one thing there
+   worth clicking, and the URL behind it is a query string nobody can read at
+   panel width. Shared by the session side panel and the project page. */
+.sbx-pushlink {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid color-mix(in srgb, var(--indigo-400) 35%, transparent);
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--indigo-400) 10%, transparent);
+  font-size: var(--text-2xs);
+}
+
+.sbx-pushlink__open {
+  flex: none;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-link);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.sbx-pushlink__open:hover {
+  text-decoration: underline;
+}
+
+/* The host only. The rest of a GitLab "new merge request" URL is the branch
+   name encoded twice and does not fit anywhere — it is in the tooltip and in
+   the clipboard. */
+.sbx-pushlink__host {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: var(--text-disabled);
+}
+
+.sbx-pushlink__icon {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  cursor: pointer;
+}
+
+.sbx-pushlink__icon:hover {
+  background: var(--surface-card-hover);
+}
+
+/* ─── What a commit leaves behind ───────────────────────────────── */
+
+/* Untracked files are not committed — see git-staging.js. The count is here so
+   that is a fact on screen rather than a silence: the panel used to stage
+   everything with `git add -A`, which put .DS_Store and every other untracked
+   file into commits without ever listing them. Shared by the side panel and
+   the project page. */
+.sbx-untracked {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  font-size: var(--text-2xs);
+  color: var(--text-disabled);
+  cursor: help;
+}
+
+/* ─── The changes tree ──────────────────────────────────────────── */
+
+/* One row per path with the full path in it repeated the same prefix down the
+   whole list and pushed the filename — the only part that differs — off the
+   right edge. See file-tree.js.
+   The rows stay a flat v-for and the nesting is drawn here: an indent per
+   level, and a hairline down each level that is still open, which is the only
+   thing that makes four levels legible at panel width. */
+.sbx-ctree {
+  --sbx-indent: 14px;
+  font-size: var(--text-xs);
+}
+
+/* Two classes deep on purpose: `.sbx-sidepanel .pv-file-row` sets the padding
+   these rows inherit, and a single class loses to it whatever the order. */
+.sbx-ctree .sbx-ctree__row {
+  gap: var(--space-2);
+  min-height: 22px;
+  padding: 2px var(--space-2) 2px calc(var(--space-2) + var(--sbx-depth, 0) * var(--sbx-indent));
+  font-size: var(--text-xs);
+  /* The guide lines: one per ancestor level, drawn in the padding rather than
+     as nodes of their own. */
+  background-image: repeating-linear-gradient(
+    to right,
+    var(--border-subtle) 0,
+    var(--border-subtle) 1px,
+    transparent 1px,
+    transparent var(--sbx-indent)
+  );
+  background-repeat: no-repeat;
+  background-size: calc(var(--sbx-depth, 0) * var(--sbx-indent)) 100%;
+  background-position: calc(var(--space-2) + 5px) 0;
+}
+
+.sbx-ctree .sbx-ctree__row--dir {
+  cursor: pointer;
+  user-select: none;
+}
+
+.sbx-ctree .sbx-ctree__row--dir:hover {
+  background-color: var(--surface-card-hover);
+}
+
+.sbx-ctree__chevron {
+  flex: none;
+  opacity: 0.55;
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.sbx-ctree__chevron.is-collapsed {
+  transform: rotate(-90deg);
+}
+
+/* A folder is a label, not a heading: same size as the files under it, set
+   apart by weight and colour instead. It used to inherit the body's 16px and
+   towered over its own contents. */
+.sbx-ctree__dir {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--text-secondary);
+}
+
+.sbx-ctree .sbx-ctree__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+}
+
+.sbx-ctree__count {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-disabled);
+}
+
+/* ─── The box that decides what is in this commit ───────────────── */
+
+/* Drawn rather than left to the platform: a native checkbox is 16px of
+   OS chrome with its own font and its own idea of vertical alignment, and
+   twenty of them down a 300px panel was the loudest thing in it. */
+.sbx-ctree__check {
+  flex: none;
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  width: 12px;
+  height: 12px;
+  margin: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: var(--surface-panel-raised);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard),
+              border-color var(--duration-fast) var(--ease-standard);
+}
+
+/* The app's own accent, the one the active tab underlines itself with — see
+   .sb-icon--accent. The light theme steps it down for white surfaces, so the
+   -600 fallback is the same declaration in both. */
+.sbx-ctree__check:checked,
+.sbx-ctree__check:indeterminate {
+  background: var(--orange-600, var(--orange-500));
+  border-color: var(--orange-600, var(--orange-500));
+}
+
+.sbx-ctree__check:checked::after {
+  content: '';
+  position: absolute;
+  left: 3.5px;
+  top: 1px;
+  width: 3px;
+  height: 6px;
+  border: solid var(--text-on-accent, #fff);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
+/* Some of what is under this folder is out. */
+.sbx-ctree__check:indeterminate::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  top: 4.5px;
+  width: 6px;
+  border-top: 1.5px solid var(--text-on-accent, #fff);
+}
+
+.sbx-ctree__check:hover {
+  border-color: var(--orange-600, var(--orange-500));
+}
+
+.sbx-ctree__check:focus-visible {
+  outline: none;
+  box-shadow: var(--shadow-focus-ring);
+}
+
+/* ─── Untracked ─────────────────────────────────────────────────── */
+
+.sbx-ctree__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sbx-ctree__headtoggle {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  font-weight: var(--weight-semibold);
+  cursor: pointer;
+}
+
+.sbx-ctree__addall {
+  flex: none;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+
+.sbx-ctree__addall:hover:not(:disabled) {
+  background: var(--surface-card-hover);
+  color: var(--text-primary);
+}
+
+.sbx-ctree__addall:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Untracked rows have no checkbox — nothing here is going into the commit
+   until it is added — so they are indented to the same column by hand. */
+.sbx-ctree .sbx-ctree__row--untracked {
+  padding-left: calc(var(--space-2) + 20px + var(--sbx-depth, 0) * var(--sbx-indent));
+  background-position: calc(var(--space-2) + 25px) 0;
+  color: var(--text-tertiary);
+}
+
+.sbx-ctree__new {
+  color: var(--text-disabled);
+}
+
+/* The one thing to do with an untracked file. Quiet until the row is under the
+   pointer: twenty of these down the list is not a list, it is a toolbar. */
+.sbx-ctree__add {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-disabled);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.sbx-ctree .sbx-ctree__row--untracked:hover .sbx-ctree__add,
+.sbx-ctree__add:focus-visible {
+  opacity: 1;
+}
+
+.sbx-ctree__add:hover:not(:disabled) {
+  background: var(--surface-card-hover);
+  color: var(--orange-600, var(--orange-500));
+}

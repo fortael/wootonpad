@@ -134,29 +134,33 @@
             </span>
           </div>
 
+          <!-- What the forge offered after the last push. Its own row: the git
+               bar above wraps as it is, and this is the one thing there that
+               is worth acting on. -->
+          <PushLinkNotice :link="pushLink" @dismiss="pushLink = null" />
+
           <div class="pv-overview-grid">
             <!-- Left: changed files + commit -->
             <div class="pv-col-left">
               <!-- Changed files -->
-              <div class="pv-card" v-if="detail.changedFiles.length">
+              <div class="pv-card" v-if="detail.changedFiles.length || untrackedFiles.length">
                 <div class="pv-card-title">
                   <span>Uncommitted changes</span>
                   <span class="pv-count-badge">{{ detail.changedFiles.length }}</span>
                 </div>
                 <div class="pv-file-list">
-                  <div
-                    v-for="f in detail.changedFiles" :key="f.file"
-                    class="pv-file-row pv-file-row--clickable"
-                    :class="{ loading: loadingFile === f.file }"
-                    @click="openDiff(f.file)" :title="f.file"
-                  >
-                    <span class="pv-file-status" :class="fileStatus(f)">{{ fileStatusChar(f) }}</span>
-                    <span class="pv-file-name">{{ f.file }}</span>
-                    <span class="pv-file-diff">
-                      <span v-if="f.added" class="pv-added">+{{ f.added }}</span>
-                      <span v-if="f.deleted" class="pv-deleted">−{{ f.deleted }}</span>
-                    </span>
-                  </div>
+                  <!-- Same tree the session side panel draws — see
+                       ChangeTree.vue and file-tree.js. -->
+                  <ChangeTree
+                    :files="detail.changedFiles"
+                    :untracked="untrackedFiles"
+                    :hidden-count="hiddenNoise"
+                    :loading-file="loadingFile || ''"
+                    :busy="gitBusy"
+                    @open="openDiff"
+                    @add="doGitAdd"
+                    @update:included="commitPaths = $event"
+                  />
                 </div>
               </div>
               <div class="pv-card pv-empty-changes" v-else>
@@ -177,6 +181,14 @@
                   v-model="commitMessage"
                   rows="5"
                 ></textarea>
+                <!-- Untracked files are not committed — see git-staging.js.
+                     Said out loud, because "it did not commit my new file" is
+                     the mirror of the bug this fixed: the commit is exactly the
+                     list of changes, and what is outside it must be visible. -->
+                <div v-if="untrackedFiles.length" class="sbx-untracked" :title="untrackedFiles.join('\n')">
+                  <SbIcon name="circle-dot" :size="11" tone="muted" />
+                  {{ untrackedFiles.length }} untracked file{{ untrackedFiles.length === 1 ? '' : 's' }} not committed
+                </div>
                 <div class="pv-git-user" v-if="gitUser.name || gitUser.email">
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                   <span class="pv-git-user-name">{{ gitUser.name }}</span>
@@ -189,8 +201,8 @@
                   <button class="pv-gen-style-btn" @click="generateCommitMsg('descriptive')" :disabled="gitBusy || generating" title="Title + bullet list of key changes">detailed</button>
                 </div>
                 <div class="pv-commit-actions">
-                  <button class="pv-action-btn" @click="doCommit" :disabled="gitBusy || !commitMessage.trim()">
-                    Commit
+                  <button class="pv-action-btn" @click="doCommit" :disabled="gitBusy || !commitMessage.trim() || !commitPaths.length">
+                    Commit{{ partialCommit ? ` (${commitPaths.length})` : '' }}
                   </button>
                 </div>
               </div>
@@ -526,6 +538,9 @@ import SbButton from './SbButton.vue';
 import { pushTarget } from '../git-push-target.js';
 import SbSwitch from './SbSwitch.vue';
 import SbIcon from './SbIcon.vue';
+import PushLinkNotice from './PushLinkNotice.vue';
+import ChangeTree from './ChangeTree.vue';
+import { withoutNoise, countNoise } from '../git-noise.js';
 import ProjectAvatar from './ProjectAvatar.vue';
 import ViewerContentApp from './ViewerContentApp.vue';
 import SessionCard from './SessionCard.vue';
@@ -562,6 +577,9 @@ const branches = ref([]);
 const remoteBranches = ref([]);
 const gitBusy = ref(false);
 const gitMessage = ref('');
+// The merge/pull request the forge offered on the last push — see
+// git-push-links.js. Outlives gitMessage on purpose: it is there to be clicked.
+const pushLink = ref(null);
 const gitError = ref(false);
 const commitMessage = ref('');
 const generating = ref(false);
@@ -669,6 +687,14 @@ const projectName = computed(() =>
   project.value?.projectPath.split('/').filter(Boolean).pop() || ''
 );
 const changedFiles = computed(() => detail.value?.changedFiles || []);
+// .DS_Store and its friends never reach the list. They are not a decision
+// anybody makes — see git-noise.js — and a row that is shown only to be
+// struck through is worse than either showing it or not.
+const untrackedFiles = computed(() => withoutNoise(detail.value?.untrackedFiles || []));
+const hiddenNoise = computed(() => countNoise(detail.value?.untrackedFiles || []));
+// What the tree's checkboxes currently include — see ChangeTree.vue.
+const commitPaths = ref([]);
+const partialCommit = computed(() => commitPaths.value.length !== changedFiles.value.length);
 const unpushedCommits = computed(() => detail.value?.unpushedCommits || []);
 // Same answer the side panel uses, so the two can never disagree.
 const push = computed(() => pushTarget(detail.value));
@@ -1080,20 +1106,37 @@ async function generateCommitMsg(style = 'short') {
 async function doCommit() {
   if (!commitMessage.value.trim()) return;
   gitBusy.value = true;
-  const res = await window.api.gitCommit(viewedPath.value, commitMessage.value.trim());
+  // The boxes in the tree decide — see ChangeTree.vue.
+  const res = await window.api.gitCommit(viewedPath.value, commitMessage.value.trim(), commitPaths.value);
   gitBusy.value = false;
   if (res.ok) { showGitMsg('Committed'); commitMessage.value = ''; await reload(); }
   else showGitMsg(res.error || 'Commit failed', true);
+}
+
+// Track files git does not know about yet — the tree above offers them, and
+// this is the `git add` that used to need a terminal.
+async function doGitAdd(paths) {
+  if (!paths?.length || gitBusy.value) return;
+  gitBusy.value = true;
+  const res = await window.api.gitAdd(viewedPath.value, paths);
+  gitBusy.value = false;
+  if (res?.ok) { showGitMsg(paths.length === 1 ? 'Added' : `Added ${paths.length} files`); await reload(); }
+  else showGitMsg(res?.error || 'Add failed', true);
 }
 
 async function doPush() {
   confirmPush.value = false;
   gitBusy.value = true;
   showGitMsg('Pushing…');
+  // Whatever the last push offered belongs to the last push.
+  pushLink.value = null;
   const res = await window.api.gitPush(viewedPath.value);
   gitBusy.value = false;
-  if (res.ok) { showGitMsg('Pushed successfully'); await reload(); }
-  else showGitMsg(res.error || 'Push failed', true);
+  if (res.ok) {
+    showGitMsg('Pushed successfully');
+    pushLink.value = res.link || null;
+    await reload();
+  } else showGitMsg(res.error || 'Push failed', true);
 }
 
 async function doCreateBranch() {

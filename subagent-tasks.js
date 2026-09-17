@@ -7,14 +7,19 @@
 // board shows these — they are not sessions — so this is the only way to see
 // what a session has running underneath it.
 //
-// Whether one is still running is not recorded anywhere: it is running until
-// its Task call has a tool_result in the parent transcript. That is one scan
-// of the parent file, done for every agent at once and only when asked.
+// Whether one is still running is not recorded anywhere, and the way to tell
+// depends on how it was launched — see agentFinished below. One scan of the
+// parent file answers it for every agent at once, and only when asked.
 
 const fs = require('fs');
 const path = require('path');
 
 const AGENT_FILE_RE = /^agent-([A-Za-z0-9_-]+)\.jsonl$/;
+// An agent with no completion recorded and no output for this long was killed
+// with its session rather than still working. Deliberately far longer than the
+// badge's window below: this is a row somebody reads, and calling a slow agent
+// dead is the same mistake in the other direction.
+const STALE_MS = 60 * 60 * 1000;
 const HEAD_BYTES = 16 * 1024;
 const TAIL_BYTES = 64 * 1024;
 
@@ -80,6 +85,46 @@ function entryText(entry) {
   return parts.join('\n').trim();
 }
 
+/**
+ * Is this agent done, according to the parent transcript?
+ *
+ * There are two kinds of Task call and they finish differently, which is the
+ * bug this function exists for. A *synchronous* agent's result is its answer:
+ * a `tool_result` for its tool_use_id means it finished. A *background* one —
+ * which is now the default — gets a `tool_result` the instant it is launched,
+ * carrying `{"status":"async_launched","agentId":…}` and nothing else. Reading
+ * that as an answer marked every background agent finished the moment it
+ * started: the row said so while its transcript was still growing, and the
+ * badge counted none of them.
+ *
+ * What a background agent's completion actually looks like in the parent is a
+ * `<task-notification>` naming it:
+ *
+ *     <task-notification>
+ *     <task-id>a541e7a160e89e13c</task-id>
+ *     <tool-use-id>toolu_01MHW…</tool-use-id>
+ *
+ * So: notified means done, whatever else is there. Otherwise a launch receipt
+ * means it is still out working, and only for a synchronous call does the
+ * tool_result mean what it used to.
+ *
+ * Substring tests rather than a parse: the parent can be tens of megabytes and
+ * this runs on a poll.
+ *
+ * @param {string} parent  the whole parent transcript
+ * @param {string} agentId
+ * @param {string} toolUseId
+ * @returns {boolean}
+ */
+function agentFinished(parent, agentId, toolUseId) {
+  if (!parent) return false;
+  if (agentId && parent.includes(`<task-id>${agentId}</task-id>`)) return true;
+  // The receipt names the agent it just launched; nothing else in the parent
+  // does. Its presence means "background", not "answered".
+  if (agentId && parent.includes(`"agentId":"${agentId}"`)) return false;
+  return !!toolUseId && parent.includes(`"tool_use_id":"${toolUseId}"`);
+}
+
 function listSubagents(sessionDir, parentJsonlPath) {
   const dir = subagentsDir(sessionDir);
   let files;
@@ -114,14 +159,23 @@ function listSubagents(sessionDir, parentJsonlPath) {
     });
   }
 
-  // One read of the parent, one substring test per agent. A finished Task has
-  // its tool_result there; anything else is still out working.
-  const pending = agents.filter(a => a.toolUseId);
-  if (pending.length) {
+  // One read of the parent, three substring tests per agent — see agentFinished.
+  //
+  // Every agent, not just the ones with a tool_use id: a `.meta.json` written
+  // by an older CLI has only the agent type in it, and filtering on the id left
+  // those with the `running: false` they were initialised with — permanently
+  // "finished", whatever their transcript was doing.
+  if (agents.length) {
     let parent = '';
     try { parent = fs.readFileSync(parentJsonlPath, 'utf8'); } catch {}
-    for (const agent of pending) {
-      agent.running = !!parent && !parent.includes(`"tool_use_id":"${agent.toolUseId}"`);
+    const abandoned = Date.now() - STALE_MS;
+    for (const agent of agents) {
+      const finished = !parent || agentFinished(parent, agent.agentId, agent.toolUseId);
+      // Nothing records an agent that was killed with its session, so silence
+      // is the only evidence there is. Long enough that a single slow tool call
+      // — a test suite, a build — cannot be mistaken for it.
+      const silent = new Date(agent.updatedAt).getTime() < abandoned;
+      agent.running = !finished && !silent;
     }
   }
 
@@ -164,9 +218,11 @@ function countRunningSubagents(sessionDir, parentJsonlPath, { recentMs = 10 * 60
 
   let running = 0;
   for (const agentId of recent) {
-    const meta = readJson(path.join(dir, `agent-${agentId}.meta.json`));
-    if (!meta?.toolUseId) continue;
-    if (!parent.includes(`"tool_use_id":"${meta.toolUseId}"`)) running++;
+    // No `continue` on a missing tool id: the notification is keyed on the
+    // agent, and an older `.meta.json` that has only the agent type in it is
+    // still an agent that may be working. See listSubagents.
+    const meta = readJson(path.join(dir, `agent-${agentId}.meta.json`)) || {};
+    if (!agentFinished(parent, agentId, meta.toolUseId)) running++;
   }
   return running;
 }
@@ -192,4 +248,5 @@ function readSubagentEntries(sessionDir, agentId) {
 
 module.exports = {
   listSubagents, countRunningSubagents, readSubagentEntries, subagentsDir, entryText,
+  agentFinished,
 };

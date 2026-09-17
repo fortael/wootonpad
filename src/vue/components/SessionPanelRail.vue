@@ -13,7 +13,7 @@
       type="button"
       class="sbx-panelrail__btn"
       :class="{ 'is-active': store.sidePanelTab === tab.id }"
-      :data-tooltip="store.sidePanelTab === tab.id ? `Hide ${tab.label.toLowerCase()}` : tab.label"
+      :data-tooltip="tipFor(tab)"
       :aria-pressed="store.sidePanelTab === tab.id"
       :aria-label="tab.label"
       @click="select(tab.id)"
@@ -29,7 +29,7 @@
     <button
       type="button"
       class="sbx-panelrail__btn sbx-panelrail__btn--danger"
-      data-tooltip="Stop session"
+      :data-tooltip="withKey('Stop session', 'stop')"
       aria-label="Stop session"
       @click="stop"
     >
@@ -49,10 +49,11 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { store } from '../store.js';
 import SbIcon from './SbIcon.vue';
 import { TABS, setSidePanelTab } from '../side-panel-tabs.js';
+import { matchShortcut, formatShortcut } from '../panel-shortcuts.js';
 import { isPlainTerminal } from '../session-filter.js';
 
 const projectPath = computed(() => store.headerSession?.projectPath || '');
@@ -99,11 +100,16 @@ function badgeFor(id) {
   return 0;
 }
 
-// Both counts are cheap reads the rail can afford without the panel open: the
-// notes list is a directory of small Markdown files, and the sub-agent list is
-// a directory listing plus one scan of the session's own transcript.
+// The notes count is a cheap read the rail can afford without the panel open:
+// a directory of small Markdown files.
 const openTodos = ref(0);
-const runningAgents = ref(0);
+
+// The agent count is not this component's to fetch. App.vue polls it for every
+// running session — the sidebar rows and the board cards read the same map —
+// and the rail used to load it once, on mount and on a change of session. A
+// session that spawns an agent mid-turn changes neither, so the badge sat at
+// whatever it happened to be when the view opened.
+const runningAgents = computed(() => store.subagentCounts.get(sessionId.value) || 0);
 
 async function loadTodoBadge() {
   const p = projectPath.value;
@@ -115,23 +121,13 @@ async function loadTodoBadge() {
     .reduce((sum, n) => sum + Math.max((n.total || 0) - (n.done || 0), 0), 0);
 }
 
-async function loadAgentBadge() {
-  const id = sessionId.value;
-  if (!id || isPlainTerminal(store.headerSession)) { runningAgents.value = 0; return; }
-  const agents = await window.api.getSessionSubagents(id).catch(() => []);
-  if (sessionId.value !== id) return;
-  runningAgents.value = (agents || []).filter(a => a.running).length;
-}
-
 function loadAll() {
   loadCounts();
   loadTodoBadge();
-  loadAgentBadge();
 }
 
 onMounted(loadAll);
 watch(projectPath, loadAll);
-watch(sessionId, loadAgentBadge);
 
 // Ticking an item off in the panel beside this rail changes the number on it.
 // The notes are files, and nothing about writing one reaches a badge that only
@@ -153,8 +149,6 @@ watch(() => store.sidePanelTab, (tab) => {
 // panel or the Projects tab did while this session was busy.
 watch(() => !!store.sessionBusyState.get(sessionId.value), (busy, wasBusy) => {
   if (wasBusy && !busy) loadCounts();
-  // A turn starting or ending is when sub-agents appear and finish.
-  loadAgentBadge();
 });
 
 function select(id) {
@@ -172,4 +166,39 @@ function stop() {
 // app.js knows which of the two views is showing and closes the right one —
 // the board's bottom split belongs to the board, the full view does not.
 function closeView() { window.__sb?.closeSessionView?.(); }
+
+// ── Keys ──────────────────────────────────────────────────────────
+//
+// Bound here rather than globally: the rail exists exactly when a session is
+// open, which is exactly when these mean anything. Capture phase, because the
+// focus is usually inside a terminal and xterm's helper textarea is downstream
+// — the same reason the command palette takes its key that way.
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+
+function tipFor(tab) {
+  const label = store.sidePanelTab === tab.id ? `Hide ${tab.label.toLowerCase()}` : tab.label;
+  return withKey(label, tab.id);
+}
+
+function withKey(label, id) {
+  const key = formatShortcut(id, isMac);
+  return key ? `${label}  ${key}` : label;
+}
+
+function onKey(event) {
+  const id = matchShortcut(event, isMac);
+  if (!id) return;
+  // Only once it is going to be acted on: everything else on the keyboard
+  // still belongs to whatever has focus.
+  event.preventDefault();
+  event.stopPropagation();
+
+  if (id === 'stop') { stop(); return; }
+  if (id === 'hide') { setSidePanelTab(null); return; }
+  // A pane a terminal does not get is not a pane its rail can open.
+  if (visibleTabs.value.some(tab => tab.id === id)) select(id);
+}
+
+onMounted(() => document.addEventListener('keydown', onKey, true));
+onBeforeUnmount(() => document.removeEventListener('keydown', onKey, true));
 </script>
