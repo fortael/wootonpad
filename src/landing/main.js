@@ -35,7 +35,6 @@ import '../../public/style.css';
 // Redesign layer — same list, same order as public/index.html loads it. Keep
 // the two in step: a stylesheet the app loads and the landing does not is a
 // component that silently renders unstyled in the demo.
-import '../../public/css/controls.css';
 import '../../public/css/shell.css';
 import '../../public/css/sidebar-redesign.css';
 import '../../public/css/sidebar-blocks.css';
