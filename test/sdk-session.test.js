@@ -101,3 +101,47 @@ test('a prompt the CLI cannot answer is refused before it is queued', () => {
   assert.equal(isPromptContent([{ text: 'no type' }]), false);
   assert.equal(isPromptContent(['just a string']), false);
 });
+
+// ── A re-keyed session's permission requests ─────────────────────
+//
+// The CLI can report a different session id than the one a session was
+// started under. A permission request raised after that has to carry the new
+// one: the renderer is listening for it, and a request addressed to the old id
+// hangs the turn on a dialog nobody is shown.
+
+test('a permission request after a re-key carries the new session id', async () => {
+  const sdkSession = require('../sdk-session');
+  let options = null;
+  let release;
+  const parked = new Promise(r => { release = r; });
+  sdkSession.configure({
+    loadSdk: async () => ({
+      query: ({ options: o }) => {
+        options = o;
+        return (async function* () {
+          yield { type: 'system', subtype: 'init', session_id: 'new-id' };
+          await parked;
+        })();
+      },
+    }),
+  });
+
+  const seen = [];
+  const rekeyed = new Promise(resolve => {
+    sdkSession.startSdkSession('old-id', {
+      projectPath: '/tmp',
+      isNew: true,
+      onMessage: () => {},
+      onSessionId: (from, to) => resolve([from, to]),
+      canUseTool: async (tool, input, ctx, liveId) => { seen.push(liveId); return { behavior: 'allow' }; },
+    });
+  });
+
+  assert.deepEqual(await rekeyed, ['old-id', 'new-id']);
+  await options.canUseTool('AskUserQuestion', {}, {});
+  assert.deepEqual(seen, ['new-id']);
+
+  sdkSession.stopSdkSession('new-id');
+  release();
+  sdkSession.configure({ loadSdk: null });
+});

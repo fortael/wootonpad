@@ -59,6 +59,9 @@
       ></button>
     </div>
   </div>
+  <!-- Whatever the caller wants between the toolbar and the text — a note's
+       deadline and projects, for one. -->
+  <slot name="below-toolbar" />
   <div ref="editorEl" class="viewer-panel-editor" :style="previewMode ? { display: 'none' } : {}"></div>
   <div ref="previewEl" class="markdown-preview" v-show="previewMode"></div>
 </template>

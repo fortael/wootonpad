@@ -194,6 +194,14 @@
            main view edits too. A note is rarely only checkboxes — the prose
            around them is half the point. -->
       <div v-else-if="editingDoc" class="sbx-sidepanel__pane sbx-sidepanel__pane--doc">
+        <!-- A note's deadline and projects, set above its text rather than by
+             editing the frontmatter. -->
+        <NoteMetaBar
+          v-if="editingDoc.kind === 'note'"
+          :filename="editingDoc.filename"
+          :before-change="saveDocFirst"
+          @changed="reloadDoc"
+        />
         <!-- The app's own Markdown editor, the same CodeMirror the main view
              and the Projects tab use — highlighting, folding, ⌘F, ⌘S. -->
         <div ref="docHostRef" class="sbx-doc__editor" @keydown="onDocKey"></div>
@@ -207,6 +215,40 @@
            What the session spans, and the two files that describe the task:
            CLAUDE.md (generated from the group's manifest) and MEMORY.md (kept
            by the session itself). Both open read-only over this pane. -->
+      <!-- ── Buddy's memory ──────────────────────────────────────────
+           Claude Code's own auto-memory for Buddy's folder — the real files,
+           as the CLI loads them (chat-agent.js): the MEMORY.md index first,
+           then one file per fact. Buddy writes them itself as it learns about
+           your projects, ongoing work and how you like things. Each card opens
+           the file in the read-only viewer. -->
+      <div v-else-if="tab === 'memory'" class="sbx-sidepanel__pane sbx-grouppane">
+        <div class="sbx-sidepanel__seclabel">
+          Buddy's memory
+          <span class="sbx-memory__count">{{ memory.files.length }}</span>
+        </div>
+
+        <div v-if="!memory.files.length" class="pv-empty">
+          Nothing remembered yet. Buddy saves what it learns about your projects, ongoing work and
+          preferences here on its own, and every conversation starts from it.
+        </div>
+
+        <div v-for="file in memory.files" :key="file.name" class="sbx-memory__file">
+          <button
+            type="button"
+            class="sbx-grouppane__file"
+            @click="openMemoryFile(file)"
+          >
+            <SbIcon :name="file.name === 'MEMORY.md' ? 'brain' : 'file'" :size="13" tone="muted" />
+            <span class="sbx-grouppane__filename">{{ file.name }}</span>
+            <span class="sbx-grouppane__filemeta">{{ lineCount(file.content) }} lines · {{ relTime(file.modified) }}</span>
+            <span v-if="file.name === 'MEMORY.md'" class="sbx-grouppane__filehint">the index — loaded into every conversation</span>
+          </button>
+          <pre class="sbx-memory__text">{{ file.content }}</pre>
+        </div>
+
+        <div v-if="memory.dir" class="sbx-grouppane__dir" :title="memory.dir">{{ memory.dir }}</div>
+      </div>
+
       <div v-else-if="tab === 'group'" class="sbx-sidepanel__pane sbx-grouppane">
         <div class="sbx-sidepanel__seclabel">Projects</div>
         <div
@@ -441,16 +483,28 @@
             <button type="button" class="sbx-sidepanel__linkbtn" @click="createNote">Create</button>
           </div>
 
-          <div v-if="!projectNotes.length" class="pv-empty">
-            No notes for this project yet.
+          <div v-if="!liveProjectNotes.length" class="pv-empty">
+            {{ archivedProjectNotes.length ? 'Every note here is archived.' : 'No notes for this project yet.' }}
           </div>
 
-          <div v-for="note in projectNotes" :key="note.filename" class="sbx-todo">
+          <div
+            v-for="note in shownProjectNotes"
+            :key="note.filename"
+            class="sbx-todo"
+            :class="{ 'is-archived': note.archived }"
+          >
             <div class="sbx-todo__head" @click="editNote(note)">
               <span class="sbx-todo__title">{{ note.title }}</span>
               <span v-if="note.total" class="sbx-todo__count" :class="{ 'is-done': note.done === note.total }">
                 {{ note.done }}/{{ note.total }}
               </span>
+              <button
+                type="button"
+                class="sbx-todo__act"
+                :data-tooltip="note.archived ? 'Bring back' : 'Archive'"
+                :aria-label="note.archived ? 'Bring back' : 'Archive'"
+                @click.stop="archiveNote(note, !note.archived)"
+              ><SbIcon :name="note.archived ? 'archive-restore' : 'archive'" :size="11" tone="muted" /></button>
               <button
                 type="button"
                 class="sbx-todo__act"
@@ -466,6 +520,18 @@
                 @click.stop="openNote(note)"
               ><SbIcon name="maximize-2" :size="11" tone="muted" /></button>
             </div>
+            <div class="sbx-todo-meta">
+              <DueChip v-if="note.nextDue && note.nextDue !== note.due" :due="note.nextDue" :hint="nextDueHint(note)" />
+              <DueChip
+                :due="note.due"
+                :done="!!note.total && note.done === note.total"
+                subject="list"
+                icon="flag"
+                editable
+                @set="date => setNoteDue(note, date)"
+              />
+              <TodoProgress :done="note.done" :total="note.total" :overdue="overdueCount(note, today)" />
+            </div>
             <!-- The whole note, prose and checkboxes in the order they were
                  written: a list of boxes without the text around them loses
                  the part that says why they are there. -->
@@ -478,12 +544,23 @@
                   @click="toggleNoteTodo(note, block)"
                 >
                   <SbIcon :name="block.done ? 'square-check-big' : 'square'" :size="12" tone="muted" />
-                  <span>{{ block.text || '(empty)' }}</span>
+                  <span class="sbx-todo__itemtext">{{ block.text || '(empty)' }}</span>
+                  <DueChip :due="block.due" :done="block.done" editable @set="date => setTodoDue(note, block, date)" />
                 </div>
                 <p v-else class="sbx-todo__text" @click="editNote(note)">{{ block.text }}</p>
               </template>
             </div>
           </div>
+
+          <button
+            v-if="archivedProjectNotes.length"
+            type="button"
+            class="note-archived-toggle"
+            @click="showArchivedNotes = !showArchivedNotes"
+          >
+            <SbIcon name="archive" :size="12" tone="muted" />
+            {{ showArchivedNotes ? 'Hide archived' : `Archived (${archivedProjectNotes.length})` }}
+          </button>
 
           <div class="sbx-sidepanel__seclabel">
             Plans
@@ -543,9 +620,15 @@
               <span class="sbx-agent__state">{{ agent.running ? 'running' : 'finished' }}</span>
             </span>
             <span class="sbx-agent__desc">{{ agent.description || agent.agentId }}</span>
-            <span v-if="agent.lastText" class="sbx-agent__last">{{ agent.lastText }}</span>
+            <!-- What it last wrote, re-read on every line it writes (see the
+                 watch below) — this is the part that moves. -->
+            <span v-if="agent.lastText" class="sbx-agent__last" :class="{ 'is-live': agent.running }">{{ agent.lastText }}</span>
             <span class="sbx-agent__meta">
-              {{ agentWhen(agent) }} · {{ formatBytes(agent.bytes) }}
+              <span v-if="agent.tokens" class="sbx-agent__tokens" :title="tokenTitle(agent)">
+                {{ formatTokens(agent.tokens) }} tokens
+              </span>
+              <span v-if="agent.toolUses">· {{ agent.toolUses }} tool{{ agent.toolUses === 1 ? '' : 's' }}</span>
+              <span>· {{ agentWhen(agent) }}</span>
             </span>
           </button>
         </div>
@@ -577,6 +660,10 @@ import ChangeTree from './ChangeTree.vue';
 import { withoutNoise, countNoise } from '../git-noise.js';
 import { tabsFor, panelTab, setSidePanelTab } from '../side-panel-tabs.js';
 import ProjectAvatar from './ProjectAvatar.vue';
+import DueChip from './DueChip.vue';
+import TodoProgress from './TodoProgress.vue';
+import NoteMetaBar from './NoteMetaBar.vue';
+import { useToday, overdueCount, nextDueHint } from '../todo-dates.js';
 
 // Two instances exist: beside the open session, and beside the Chat tab's
 // assistant. Each takes its subject and its own open pane — see
@@ -691,6 +778,39 @@ function openGroupDoc(doc) {
 }
 
 function openProject(gp) { window.__sb?.openProjectByPath?.(gp); }
+
+// ── Buddy's memory ────────────────────────────────────────────────
+// The CLI's auto-memory folder for Buddy, read whenever the pane is showing and
+// again whenever a file in it changes — main.js watches the folder
+// (buddy-memory-changed → store.buddyMemoryRevision).
+const memory = ref({ dir: null, files: [] });
+
+async function loadMemory() {
+  if (!isChat.value) return;
+  const res = await window.api.buddyMemory?.().catch(() => null);
+  memory.value = { dir: res?.dir || null, files: res?.files || [] };
+}
+
+function openMemoryFile(file) {
+  if (memory.value.dir) store.sidePanelFile = `${memory.value.dir}/${file.name}`;
+}
+
+const lineCount = (text) => (text ? String(text).trimEnd().split('\n').length : 0);
+
+function relTime(iso) {
+  const ms = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(ms)) return '';
+  const min = Math.round(ms / 60000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+}
+
+watch([tab, () => store.buddyMemoryRevision], ([t]) => {
+  if (t === 'memory') loadMemory();
+}, { immediate: true });
 const shortOf = (p) => String(p || '').split('/').filter(Boolean).slice(-2).join('/');
 
 watch([groupDir, tab], ([dir, t]) => {
@@ -1091,12 +1211,25 @@ watch(tab, (next) => {
 const notes = ref([]);
 const plans = ref([]);
 const allPlans = ref(false);
+const today = useToday();
+
+// A note written or re-dated elsewhere — Buddy, the Plans tab, the editor —
+// shows here without leaving the pane and coming back.
+watch(() => store.notesRevision, () => { if (tab.value === 'todos') loadDocs(); });
 
 // The assistant's list is the whole account's — it is the one place that looks
 // across every project, which is what it is asked about.
 const projectNotes = computed(() => (isChat.value
   ? notes.value
   : notes.value.filter(n => (n.projects || []).includes(projectPath.value))));
+
+// Archived ones are out of the pane until asked for, then after the rest.
+const showArchivedNotes = ref(false);
+const liveProjectNotes = computed(() => projectNotes.value.filter(n => !n.archived));
+const archivedProjectNotes = computed(() => projectNotes.value.filter(n => n.archived));
+const shownProjectNotes = computed(() => (showArchivedNotes.value
+  ? [...liveProjectNotes.value, ...archivedProjectNotes.value]
+  : liveProjectNotes.value));
 
 const visiblePlans = computed(() => ((allPlans.value || isChat.value)
   ? plans.value
@@ -1300,6 +1433,48 @@ async function toggleNoteTodo(note, todo) {
   window.vuePlans?.refreshNotes?.();
 }
 
+// A date, or null to clear it — the item's on its own line, the list's in the
+// note's header. See todo-due.js.
+async function setTodoDue(note, todo, due) {
+  const res = await window.api.setNoteTodoDue(note.filename, todo.index, due);
+  if (!res?.ok) return;
+  await loadDocs();
+  window.vuePlans?.refreshNotes?.();
+}
+
+async function archiveNote(note, archived) {
+  const res = await window.api.setNoteArchived(note.filename, archived);
+  if (!res?.ok) return;
+  await loadDocs();
+  window.vuePlans?.refreshNotes?.();
+}
+
+// The bar above the editor writes the file itself; unsaved text goes to disk
+// first, so the header change does not land under an older copy of the note.
+async function saveDocFirst() {
+  if (docDirty.value) await saveDoc();
+  return !docDirty.value;
+}
+
+// …and then the editor shows the file as it now is.
+async function reloadDoc() {
+  const doc = editingDoc.value;
+  if (!doc || doc.kind !== 'note') return;
+  const res = await window.api.readNote(doc.filename);
+  if (!res?.ok || editingDoc.value !== doc) return;
+  doc.content = res.content;
+  docOriginal.value = res.content;
+  docDirty.value = false;
+  if (docView) docView.dispatch({ changes: { from: 0, to: docView.state.doc.length, insert: res.content } });
+}
+
+async function setNoteDue(note, due) {
+  const res = await window.api.setNoteDue(note.filename, due);
+  if (!res?.ok) return;
+  await loadDocs();
+  window.vuePlans?.refreshNotes?.();
+}
+
 // ── Background tasks ──────────────────────────────────────────────
 //
 // Sub-agents of the open session, polled for as long as the pane is showing.
@@ -1336,6 +1511,18 @@ function agentWhen(agent) {
   return window.formatDate ? window.formatDate(new Date(when)) : new Date(when).toLocaleString();
 }
 
+// 842 · 12.4k · 1.2M — the way the CLI prints an agent's tokens.
+function formatTokens(n) {
+  if (!n) return '0';
+  if (n < 1000) return String(n);
+  if (n < 1e6) return `${(n / 1000).toFixed(n < 10000 ? 1 : 0)}k`;
+  return `${(n / 1e6).toFixed(1)}M`;
+}
+
+function tokenTitle(agent) {
+  return `Context now: ${agent.tokens.toLocaleString()} tokens\nWritten so far: ${(agent.outputTokens || 0).toLocaleString()} output tokens`;
+}
+
 function formatBytes(n) {
   if (!n) return '0 B';
   if (n < 1024) return n + ' B';
@@ -1352,6 +1539,31 @@ watch([tab, sessionId], async () => {
   if (docDirty.value) await saveDoc();
   destroyDocView();
   editingDoc.value = null;
+});
+
+// ── Live updates ──────────────────────────────────────────────────
+// While the pane is open, main.js watches the session's agents and its
+// transcript and says when either moves; the list is re-read then, rather
+// than on the poll below, which stays as the fallback where file watching is
+// silent (a WSL account's share).
+let watchedSession = '';
+
+function watchAgents(id) {
+  if (id === watchedSession) return;
+  if (watchedSession) window.api.unwatchSubagents?.(watchedSession);
+  watchedSession = id || '';
+  if (watchedSession) window.api.watchSubagents?.(watchedSession);
+}
+
+const offSubagents = window.api.onSubagentsChanged?.((id) => {
+  if (id && id === sessionId.value && tab.value === 'tasks') loadSubagents();
+});
+
+watch([tab, sessionId], () => watchAgents(tab.value === 'tasks' ? sessionId.value : ''), { immediate: true });
+
+onBeforeUnmount(() => {
+  watchAgents('');
+  if (typeof offSubagents === 'function') offSubagents();
 });
 
 watch([tab, sessionId, sessionState], () => {

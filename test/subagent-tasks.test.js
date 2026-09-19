@@ -145,3 +145,51 @@ test('the running count skips the parent read when every agent has gone quiet', 
     fs.rmSync(s.root, { recursive: true, force: true });
   }
 });
+
+// ── Token use ─────────────────────────────────────────────────────
+
+const fsT = require('fs');
+const osT = require('os');
+const pathT = require('path');
+const { agentUsage } = require('../subagent-tasks');
+
+const rec = (id, usage, content = []) => JSON.stringify({ type: 'assistant', message: { id, usage, content } }) + '\n';
+
+test('an agent\'s tokens are its last context and its output, each message counted once', () => {
+  const dir = fsT.mkdtempSync(pathT.join(osT.tmpdir(), 'wootonpad-agent-'));
+  const file = pathT.join(dir, 'agent-a.jsonl');
+  try {
+    // One message written as two records (text, then a tool call), each with
+    // the usage so far — output must count once, not twice.
+    fsT.writeFileSync(file,
+      rec('m1', { input_tokens: 10, cache_read_input_tokens: 1000, output_tokens: 50 }, [{ type: 'text', text: 'hi' }])
+      + rec('m1', { input_tokens: 10, cache_read_input_tokens: 1000, output_tokens: 80 }, [{ type: 'tool_use', id: 't1', name: 'Read' }]));
+    let u = agentUsage(file, fsT.statSync(file).size);
+    assert.equal(u.tokens, 10 + 1000 + 80);
+    assert.equal(u.outputTokens, 80);
+    assert.equal(u.toolUses, 1);
+
+    // Appended: only the new bytes are read, and the totals move on.
+    fsT.appendFileSync(file, rec('m2', { input_tokens: 5, cache_read_input_tokens: 1300, output_tokens: 40 }, [{ type: 'tool_use', id: 't2', name: 'Grep' }]));
+    u = agentUsage(file, fsT.statSync(file).size);
+    assert.equal(u.tokens, 5 + 1300 + 40);
+    assert.equal(u.outputTokens, 120);
+    assert.equal(u.toolUses, 2);
+  } finally {
+    fsT.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a half-written last line is picked up once it is finished', () => {
+  const dir = fsT.mkdtempSync(pathT.join(osT.tmpdir(), 'wootonpad-agent-'));
+  const file = pathT.join(dir, 'agent-b.jsonl');
+  try {
+    const line = rec('m1', { input_tokens: 1, output_tokens: 2 });
+    fsT.writeFileSync(file, line.slice(0, 20));
+    assert.equal(agentUsage(file, fsT.statSync(file).size).tokens, 0);
+    fsT.appendFileSync(file, line.slice(20));
+    assert.equal(agentUsage(file, fsT.statSync(file).size).tokens, 3);
+  } finally {
+    fsT.rmSync(dir, { recursive: true, force: true });
+  }
+});

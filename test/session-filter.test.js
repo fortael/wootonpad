@@ -119,9 +119,9 @@ test('a group session gets the group pane first', () => {
   assert.ok(ids.includes('changes'));
 });
 
-test('the assistant\'s panel offers only TODOs and sub-agents', () => {
+test('the assistant\'s panel offers only its memory, TODOs and sub-agents', () => {
   const { tabsFor } = require('../src/vue/side-panel-tabs.js');
-  assert.deepEqual(tabsFor(chat(), 'chat').map(t => t.id), ['todos', 'tasks']);
+  assert.deepEqual(tabsFor(chat(), 'chat').map(t => t.id), ['memory', 'todos', 'tasks']);
 });
 
 test('the side panel never opens over a terminal', () => {

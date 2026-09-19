@@ -424,7 +424,7 @@
              text, so editing the prompt cannot turn it into a coder. -->
         <template v-if="tab === 'assistant' && !isProject">
           <div class="settings-section">
-            <div class="settings-section-title">Chat assistant</div>
+            <div class="settings-section-title">Buddy</div>
             <div class="settings-field settings-field--column">
               <div class="settings-field-info">
                 <span class="settings-label">System prompt</span>
@@ -652,7 +652,7 @@ const scopeLabel = computed(() => (isProject.value
 const TABS = [
   { id: 'agent', label: 'Agent', globalOnly: false },
   { id: 'git', label: 'Git', globalOnly: true },
-  { id: 'assistant', label: 'Assistant', globalOnly: true },
+  { id: 'assistant', label: 'Buddy', globalOnly: true },
   { id: 'appearance', label: 'Appearance', globalOnly: true },
 ];
 const tabs = computed(() => TABS.filter(t => !t.globalOnly || !isProject.value));

@@ -19,7 +19,11 @@
       @click="select(tab.id)"
     >
       <SbIcon :name="tab.icon" :size="14" />
-      <span v-if="badgeFor(tab.id)" class="sbx-panelrail__badge">{{ badgeFor(tab.id) }}</span>
+      <span
+        v-if="badgeFor(tab.id)"
+        class="sbx-panelrail__badge"
+        :class="{ 'is-danger': tab.id === 'todos' && overdueTodos > 0 }"
+      >{{ badgeFor(tab.id) }}</span>
     </button>
 
     <span v-if="visibleTabs.length" class="sbx-panelrail__sep" role="separator"></span>
@@ -57,6 +61,7 @@ import { store } from '../store.js';
 import SbIcon from './SbIcon.vue';
 import { tabsFor, panelTab, setSidePanelTab } from '../side-panel-tabs.js';
 import { matchShortcut, formatShortcut } from '../panel-shortcuts.js';
+import { useToday, overdueCount } from '../todo-dates.js';
 import { isPlainTerminal } from '../session-filter.js';
 
 // Two rails exist at once: the one over the open session and the one beside
@@ -129,6 +134,9 @@ function badgeFor(id) {
 // The notes count is a cheap read the rail can afford without the panel open:
 // a directory of small Markdown files.
 const openTodos = ref(0);
+const overdueTodos = ref(0);
+const today = useToday();
+watch(today, loadTodoBadge);
 
 // The agent count is not this component's to fetch. App.vue polls it for every
 // running session — the sidebar rows and the board cards read the same map —
@@ -147,9 +155,12 @@ async function loadTodoBadge() {
   const scopeOf = props.scope === 'chat'
     ? null
     : new Set(groupProjects.value.length ? groupProjects.value : [p]);
-  openTodos.value = (notes || [])
-    .filter(n => !scopeOf || (n.projects || []).some(q => scopeOf.has(q)))
-    .reduce((sum, n) => sum + Math.max((n.total || 0) - (n.done || 0), 0), 0);
+  const inScope = (notes || [])
+    .filter(n => !n.archived)
+    .filter(n => !scopeOf || (n.projects || []).some(q => scopeOf.has(q)));
+  openTodos.value = inScope.reduce((sum, n) => sum + Math.max((n.total || 0) - (n.done || 0), 0), 0);
+  // Red while anything counted is past its date — see todo-due.js.
+  overdueTodos.value = inScope.reduce((sum, n) => sum + overdueCount(n, today.value), 0);
 }
 
 function loadAll() {

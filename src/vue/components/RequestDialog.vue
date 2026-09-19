@@ -2,7 +2,7 @@
   <div
     ref="rootRef"
     class="sbx-req"
-    :class="[`sbx-req--${mode}`, { 'is-wide': mode === 'ask' }]"
+    :class="[`sbx-req--${mode}`, { 'is-wide': mode === 'ask' || mode === 'wooton', 'is-danger': mode === 'wooton' && wooton.kind === 'danger' }]"
     tabindex="-1"
     role="dialog"
     aria-modal="true"
@@ -10,7 +10,7 @@
   >
     <!-- ── Heading ─────────────────────────────────────────────── -->
     <div class="sbx-req__head">
-      <SbIcon :name="mode === 'ask' ? 'message-square' : 'triangle-alert'" :size="13" />
+      <SbIcon :name="headIcon" :size="13" />
       <span class="sbx-req__q">{{ heading }}</span>
       <span v-if="subject" class="sbx-req__subject" :title="subject">{{ subject }}</span>
       <span v-if="steps.length > 1" class="sbx-req__count">{{ step + 1 }} / {{ steps.length }}</span>
@@ -94,8 +94,80 @@
       <p v-if="error" class="sbx-req__error">{{ error }}</p>
     </template>
 
+    <!-- ── One of Buddy's own tools ────────────────────────────────
+         Drawn like a question rather than a permission: what the tool is
+         about to touch as chips, what it will do as fields, and the answers
+         as a numbered list — see wooton-permission.js. -->
+    <template v-if="mode === 'wooton'">
+      <div v-if="wooton.projects.length || wooton.sessions.length" class="sbx-req__chips">
+        <button
+          v-for="p in wooton.projects"
+          :key="'p' + p"
+          type="button"
+          class="sbx-req__chip"
+          :title="p"
+          @click="openProject(p)"
+        >
+          <ProjectAvatar class="sbx-req__chip-avatar" :project-path="p" />
+          {{ baseName(p) }}
+        </button>
+        <button
+          v-for="id in wooton.sessions"
+          :key="'s' + id"
+          type="button"
+          class="sbx-req__chip sbx-req__chip--session"
+          :title="`Session ${id}`"
+          @click="openSession(id)"
+        >
+          <SbIcon name="messages-square" :size="11" />
+          {{ sessionLabel(id) }}
+          <span class="sbx-req__chip-id">({{ id.slice(0, 8) }})</span>
+        </button>
+      </div>
+
+      <p v-if="wooton.warning" class="sbx-req__warning">
+        <SbIcon name="triangle-alert" :size="12" /> {{ wooton.warning }}
+      </p>
+
+      <div v-if="wooton.fields.length" class="sbx-req__wfields">
+        <div v-for="(f, i) in wooton.fields" :key="i" class="sbx-req__wfield">
+          <span class="sbx-req__wfield-label">{{ f.label }}</span>
+          <span v-if="f.kind === 'text'" class="sbx-req__wfield-value" :class="{ 'is-strong': f.strong }">{{ f.value }}</span>
+          <ul v-else-if="f.kind === 'checklist'" class="sbx-req__wchecks">
+            <li v-for="(item, j) in f.items" :key="j" :class="{ 'is-done': item.done }">
+              <SbIcon :name="item.done ? 'square-check-big' : 'square'" :size="12" />
+              <span>{{ item.text }}</span>
+            </li>
+          </ul>
+          <ul v-else-if="f.kind === 'list'" class="sbx-req__wlist">
+            <li v-for="(item, j) in f.items" :key="j">{{ item }}</li>
+          </ul>
+          <p v-else class="sbx-req__wblock">{{ f.value }}</p>
+        </div>
+      </div>
+
+      <div class="sbx-req__options" role="listbox">
+        <button
+          v-for="(choice, i) in choices"
+          :key="choice.id"
+          type="button"
+          class="sbx-req__option"
+          :class="[`is-${choice.tone || 'plain'}`, { 'is-cursor': i === cursor }]"
+          role="option"
+          @mouseenter="cursor = i"
+          @click="settle(choice.id)"
+        >
+          <kbd class="sbx-req__key">{{ i + 1 }}</kbd>
+          <span class="sbx-req__option-body">
+            <span class="sbx-req__option-label">{{ choice.label }}</span>
+            <span v-if="choice.description" class="sbx-req__option-desc">{{ choice.description }}</span>
+          </span>
+        </button>
+      </div>
+    </template>
+
     <!-- ── MCP elicitation ─────────────────────────────────────── -->
-    <template v-else-if="mode === 'elicit'">
+    <template v-if="mode === 'elicit'">
       <p class="sbx-req__desc">{{ request.message }}</p>
 
       <p v-if="request.mode === 'url'" class="sbx-req__url">
@@ -159,6 +231,13 @@
         </button>
       </template>
 
+      <!-- The options above are the answers; only the way out is repeated. -->
+      <template v-else-if="mode === 'wooton'">
+        <button type="button" class="pv-gen-style-btn" @click="cancel">
+          Cancel <kbd class="sbx-req__key">esc</kbd>
+        </button>
+      </template>
+
       <!-- One numbered row per answer, in the order you read them, so the
            digit you press is the line you are looking at. -->
       <template v-else>
@@ -181,6 +260,9 @@
 import { ref, computed, watch, onMounted, nextTick } from 'vue';
 import SbIcon from './SbIcon.vue';
 import { describePermission, permissionChoices } from '../permission-describe.js';
+import { describeWootonPermission } from '../wooton-permission.js';
+import { isWootonTool } from '../wooton-tools.js';
+import ProjectAvatar from './ProjectAvatar.vue';
 import {
   parseQuestions, questionTitle, initialAnswers, isAnswered, slotError, buildUpdatedInput,
 } from '../ask-question.js';
@@ -215,7 +297,33 @@ const mode = computed(() => {
   if (props.request.kind === 'dialog') {
     return props.request.dialogKind === REFUSAL_FALLBACK ? 'dialog' : 'unknown';
   }
-  return props.request.toolName === 'AskUserQuestion' && questions.value.length ? 'ask' : 'permission';
+  if (props.request.toolName === 'AskUserQuestion' && questions.value.length) return 'ask';
+  // Buddy's own tools are known down to every field, so they are asked about
+  // as questions rather than as a sentence over raw JSON.
+  if (isWootonTool(props.request.toolName)) return 'wooton';
+  return 'permission';
+});
+
+// ── Buddy's tools ─────────────────────────────────────────────────
+
+const wooton = computed(() => (mode.value === 'wooton'
+  ? describeWootonPermission(props.request.toolName, props.request.input, props.request)
+  : { projects: [], sessions: [], fields: [], choices: [], warning: '', kind: 'write', icon: 'bot', question: '' }));
+
+const baseName = (p) => String(p || '').split('/').filter(Boolean).pop() || p;
+
+// The title the sidebar shows, when the app knows the session.
+function sessionLabel(id) {
+  return window.sbSessionInfo?.(id)?.title || 'Session';
+}
+
+function openProject(p) { window.__sb?.openProjectByPath?.(p); }
+function openSession(id) { window.__sb?.openSessionById?.(id); }
+
+const headIcon = computed(() => {
+  if (mode.value === 'ask') return 'message-square';
+  if (mode.value === 'wooton') return wooton.value.icon || 'bot';
+  return 'triangle-alert';
 });
 
 // ── AskUserQuestion ───────────────────────────────────────────────
@@ -336,6 +444,7 @@ const choices = computed(() => {
       { id: 'cancelled', label: 'Neither', description: '', tone: 'danger' },
     ];
   }
+  if (mode.value === 'wooton') return wooton.value.choices;
   return permissionChoices(props.request);
 });
 
@@ -355,6 +464,7 @@ const heading = computed(() => {
   if (mode.value === 'dialog') {
     return `${modelName(dialog.value.originalModel)} declined this turn.`;
   }
+  if (mode.value === 'wooton') return wooton.value.question;
   return described.value.question;
 });
 
@@ -443,7 +553,12 @@ function onKey(event) {
       event.preventDefault();
       settle(choices.value[digit - 1].id);
     }
-    // Enter is the primary answer, which for a permission is the first row.
+    // Enter is the primary answer, which for a permission is the first row —
+    // except for something that cannot be undone, which takes a deliberate
+    // digit or click rather than a key pressed on the way somewhere else.
+    if (event.key === 'Enter' && !typing(event) && mode.value === 'wooton' && wooton.value.kind === 'danger') {
+      return;
+    }
     if (event.key === 'Enter' && !typing(event)) {
       event.preventDefault();
       settle(choices.value[0].id);

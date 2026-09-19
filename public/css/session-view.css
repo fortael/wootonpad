@@ -2474,6 +2474,10 @@
   align-items: center;
   gap: 2px;
   flex: none;
+  /* Its own size, not the parent's: a sidebar row's meta line sets one, a
+     board card's does not, and the count came out at card-title size there. */
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
   font-variant-numeric: tabular-nums;
   color: var(--status-running);
 }

@@ -334,6 +334,8 @@ const props = defineProps({
   // A permission mode this view must not offer to change. main.js refuses the
   // change as well; this is the half that keeps the picker off the screen.
   lockPermissionMode: { type: String, default: '' },
+  // Slash commands answered here instead of being sent: `{ clear: fn }`.
+  localCommands: { type: Object, default: null },
 });
 
 const subject = computed(() => props.session || store.headerSession);
@@ -960,6 +962,17 @@ async function send() {
   const list = attachments.value;
   const text = promptText(draft.value, list);
   if ((!text && !list.length) || !sessionId.value) return;
+
+  // A slash command the host handles itself rather than the CLI — Buddy's
+  // /clear, which has to start a fresh conversation *and* a fresh view, where
+  // the CLI's own would only clear the context behind a screen still full.
+  const local = /^\/([\w-]+)$/.exec(text.trim());
+  if (local && !list.length && props.localCommands?.[local[1]]) {
+    draft.value = '';
+    nextTick(() => autoGrow());
+    await props.localCommands[local[1]]();
+    return;
+  }
   const content = promptContent(draft.value, list);
 
   // Echoed locally: the CLI does not send the prompt back, and a message that

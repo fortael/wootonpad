@@ -11,6 +11,8 @@
 //   ⌘H  is "Hide WootonPad" on macOS. It is a native menu accelerator (see
 //       buildMenu in main.js), so it is handled before the renderer ever sees
 //       the key. Hiding the panel takes ⇧⌘H.
+//   ⌘B  opens Buddy, from anywhere in the app — an app-level key, not a
+//       panel's. Background tasks, which had it first, moved to ⌘J (jobs).
 
 /**
  * @typedef {object} Shortcut
@@ -25,13 +27,23 @@ export const PANEL_SHORTCUTS = [
   { id: 'shell', key: 't', label: 'Shell' },
   { id: 'changes', key: 'd', label: 'Uncommitted changes' },
   { id: 'todos', key: 'o', label: 'TODOs and plans' },
-  { id: 'tasks', key: 'b', label: 'Background tasks' },
+  { id: 'tasks', key: 'j', label: 'Background tasks' },
   { id: 'containers', key: 'p', label: 'Containers' },
   { id: 'stop', key: ';', label: 'Stop session' },
   { id: 'hide', key: 'h', shift: true, label: 'Hide the panel' },
 ];
 
-const BY_ID = new Map(PANEL_SHORTCUTS.map(s => [s.id, s]));
+/**
+ * Keys that belong to the whole window rather than to one session's rail.
+ * Matched by App.vue, in the capture phase, so they answer inside a terminal.
+ *
+ * @type {Shortcut[]}
+ */
+export const APP_SHORTCUTS = [
+  { id: 'buddy', key: 'b', label: 'Buddy' },
+];
+
+const BY_ID = new Map([...PANEL_SHORTCUTS, ...APP_SHORTCUTS].map(s => [s.id, s]));
 
 /** @param {string} id @returns {Shortcut|null} */
 export function shortcutFor(id) {
@@ -47,9 +59,10 @@ export function shortcutFor(id) {
  *
  * @param {KeyboardEvent|{key?: string, metaKey?: boolean, ctrlKey?: boolean, shiftKey?: boolean, altKey?: boolean}} event
  * @param {boolean} isMac
+ * @param {Shortcut[]} [shortcuts]  the rail's by default; APP_SHORTCUTS for the window's
  * @returns {string|null} the id
  */
-export function matchShortcut(event, isMac) {
+export function matchShortcut(event, isMac, shortcuts = PANEL_SHORTCUTS) {
   if (!event || event.altKey) return null;
   const mod = isMac ? event.metaKey : event.ctrlKey;
   if (!mod) return null;
@@ -59,7 +72,7 @@ export function matchShortcut(event, isMac) {
 
   const key = String(event.key || '').toLowerCase();
   if (!key) return null;
-  for (const shortcut of PANEL_SHORTCUTS) {
+  for (const shortcut of shortcuts) {
     if (shortcut.key !== key) continue;
     if (!!shortcut.shift !== !!event.shiftKey) continue;
     return shortcut.id;

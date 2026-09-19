@@ -24,6 +24,8 @@ const { stripInheritedClaudeEnv } = require('./claude-env');
 // deferred: a user who never opens an SDK session never pays for loading it.
 let _sdk = null;
 async function sdk() {
+  // A stand-in for tests, which cannot start a real CLI.
+  if (deps.loadSdk) return deps.loadSdk();
   if (!_sdk) _sdk = await import('@anthropic-ai/claude-agent-sdk');
   return _sdk;
 }
@@ -36,6 +38,8 @@ let deps = {
   resolveClaudeBinary: () => 'claude',
   /** () => string — PATH the CLI's own child processes need. */
   claudeChildPath: () => process.env.PATH || '',
+  /** () => Promise<{ query }> — replaces the SDK import; tests only. */
+  loadSdk: null,
 };
 
 function configure(next) {
@@ -154,11 +158,15 @@ function isPromptContent(content) {
  * @param {object|string} [opts.systemPrompt]
  * @param {string[]} [opts.allowedTools]
  * @param {string[]} [opts.disallowedTools]
+ * @param {object} [opts.settings]    flag-layer settings for this session only
+ * @param {(sessionId: string, input: object) => ({ decision: 'allow'|'deny', reason?: string }|null)} [opts.preToolUse]
+ *   a verdict on a tool call before the CLI's own permission rules — the only
+ *   gate that also sees tools the CLI would never ask about, like Read
  * @param {Record<string,string>} [opts.env]
  * @param {(sessionId: string, message: object) => void} opts.onMessage
  * @param {(sessionId: string, state: string) => void} [opts.onState]
  * @param {(sessionId: string, realId: string) => void} [opts.onSessionId]
- * @param {(toolName: string, input: object, ctx: object) => Promise<object>} [opts.canUseTool]
+ * @param {(toolName: string, input: object, ctx: object, liveSessionId: string) => Promise<object>} [opts.canUseTool]
  * @returns {Promise<{ ok: boolean, error?: string }>}
  */
 async function startSdkSession(sessionId, opts) {
@@ -247,6 +255,9 @@ async function startSdkSession(sessionId, opts) {
   if (opts.systemPrompt) options.systemPrompt = opts.systemPrompt;
   if (opts.allowedTools?.length) options.allowedTools = [...opts.allowedTools];
   if (opts.disallowedTools?.length) options.disallowedTools = [...opts.disallowedTools];
+  // Settings for this session alone, on top of the account's files — the
+  // manager chat pins where its auto-memory lives this way.
+  if (opts.settings) options.settings = opts.settings;
 
   if (opts.permissionMode) {
     options.permissionMode = opts.permissionMode;
@@ -259,7 +270,14 @@ async function startSdkSession(sessionId, opts) {
   // which only takes a control request, and a control request needs a session
   // that is already answering. Parked here and applied on the first init.
   entry.pendingEffort = opts.effort || null;
-  if (opts.canUseTool) options.canUseTool = opts.canUseTool;
+  // The live id rides along as a fourth argument. A session can be re-keyed
+  // after it starts (onSessionId below), and the caller's closure would still
+  // hold the id it was started with — a permission request raised under that
+  // id reaches a renderer that is now listening for the new one, and the turn
+  // hangs on a question nobody is shown.
+  if (opts.canUseTool) {
+    options.canUseTool = (toolName, input, ctx) => opts.canUseTool(toolName, input, ctx, entry.realSessionId);
+  }
 
   // The second way a session can stop and wait for a person: an MCP server
   // asking for input directly rather than through a tool call. Without this
@@ -290,13 +308,33 @@ async function startSdkSession(sessionId, opts) {
   // there is no other way to talk to a CLI running in a terminal. Here they
   // are plain callbacks: same payloads, same event names, same state machine
   // on the other end — minus the socket, the token and the temp file.
-  if (opts.onHook) {
+  if (opts.onHook || opts.preToolUse) {
     options.hooks = {};
-    for (const event of HOOK_EVENTS) {
+    const events = opts.onHook ? HOOK_EVENTS : ['PreToolUse'];
+    for (const event of events) {
       options.hooks[event] = [{
         hooks: [async (input) => {
-          try { opts.onHook(entry.realSessionId, input); }
-          catch (err) { log.error(`[sdk] hook ${event} handler threw: ${err.message}`); }
+          if (opts.onHook) {
+            try { opts.onHook(entry.realSessionId, input); }
+            catch (err) { log.error(`[sdk] hook ${event} handler threw: ${err.message}`); }
+          }
+          // The one hook that decides as well as watches. PreToolUse runs for
+          // every call, including those no permission prompt would ever stop
+          // — Read is never asked about — so a path rule has to live here.
+          if (event === 'PreToolUse' && opts.preToolUse) {
+            let verdict = null;
+            try { verdict = opts.preToolUse(entry.realSessionId, input); }
+            catch (err) { verdict = { decision: 'deny', reason: `Tool check failed: ${err.message}` }; }
+            if (verdict?.decision) {
+              return {
+                hookSpecificOutput: {
+                  hookEventName: 'PreToolUse',
+                  permissionDecision: verdict.decision,
+                  permissionDecisionReason: verdict.reason || '',
+                },
+              };
+            }
+          }
           return {};   // no decision — observe only
         }],
       }];

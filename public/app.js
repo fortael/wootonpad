@@ -934,6 +934,11 @@ window.api.onExternalSessionStarted?.((info) => {
   pollActiveSessions();
 });
 
+// Buddy rewrote its memory; the Memory pane beside it re-reads.
+window.api.onBuddyMemoryChanged?.(() => {
+  if (window.vueStore) window.vueStore.buddyMemoryRevision++;
+});
+
 // A note written by the assistant. Anything showing notes re-reads on this.
 window.api.onNotesChanged?.(() => {
   if (window.vueStore) window.vueStore.notesRevision++;

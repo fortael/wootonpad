@@ -1,0 +1,1064 @@
+/* ═══════════════════════════════════════════════════════════════════
+   Group sessions — GroupAvatar.vue and the group side panel
+
+   One session working across several projects. The avatar stands in for
+   ProjectAvatar wherever a group is drawn instead of a project; the group
+   pane of the side panel is where its projects and task files are listed.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ─── The tiled avatar ──────────────────────────────────────────── */
+
+/* A square of up to four project avatars. Same rounding and same monogram
+   treatment as a single avatar — it sits in the same slots, so it has to read
+   as the same object with more than one project in it.
+
+   The hairline between the tiles is the container's own background showing
+   through a 1px gap: four avatars flush against each other are one blurred
+   block at 28px, and a border per tile would double up on every inner edge. */
+.sb-gavatar {
+  --sb-gavatar-size: 28px;
+  flex: none;
+  display: grid;
+  gap: 1px;
+  overflow: hidden;
+  border-radius: var(--radius-xs);
+  background: var(--border-subtle);
+  line-height: 1;
+}
+
+/* The shape is the fingerprint: one fills it, two split it down the middle,
+   three and four share a 2×2 with the first tile taking the left half. */
+.sb-gavatar--0,
+.sb-gavatar--1 {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+}
+
+.sb-gavatar--2 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr;
+}
+
+.sb-gavatar--3,
+.sb-gavatar--4 {
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.sb-gavatar--3 > .sb-gavatar__tile:first-child {
+  grid-row: span 2;
+}
+
+/* min-width/min-height: 0 — a grid item defaults to its content's minimum,
+   and an avatar's initials would push a tile wider than its half. */
+.sb-gavatar__tile {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  color: var(--white);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-normal);
+  /* Scaled off the square rather than fixed: the same component is a 16px mark
+     in a list row and a 40px one on a header. */
+  font-size: calc(var(--sb-gavatar-size) * 0.3);
+}
+
+.sb-gavatar--1 > .sb-gavatar__tile {
+  font-size: calc(var(--sb-gavatar-size) * 0.4);
+}
+
+.sb-gavatar__tile:is(img) {
+  display: block;
+  object-fit: cover;
+}
+
+/* ─── Group avatar in single-avatar slots ───────────────────────── */
+
+/* The slots a GroupAvatar is dropped into (the active rail, the session header,
+   the collapsed rail, a session row) style their ProjectAvatar as a flex box
+   centring a monogram. Two single-class selectors, so which wins would depend
+   on stylesheet order — this pins the grid. */
+.sb-gavatar.sbx-unread__monogram,
+.sb-gavatar.sbx-sesshead__avatar,
+.sb-gavatar.sbx-rail__avatar,
+.sb-gavatar.session-group-avatar {
+  display: grid;
+  padding: 0;
+}
+
+.session-group-avatar {
+  /* On the first line of the title, like the status dot beside it: the row
+     aligns to the top, and the title's first line is ~20px tall, so an 18px
+     tile sits centred on it one pixel down. Pulled towards the dot so the two
+     read as one mark rather than two columns. */
+  align-self: flex-start;
+  margin-top: 1px;
+  margin-left: calc(var(--space-1) * -1);
+}
+
+/* The Grouped sessions header: an icon where a project has its avatar. */
+.project-header-avatar--groups {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+/* ─── Chat tab ──────────────────────────────────────────────────── */
+
+/* ChatApp.vue fills the main area with the same parts an open session uses:
+   .sbx-sesshead, the floating .sbx-panelrail, the .sbx-sidepanel island and the
+   .sbx-sdk chat. Those are positioned against #terminal-area and its variables;
+   this box stands in for it. */
+#chat-viewer {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+}
+
+.sbx-chatview {
+  --sbx-sidepanel-gap: var(--space-3);
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface-panel);
+  font-family: var(--font-ui);
+}
+
+.sbx-chatview.has-side-panel .sbx-sdk {
+  right: calc(var(--sbx-sidepanel-w) + var(--sbx-sidepanel-gap) * 2);
+}
+
+/* The avatar slot holds an icon rather than a project monogram. */
+.sbx-chatview__avatar {
+  justify-content: center;
+  color: var(--text-secondary);
+  background: var(--surface-card-hover);
+}
+
+.sbx-chatview__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs, 12px);
+  cursor: pointer;
+}
+
+.sbx-chatview__btn:hover:not(:disabled) {
+  background: var(--surface-card-hover);
+  color: var(--text-primary);
+}
+
+.sbx-chatview__btn:disabled { opacity: 0.5; cursor: default; }
+
+.sbx-chatview__empty,
+.sbx-chatview__error {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-6, 24px);
+  color: var(--text-tertiary);
+}
+
+.sbx-chatview__error { color: var(--text-danger, #e5484d); }
+
+/* ─── Group session side panel ──────────────────────────────────── */
+
+/* The row that picks which of the group's projects the pane is about. Same
+   subtab strip the Changes pane uses for Changes/Commits, scrolling sideways
+   when a group spans more projects than fit. */
+.sbx-sidepanel__projtabs {
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.sbx-sidepanel__projtab {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.sbx-sidepanel__projavatar {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-xs);
+  font-size: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.sbx-grouppane__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-2);
+  border-radius: var(--radius-sm, 6px);
+}
+
+.sbx-grouppane__row:hover { background: var(--surface-card-hover); }
+
+/* The row's actions borrow the TODO pane's buttons, which only show on hover
+   of a TODO card — this row is their card here. */
+.sbx-grouppane__row:hover .sbx-todo__act { opacity: 1; }
+
+.sbx-grouppane__avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-xs);
+  font-size: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.sbx-grouppane__name {
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.sbx-grouppane__name:hover { text-decoration: underline; }
+
+.sbx-grouppane__path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs, 11px);
+}
+
+.sbx-grouppane__file {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: var(--space-2);
+  align-items: center;
+  width: 100%;
+  margin-bottom: var(--space-1);
+  padding: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sbx-grouppane__file:hover:not(:disabled) {
+  background: var(--surface-card-hover);
+  color: var(--text-primary);
+}
+
+.sbx-grouppane__file.is-missing { opacity: 0.55; cursor: default; }
+
+.sbx-grouppane__filename {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold, 600);
+}
+
+.sbx-grouppane__filemeta {
+  justify-self: end;
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs, 11px);
+}
+
+.sbx-grouppane__filehint {
+  grid-column: 2 / 4;
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs, 11px);
+}
+
+.sbx-grouppane__dir {
+  margin-top: var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs, 11px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Chat tab sidebar ──────────────────────────────────────────── */
+
+.sbx-chatside {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.sbx-chatside__label {
+  margin-top: var(--space-2);
+  font-size: var(--text-2xs, 11px);
+  font-weight: var(--weight-semibold, 600);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.sbx-chatside__stub,
+.sbx-chatside__hint {
+  font-size: var(--text-xs, 12px);
+  color: var(--text-tertiary);
+}
+
+.sbx-chatside__example {
+  text-align: left;
+  padding: var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs, 12px);
+  cursor: pointer;
+}
+
+.sbx-chatside__example:hover {
+  background: var(--surface-card-hover);
+  color: var(--text-primary);
+}
+
+/* ─── New group session dialog ──────────────────────────────────── */
+
+.sbx-groupdlg {
+  width: min(560px, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sbx-groupdlg__filter,
+.sbx-groupdlg__input,
+.sbx-groupdlg__prompt {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.sbx-groupdlg__prompt {
+  resize: vertical;
+  min-height: 72px;
+  font-family: inherit;
+}
+
+.sbx-groupdlg__list {
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm, 6px);
+}
+
+.sbx-groupdlg__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px var(--space-2);
+  cursor: pointer;
+}
+
+.sbx-groupdlg__row:hover,
+.sbx-groupdlg__row.is-picked {
+  background: var(--surface-card-hover);
+}
+
+.sbx-groupdlg__avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-xs);
+  font-size: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.sbx-groupdlg__name { color: var(--text-primary); }
+
+.sbx-groupdlg__path {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs, 11px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sbx-groupdlg__picked {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 28px;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs, 12px);
+}
+
+/* ─── Settings → Assistant ──────────────────────────────────────── */
+
+.settings-textarea--tall {
+  min-height: 320px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs, 12px);
+  line-height: 1.5;
+}
+
+.settings-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+/* ─── Settings → Assistant → MCP tools (dev builds) ─────────────── */
+
+.sbx-mcptools__dev {
+  margin-left: var(--space-1);
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--status-warning, #f5a524) 20%, transparent);
+  color: var(--status-warning, #f5a524);
+  font-size: var(--text-2xs, 11px);
+  font-weight: var(--weight-semibold, 600);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+.sbx-mcptool {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm, 6px);
+  margin-bottom: var(--space-2);
+  background: var(--surface-card, transparent);
+}
+
+.sbx-mcptool.is-open { border-color: color-mix(in srgb, var(--blue-500) 35%, var(--border-subtle)); }
+
+.sbx-mcptool__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2) var(--space-3) 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sbx-mcptool__chev {
+  width: 10px;
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.sbx-mcptool__name {
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold, 600);
+}
+
+.sbx-mcptool__badge {
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: var(--text-2xs, 11px);
+  line-height: 18px;
+}
+
+.sbx-mcptool__badge.is-read { background: color-mix(in srgb, var(--blue-500) 16%, transparent); color: var(--blue-500); }
+.sbx-mcptool__badge.is-write { background: color-mix(in srgb, var(--green-500) 16%, transparent); color: var(--green-600, var(--green-500)); }
+.sbx-mcptool__badge.is-auto { background: var(--surface-card-hover); color: var(--text-tertiary); }
+.sbx-mcptool__badge.is-asks { background: color-mix(in srgb, var(--red-500, #e5484d) 16%, transparent); color: var(--red-500, #e5484d); }
+
+.sbx-mcptool__count {
+  margin-left: auto;
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs, 11px);
+}
+
+.sbx-mcptool__desc {
+  padding: 0 var(--space-3) var(--space-2) calc(var(--space-3) + 10px + var(--space-2));
+  color: var(--text-secondary);
+  font-size: var(--text-xs, 12px);
+  line-height: 1.5;
+}
+
+.sbx-mcptool__body {
+  padding: 0 var(--space-3) var(--space-3) calc(var(--space-3) + 10px + var(--space-2));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sbx-mcptool__full { color: var(--text-tertiary); font-size: var(--text-2xs, 11px); }
+
+.sbx-mcptool__params {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-xs, 12px);
+}
+
+.sbx-mcptool__params td {
+  padding: 4px var(--space-2) 4px 0;
+  border-top: 1px solid var(--border-subtle);
+  vertical-align: top;
+  color: var(--text-secondary);
+}
+
+.sbx-mcptool__params td:first-child { white-space: nowrap; color: var(--text-primary); }
+.sbx-mcptool__req { color: var(--red-500, #e5484d); margin-left: 2px; }
+
+.sbx-mcptool__type {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  color: var(--purple-400, var(--text-tertiary));
+  white-space: nowrap;
+}
+
+.sbx-mcptool__args {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs, 12px);
+}
+
+.sbx-mcptool__out {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface-panel-raised, var(--surface-card-hover));
+  color: var(--text-primary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-xs, 12px);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.sbx-mcptool__out.is-error { color: var(--red-500, #e5484d); }
+
+/* ─── Chat tab: its own colours ─────────────────────────────────── */
+
+/* The assistant is not a session in a repository, and should not look like
+   one at a glance: a violet→pink accent runs through its header, its bubbles,
+   its composer and its sidebar. Everything else stays the app's own surfaces,
+   so the chat's scroll-fade and panel islands still match their background. */
+.sbx-chatview,
+#chat-sidebar-content {
+  --chat-accent: var(--purple-400);
+  --chat-accent-2: #ec6fb0;
+  --chat-glow: color-mix(in srgb, var(--chat-accent) 12%, transparent);
+}
+
+.sbx-chatview .sbx-sesshead {
+  background:
+    linear-gradient(100deg,
+      color-mix(in srgb, var(--chat-accent) 14%, var(--surface-panel)) 0%,
+      color-mix(in srgb, var(--chat-accent-2) 6%, var(--surface-panel)) 38%,
+      var(--surface-panel) 70%);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--chat-accent) 22%, transparent);
+}
+
+.sbx-chatview .sbx-chatview__avatar {
+  background: linear-gradient(135deg, var(--chat-accent), var(--chat-accent-2));
+  color: var(--white, #fff);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--chat-accent) 40%, transparent);
+}
+
+.sbx-chatview .sbx-sesshead__title {
+  background: linear-gradient(90deg, var(--chat-accent), var(--chat-accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* Your side of the conversation, in the chat's colours rather than indigo. */
+.sbx-chatview .sbx-sdk__body .jsonl-user {
+  border-color: color-mix(in srgb, var(--chat-accent) 38%, transparent);
+  background:
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--chat-accent) 18%, var(--surface-card)),
+      color-mix(in srgb, var(--chat-accent-2) 12%, var(--surface-card)));
+}
+
+.sbx-chatview .sbx-sdk__field {
+  border-color: color-mix(in srgb, var(--chat-accent) 30%, var(--border-subtle));
+  box-shadow: 0 0 0 3px var(--chat-glow);
+}
+
+.sbx-chatview .sbx-sdk__field:focus-within {
+  border-color: var(--chat-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--chat-accent) 22%, transparent);
+}
+
+.sbx-chatview .sbx-chatview__btn {
+  border-color: color-mix(in srgb, var(--chat-accent) 40%, var(--border-subtle));
+  color: var(--chat-accent);
+}
+
+.sbx-chatview .sbx-chatview__btn:hover:not(:disabled) {
+  background: var(--chat-glow);
+  color: var(--chat-accent);
+}
+
+/* Sidebar */
+#chat-sidebar-content .sbx-chatside__label {
+  color: var(--chat-accent);
+}
+
+#chat-sidebar-content .sbx-chatside__example {
+  border-color: color-mix(in srgb, var(--chat-accent) 22%, var(--border-subtle));
+  background: linear-gradient(135deg, var(--chat-glow), transparent 70%);
+}
+
+#chat-sidebar-content .sbx-chatside__example:hover {
+  border-color: var(--chat-accent);
+  background: color-mix(in srgb, var(--chat-accent) 14%, transparent);
+  color: var(--text-primary);
+}
+
+.sbx-chatside__block {
+  display: flex;
+  flex-direction: column;
+}
+
+.sbx-chatside__foot {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  padding: var(--space-3) var(--space-3) var(--space-4);
+  background:
+    radial-gradient(120% 90% at 50% 100%,
+      color-mix(in srgb, var(--chat-accent) 16%, transparent),
+      transparent 70%);
+}
+
+/* ─── Pixel buddy ───────────────────────────────────────────────── */
+
+/* PixelBuddy.vue draws the poses — arms, mouth, eyes, the jump — frame by
+   frame from script. What is left here is the always-on loop (a breathing bob,
+   blinking, the antenna glow) and colour. No particles — the robot does
+   all the acting. */
+.sbx-buddy {
+  --px-k: color-mix(in srgb, var(--text-primary) 88%, transparent);
+  --px-h: var(--chat-accent);
+  --px-s: #1b1630;
+  --px-e: #7df9ff;
+  --px-m: #7df9ff;
+  --px-b: var(--chat-accent-2);
+  --px-t: #ffd166;
+  --px-a: #ffd166;
+  --px-w: #fff4e6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  user-select: none;
+  cursor: pointer;
+}
+
+.sbx-buddy__stage {
+  position: relative;
+  width: 80px;
+  height: 80px;
+}
+
+.sbx-buddy__art {
+  width: 80px;
+  height: 80px;
+  image-rendering: pixelated;
+  overflow: visible;
+}
+
+.px-k { fill: var(--px-k); }
+.px-h { fill: var(--px-h); }
+.px-s { fill: var(--px-s); }
+.px-m { fill: var(--px-m); opacity: 0.85; }
+.px-b { fill: var(--px-b); }
+.px-t { fill: var(--px-t); }
+.px-a { fill: var(--px-a); }
+.px-e { fill: var(--px-e); }
+.px-w { fill: var(--px-w); }
+
+/* A pixel creature moves in whole steps, so every loop steps. */
+.sbx-buddy__bob {
+  animation: sbx-buddy-bob 1.4s steps(1, end) infinite;
+}
+
+.sbx-buddy.is-busy .sbx-buddy__bob { animation-duration: 0.6s; }
+.sbx-buddy.is-stopped .sbx-buddy__bob { animation-duration: 3.2s; }
+/* A scripted action lifts the body itself; the bob would double it. */
+.sbx-buddy[class*="act-"] .sbx-buddy__bob { animation: none; }
+
+.sbx-buddy__eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: sbx-buddy-blink 4.2s steps(1, end) infinite;
+}
+
+/* Shut or happy eyes are already closed; blinking them would flicker. */
+.sbx-buddy.is-stopped .sbx-buddy__eyes,
+.sbx-buddy.act-celebrate .sbx-buddy__eyes { animation: none; }
+
+.sbx-buddy__antenna {
+  animation: sbx-buddy-glow 1.8s ease-in-out infinite;
+}
+
+.sbx-buddy.is-busy .sbx-buddy__antenna { animation-duration: 0.45s; }
+.sbx-buddy.is-stopped .sbx-buddy__antenna { animation: none; }
+
+@keyframes sbx-buddy-bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-0.5px); }
+}
+
+@keyframes sbx-buddy-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  94%, 97% { transform: scaleY(0.2); }
+}
+
+@keyframes sbx-buddy-glow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* Waiting on you: warm eyes, antenna red. */
+.sbx-buddy.is-waiting { --px-e: #ffb347; --px-m: #ffb347; --px-a: #ff6b6b; }
+
+/* Asleep: everything dims. */
+.sbx-buddy.is-stopped { --px-e: #6b6590; --px-m: #6b6590; --px-a: #6b6590; }
+
+/* ─── Speech ─── */
+
+/* The bubble's room is kept whether it is there or not, so the robot does
+   not jump each time it starts or stops talking. */
+.sbx-buddy__speech {
+  min-height: 40px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.sbx-buddy__bubble {
+  position: relative;
+  max-width: 220px;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--chat-accent) 40%, var(--border-subtle));
+  border-radius: 10px;
+  background: var(--surface-panel);
+  color: var(--text-secondary);
+  font-size: var(--text-2xs, 11px);
+  line-height: 1.4;
+  text-align: center;
+}
+
+/* In and out once per stretch of work — between steps only the text moves. */
+.sbx-buddy-bubble-enter-active { transition: opacity 0.2s ease-out, transform 0.2s ease-out; }
+.sbx-buddy-bubble-leave-active { transition: opacity 0.35s ease-in, transform 0.35s ease-in; }
+.sbx-buddy-bubble-enter-from { opacity: 0; transform: translateY(4px) scale(0.96); }
+.sbx-buddy-bubble-leave-to { opacity: 0; transform: translateY(-3px); }
+
+.sbx-buddy__caret {
+  margin-left: 1px;
+  color: var(--chat-accent);
+  animation: sbx-buddy-caret 0.5s steps(1, end) infinite;
+}
+
+@keyframes sbx-buddy-caret {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* The tail, pointing down at the speaker. */
+.sbx-buddy__bubble::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -5px;
+  width: 8px;
+  height: 8px;
+  transform: translateX(-50%) rotate(45deg);
+  background: var(--surface-panel);
+  border-right: 1px solid color-mix(in srgb, var(--chat-accent) 40%, var(--border-subtle));
+  border-bottom: 1px solid color-mix(in srgb, var(--chat-accent) 40%, var(--border-subtle));
+}
+
+.sbx-buddy.is-waiting .sbx-buddy__bubble,
+.sbx-buddy.act-celebrate .sbx-buddy__bubble { color: var(--text-primary); }
+.sbx-buddy.is-waiting .sbx-buddy__bubble,
+.sbx-buddy.is-waiting .sbx-buddy__bubble::after { border-color: #ffb347; }
+.sbx-buddy.act-celebrate .sbx-buddy__bubble,
+.sbx-buddy.act-celebrate .sbx-buddy__bubble::after { border-color: var(--chat-accent-2); }
+
+.sbx-buddy__dots i {
+  font-style: normal;
+  animation: sbx-buddy-dot 1.2s infinite;
+}
+.sbx-buddy__dots i:nth-child(2) { animation-delay: 0.2s; }
+.sbx-buddy__dots i:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes sbx-buddy-dot {
+  0%, 60%, 100% { opacity: 0.2; }
+  30% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sbx-buddy *, .sbx-buddy { animation: none !important; }
+}
+
+/* ─── Buddy sidebar: what the last answer mentioned ─────────────── */
+
+.sbx-chatside__count {
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--chat-accent) 16%, transparent);
+  font-size: var(--text-2xs, 10px);
+  letter-spacing: 0;
+}
+
+/* SessionItem rows are laid out for a project group's indent; here they sit
+   flush in the panel. */
+.sbx-chatside__sessions .session-item .session-row {
+  padding-left: var(--space-2);
+  padding-right: var(--space-2);
+}
+
+.sbx-chatside__row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  width: 100%;
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sbx-chatside__row:hover {
+  border-color: color-mix(in srgb, var(--chat-accent) 25%, var(--border-subtle));
+  background: var(--surface-card-hover);
+}
+
+.sbx-chatside__avatar {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: var(--radius-xs);
+  font-size: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.sbx-chatside__todoicon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--chat-accent);
+}
+
+.sbx-chatside__row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sbx-chatside__row-title {
+  color: var(--text-primary);
+  font-size: var(--text-xs, 12px);
+  font-weight: var(--weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sbx-chatside__row-sub,
+.sbx-chatside__todoitem {
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs, 11px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sbx-chatside__badge {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--surface-card-hover);
+  color: var(--text-secondary);
+  font-size: var(--text-2xs, 11px);
+  line-height: 18px;
+}
+
+.sbx-chatside__badge.is-unpushed { color: var(--status-warning, #f5a524); }
+.sbx-chatside__badge.is-done { color: var(--green-500); }
+
+/* Buddy's MEMORY.md, in full, in its pane. Plain text rather than a viewer:
+   it is a page of notes, read top to bottom, and the card above opens the
+   highlighted viewer for anyone who wants it. */
+.sbx-memory__text {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm, 6px);
+  border-left: 2px solid var(--chat-accent, var(--purple-400));
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--text-2xs, 11px);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* On a board card, inline with the title: the title is a two-line clamp, and
+   a block-level avatar would break it onto a line of its own. */
+.sb-gavatar.sbx-board__groupavatar {
+  display: inline-grid;
+  vertical-align: -3px;
+  margin-right: 6px;
+}
+
+/* Buddy's header: what the conversation has cost, in place of a status badge
+   that only ever said "Active". */
+.sbx-chatview__spend {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 10px;
+  border: 1px solid color-mix(in srgb, var(--chat-accent) 28%, var(--border-subtle));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chat-accent) 8%, transparent);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  cursor: default;
+}
+
+.sbx-chatview__tokens {
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+}
+
+/* Same size as the tokens, after them, quieter: an estimate, not a count. */
+.sbx-chatview__cost {
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+}
+
+/* ─── Buddy: a new conversation ─────────────────────────────────── */
+
+/* Over the (empty) chat body, clear of the header above and the composer
+   below; only the cards take the pointer, so the composer stays reachable. */
+.sbx-buddyhello {
+  position: absolute;
+  top: calc(var(--sbx-sesshead-h) + var(--space-6, 24px));
+  left: 0;
+  right: 0;
+  bottom: 150px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-6, 24px);
+  overflow-y: auto;
+  pointer-events: none;
+}
+
+.sbx-chatview.has-side-panel .sbx-buddyhello {
+  right: calc(var(--sbx-sidepanel-w) + var(--sbx-sidepanel-gap) * 2);
+}
+
+.sbx-buddyhello__title {
+  margin-top: var(--space-6, 24px);
+  font-size: var(--text-lg, 18px);
+  font-weight: var(--weight-semibold, 600);
+  background: linear-gradient(90deg, var(--chat-accent), var(--chat-accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.sbx-buddyhello__sub {
+  max-width: 520px;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+}
+
+.sbx-buddyhello__groups {
+  width: 100%;
+  max-width: 820px;
+  margin-top: var(--space-3);
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-3);
+}
+
+.sbx-buddyhello__group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sbx-buddyhello__grouptitle {
+  color: var(--text-secondary);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold, 600);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sbx-buddyhello__q {
+  pointer-events: auto;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--chat-accent) 22%, var(--border-subtle));
+  border-radius: var(--radius-md, 8px);
+  background: linear-gradient(135deg, var(--chat-glow), transparent 70%), var(--surface-panel);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-standard),
+              transform var(--duration-fast) var(--ease-standard);
+}
+
+.sbx-buddyhello__q:hover {
+  border-color: var(--chat-accent);
+  transform: translateY(-1px);
+}
+
+/* The mascot's own block: sized by the robot, so the list above takes the rest. */
+.sbx-chatside__buddyblock {
+  flex: 0 0 auto;
+}
+
+.sbx-chatside__buddyblock .sbx-block__count {
+  color: var(--chat-accent);
+}

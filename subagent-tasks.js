@@ -125,6 +125,73 @@ function agentFinished(parent, agentId, toolUseId) {
   return !!toolUseId && parent.includes(`"tool_use_id":"${toolUseId}"`);
 }
 
+// ── Token use ─────────────────────────────────────────────────────
+//
+// What each agent is spending, read from its own transcript. Two numbers:
+//
+//   tokens  — the size of its context at its last turn (input + both cache
+//             halves + output), which is what the CLI itself prints beside an
+//             agent and what "how big has it got" means;
+//   output  — everything it has written, summed.
+//
+// A message is written as several records, one per content block, each
+// carrying the usage so far — so output is kept per message id and summed
+// once, or a three-block answer would count three times.
+//
+// Incremental: the panel re-reads on every write while an agent works, and an
+// agent that has been editing a repository for ten minutes can be megabytes.
+// Each file is parsed once, then only what was appended since.
+
+const usageCache = new Map();   // filePath → { offset, rest, byMessage, last, tools }
+
+function usageTotal(u) {
+  if (!u) return 0;
+  return (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0)
+    + (u.cache_read_input_tokens || 0) + (u.output_tokens || 0);
+}
+
+function agentUsage(filePath, size) {
+  let state = usageCache.get(filePath);
+  // Shorter than last time: rewritten, not appended. Start over.
+  if (!state || size < state.offset) {
+    state = { offset: 0, rest: '', byMessage: new Map(), last: null, tools: new Set() };
+    usageCache.set(filePath, state);
+  }
+  if (size > state.offset) {
+    let fd;
+    try {
+      fd = fs.openSync(filePath, 'r');
+      const buffer = Buffer.alloc(size - state.offset);
+      fs.readSync(fd, buffer, 0, buffer.length, state.offset);
+      state.offset = size;
+      const lines = (state.rest + buffer.toString('utf8')).split('\n');
+      // The last piece may be a line still being written; keep it for next time.
+      state.rest = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.includes('"assistant"')) continue;
+        let entry;
+        try { entry = JSON.parse(line); } catch { continue; }
+        if (entry?.type !== 'assistant') continue;
+        const message = entry.message || {};
+        if (message.usage) {
+          state.last = message.usage;
+          state.byMessage.set(message.id || `${state.byMessage.size}`, message.usage.output_tokens || 0);
+        }
+        for (const block of Array.isArray(message.content) ? message.content : []) {
+          if (block?.type === 'tool_use' && block.id) state.tools.add(block.id);
+        }
+      }
+    } catch {
+      // Unreadable this time round; the numbers from last time still stand.
+    } finally {
+      if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+    }
+  }
+  let output = 0;
+  for (const n of state.byMessage.values()) output += n;
+  return { tokens: usageTotal(state.last), outputTokens: output, toolUses: state.tools.size };
+}
+
 function listSubagents(sessionDir, parentJsonlPath) {
   const dir = subagentsDir(sessionDir);
   let files;
@@ -153,7 +220,8 @@ function listSubagents(sessionDir, parentJsonlPath) {
       startedAt: first?.timestamp || stat.birthtime?.toISOString() || null,
       updatedAt: stat.mtime.toISOString(),
       bytes: stat.size,
-      lastText: entryText(last).slice(0, 240),
+      lastText: entryText(last).slice(0, 400),
+      ...agentUsage(filePath, stat.size),
       // Filled in below — it takes the parent transcript to answer.
       running: false,
     });
@@ -248,5 +316,5 @@ function readSubagentEntries(sessionDir, agentId) {
 
 module.exports = {
   listSubagents, countRunningSubagents, readSubagentEntries, subagentsDir, entryText,
-  agentFinished,
+  agentFinished, agentUsage,
 };

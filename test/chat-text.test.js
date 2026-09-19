@@ -236,3 +236,29 @@ test('an ordinary message is not an envelope', () => {
     assert.equal(localCommandEnvelope(text), null, String(text));
   }
 });
+
+// ── Short session ids ─────────────────────────────────────────────
+
+test('a short id becomes a session mention only when it resolves to a known session', async () => {
+  const { findMentions } = await import('../src/vue/chat-text.js');
+  const known = { dfbce3f1: 'dfbce3f1-600a-48ea-8ee0-fd5b4ce6d7ad' };
+  const resolveShortSession = (p) => known[p] || null;
+  const m = findMentions('dfbce3f1 — Pipelines; commit a1b2c3d4 fixed it', { resolveShortSession });
+  assert.equal(m.length, 1);
+  assert.equal(m[0].kind, 'session');
+  assert.equal(m[0].value, 'dfbce3f1-600a-48ea-8ee0-fd5b4ce6d7ad');
+  assert.equal(m[0].length, 8);
+});
+
+test('the first segment of a full uuid is not read as a short id', async () => {
+  const { findMentions } = await import('../src/vue/chat-text.js');
+  const resolveShortSession = () => 'should-not-be-used';
+  const m = findMentions('@session:dfbce3f1-600a-48ea-8ee0-fd5b4ce6d7ad and dfbce3f1-600a', { resolveShortSession });
+  assert.deepEqual(m.map(x => x.kind), ['session']);
+  assert.equal(m[0].value, 'dfbce3f1-600a-48ea-8ee0-fd5b4ce6d7ad');
+});
+
+test('without a resolver, short ids stay text', async () => {
+  const { findMentions } = await import('../src/vue/chat-text.js');
+  assert.deepEqual(findMentions('dfbce3f1 — Pipelines'), []);
+});

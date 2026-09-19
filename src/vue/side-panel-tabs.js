@@ -14,6 +14,9 @@ export const TABS = [
   // A group session's own pane: the projects it spans and the two files that
   // describe the task — see session-groups.js. Only offered beside a group.
   { id: 'group', label: 'Group projects and memory', icon: 'layers' },
+  // Buddy's own notes, kept between conversations — see chat-agent.js. Only
+  // offered beside Buddy.
+  { id: 'memory', label: "Buddy's memory", icon: 'brain' },
   { id: 'changes', label: 'Uncommitted changes', icon: 'file-diff' },
   { id: 'todos', label: 'TODOs and plans', icon: 'list-todo' },
   // Sub-agents have transcripts but no session rows, so this rail is the only
@@ -26,8 +29,9 @@ export const TABS = [
 const IDS = new Set(TABS.map(t => t.id));
 
 // The assistant manages the workspace and works in no repository, so there is
-// no working tree, no compose file and nowhere a shell would be useful.
-const CHAT_TABS = new Set(['todos', 'tasks']);
+// no working tree, no compose file and nowhere a shell would be useful. What it
+// does have is a memory of its own.
+const CHAT_TABS = new Set(['memory', 'todos', 'tasks']);
 
 /**
  * The panes that make sense beside this subject, in rail order.
@@ -38,8 +42,9 @@ const CHAT_TABS = new Set(['todos', 'tasks']);
 export function tabsFor(session, scope = 'session') {
   if (scope === 'chat') return TABS.filter(t => CHAT_TABS.has(t.id));
   if (!session || isPlainTerminal(session)) return [];
-  if (session.groupProjects?.length) return TABS;
-  return TABS.filter(t => t.id !== 'group');
+  const sessionTabs = TABS.filter(t => t.id !== 'memory');
+  if (session.groupProjects?.length) return sessionTabs;
+  return sessionTabs.filter(t => t.id !== 'group');
 }
 
 /** The open pane for a scope, or null. */

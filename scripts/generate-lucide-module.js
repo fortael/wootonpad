@@ -34,6 +34,8 @@ const ICONS = [
   'flag',
   // Chat tab and group sessions
   'messages-square', 'layers', 'lock',
+  // TODO notes — archive and bring back
+  'archive-restore',
 ];
 
 const SRC = path.join(__dirname, '..', 'node_modules', 'lucide-static', 'icons');

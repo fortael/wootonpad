@@ -33,6 +33,9 @@ contextBridge.exposeInMainWorld('api', {
   deleteNote: (filename) => ipcRenderer.invoke('delete-note', filename),
   toggleNoteTodo: (filename, index) => ipcRenderer.invoke('toggle-note-todo', filename, index),
   setNoteProjects: (filename, projectPaths) => ipcRenderer.invoke('set-note-projects', filename, projectPaths),
+  setNoteTodoDue: (filename, index, due) => ipcRenderer.invoke('set-note-todo-due', filename, index, due),
+  setNoteDue: (filename, due) => ipcRenderer.invoke('set-note-due', filename, due),
+  setNoteArchived: (filename, archived) => ipcRenderer.invoke('set-note-archived', filename, archived),
   refreshStats: () => ipcRenderer.invoke('refresh-stats'),
   getMemories: () => ipcRenderer.invoke('get-memories'),
   // `{ visible, all }` — the archive-filtered tree and the unfiltered one, from
@@ -57,6 +60,10 @@ contextBridge.exposeInMainWorld('api', {
   // Sub-agents a session spawned with the Task tool. They have transcripts but
   // no session rows, so they appear only in the session's side panel.
   getSessionSubagents: (sessionId) => ipcRenderer.invoke('get-session-subagents', sessionId),
+  // Live updates for the Background tasks pane while it is open — see main.js.
+  watchSubagents: (sessionId) => ipcRenderer.invoke('watch-subagents', sessionId),
+  unwatchSubagents: (sessionId) => ipcRenderer.invoke('unwatch-subagents', sessionId),
+  onSubagentsChanged: (callback) => subscribe('subagents-changed', callback),
   readSubagentJsonl: (sessionId, agentId) => ipcRenderer.invoke('read-subagent-jsonl', sessionId, agentId),
   getSubagentCounts: (sessionIds) => ipcRenderer.invoke('get-subagent-counts', sessionIds),
   // One window of a transcript, newest first. `before` pages upward; a window
@@ -223,6 +230,12 @@ contextBridge.exposeInMainWorld('api', {
   onExternalSessionStarted: (callback) => subscribe('external-session-started', callback),
   // A note written from outside the notes UI — the assistant's create_todo.
   onNotesChanged: (callback) => subscribe('notes-changed', callback),
+  // Buddy's auto-memory folder, as files — and word when any of them changes.
+  buddyMemory: () => ipcRenderer.invoke('buddy-memory'),
+  onBuddyMemoryChanged: (callback) => subscribe('buddy-memory-changed', callback),
+  // What the Buddy conversation has cost so far, and each update to it.
+  buddySpend: () => ipcRenderer.invoke('buddy-spend'),
+  onBuddySpendChanged: (callback) => subscribe('buddy-spend-changed', callback),
   onProjectsChanged: (callback) => {
     ipcRenderer.on('projects-changed', () => callback());
   },

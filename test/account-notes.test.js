@@ -175,3 +175,96 @@ test('a note reads back as prose and checkboxes in the order they were written',
     fs.rmSync(path.dirname(dir), { recursive: true, force: true });
   }
 });
+
+// ── Due dates ─────────────────────────────────────────────────────
+
+test('a note carries its list deadline and each item its own date, out of the text', () => {
+  const dir = tmpNotesDir();
+  try {
+    notes.createNote(dir, {
+      title: 'Dated',
+      due: '2026-09-30',
+      body: ['- [ ] own date due:2026-09-20', '- [x] done 📅 2026-09-01', '- [ ] follows the list'].join('\n'),
+    });
+    const [note] = notes.listNotes(dir);
+    assert.equal(note.due, '2026-09-30');
+    assert.equal(note.nextDue, '2026-09-20');
+    assert.deepEqual(note.todos.map(t => [t.text, t.due]), [
+      ['own date', '2026-09-20'], ['done', '2026-09-01'], ['follows the list', null],
+    ]);
+    assert.equal(note.blocks.find(b => b.type === 'todo').due, '2026-09-20');
+  } finally {
+    fs.rmSync(path.dirname(dir), { recursive: true, force: true });
+  }
+});
+
+test('setting an item\'s date rewrites that line\'s token and nothing else', () => {
+  const dir = tmpNotesDir();
+  try {
+    const { filename, filePath } = notes.createNote(dir, {
+      title: 'List',
+      body: ['- [ ] one', '  - [x] two due:2026-09-01', 'prose due:2026-01-01'].join('\n'),
+    });
+    assert.equal(notes.setTodoDue(dir, filename, 0, '2026-09-20').ok, true);
+    assert.equal(notes.setTodoDue(dir, filename, 1, null).ok, true);
+    const content = fs.readFileSync(filePath, 'utf8');
+    assert.ok(content.includes('- [ ] one due:2026-09-20'));
+    assert.ok(content.includes('  - [x] two\n'), 'cleared, box and indentation kept');
+    assert.ok(content.includes('prose due:2026-01-01'), 'prose is not an item');
+
+    assert.equal(notes.setTodoDue(dir, filename, 0, '2026-02-30').ok, false);
+    assert.equal(notes.setTodoDue(dir, filename, 9, '2026-09-20').ok, false);
+  } finally {
+    fs.rmSync(path.dirname(dir), { recursive: true, force: true });
+  }
+});
+
+test('the list deadline is added, moved and removed in the header only', () => {
+  const dir = tmpNotesDir();
+  try {
+    const { filename, filePath } = notes.createNote(dir, { title: 'List', body: 'due: this is prose\n- [ ] a' });
+    notes.setNoteDue(dir, filename, '2026-10-01');
+    notes.setNoteDue(dir, filename, '2026-10-02');
+    let content = fs.readFileSync(filePath, 'utf8');
+    assert.equal((content.match(/^due: 2026-10-02$/gm) || []).length, 1);
+    assert.ok(!content.includes('2026-10-01'));
+    assert.equal(notes.listNotes(dir)[0].due, '2026-10-02');
+
+    notes.setNoteDue(dir, filename, null);
+    content = fs.readFileSync(filePath, 'utf8');
+    assert.ok(!/^due: 2026/m.test(content));
+    assert.ok(content.includes('due: this is prose'), 'a body line that looks like a key stays');
+    assert.equal(notes.listNotes(dir)[0].due, null);
+  } finally {
+    fs.rmSync(path.dirname(dir), { recursive: true, force: true });
+  }
+});
+
+test('a hand-written note without a header gets one for its deadline', () => {
+  const dir = tmpNotesDir();
+  try {
+    notes.ensureDir(dir);
+    fs.writeFileSync(path.join(dir, 'bare.md'), '# Bare\n- [ ] a\n', 'utf8');
+    assert.equal(notes.setNoteDue(dir, 'bare.md', '2026-10-01').ok, true);
+    const [note] = notes.listNotes(dir);
+    assert.equal(note.due, '2026-10-01');
+    assert.equal(note.total, 1);
+  } finally {
+    fs.rmSync(path.dirname(dir), { recursive: true, force: true });
+  }
+});
+
+test('notes list soonest-due first, undated after, pinned above all', () => {
+  const dir = tmpNotesDir();
+  try {
+    notes.createNote(dir, { title: 'Undated', body: '- [ ] a' });
+    notes.createNote(dir, { title: 'Later', body: '- [ ] a due:2026-10-10' });
+    notes.createNote(dir, { title: 'Sooner', body: '- [ ] a due:2026-09-21' });
+    notes.createNote(dir, { title: 'Done', body: '- [x] a due:2026-09-01' });
+    const order = notes.listNotes(dir).map(n => n.title);
+    assert.deepEqual(order.slice(0, 2), ['Sooner', 'Later']);
+    assert.ok(order.indexOf('Undated') > 1 && order.indexOf('Done') > 1, 'nothing open and dated sorts by touch');
+  } finally {
+    fs.rmSync(path.dirname(dir), { recursive: true, force: true });
+  }
+});

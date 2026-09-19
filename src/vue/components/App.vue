@@ -151,7 +151,15 @@
         :show-copy-content="true"
         :on-save="planOnSave"
         :on-close="closePlanViewer"
-      />
+      >
+        <template #below-toolbar>
+          <NoteMetaBar
+            v-if="store.planViewerKind === 'note' && planViewerNote"
+            :filename="planViewerNote"
+            :before-change="savePlanViewerFirst"
+          />
+        </template>
+      </ViewerContentApp>
     </div>
     <SettingsPanelApp v-if="store.settingsOpen" />
     <div id="project-viewer" style="display:none;">
@@ -249,6 +257,7 @@ import { matchProjectPaths } from '../project-search.js';
 import { wantsAttention, activeSessions, stateFromStore } from '../session-column.js';
 import { parseRateLimitEvent } from '../rate-limits.js';
 import { sessionTitle } from '../session-title.js';
+import { matchShortcut, formatShortcut, APP_SHORTCUTS } from '../panel-shortcuts.js';
 import PlansApp from './PlansApp.vue';
 import AccountsApp from './AccountsApp.vue';
 import AccountDropdownApp from './AccountDropdownApp.vue';
@@ -262,6 +271,7 @@ import AccountViewerApp from './AccountViewerApp.vue';
 import SessionBoardApp from './SessionBoardApp.vue';
 import BoardSidebarApp from './BoardSidebarApp.vue';
 import ViewerContentApp from './ViewerContentApp.vue';
+import NoteMetaBar from './NoteMetaBar.vue';
 import DialogsApp from './DialogsApp.vue';
 import SpotlightApp from './SpotlightApp.vue';
 import ChatApp from './ChatApp.vue';
@@ -304,6 +314,20 @@ function closePlanViewer() {
   }
 }
 
+// The note open in the Markdown pane, by filename — what the bar above it
+// edits. Its writes reach the editor through the pane's own file watcher.
+const planViewerNote = computed(() => (store.planViewerPath || '').split(/[\\/]/).pop() || '');
+
+// Unsaved text first, so a deadline set from the bar is not overwritten by the
+// next ⌘S of an older copy.
+async function savePlanViewerFirst() {
+  const path = store.planViewerPath;
+  const content = planViewerRef.value?.getContent?.();
+  if (!path || content == null) return true;
+  const res = await planOnSave(path, content);
+  return res?.ok !== false;
+}
+
 const planOnSave = async (filePath, content) => {
   if (store.planViewerKind !== 'note') return window.api.savePlan(filePath, content);
   const result = await window.api.saveNote(filePath, content);
@@ -313,15 +337,51 @@ const planOnSave = async (filePath, content) => {
 };
 
 // ── Tab config ───────────────────────────────────────────────────
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+
 const TABS = [
   { id: 'sessions', icon: 'sparkles', label: 'Sessions' },
-  // The assistant that manages everything else — see chat-agent.js.
-  { id: 'chat', icon: 'messages-square', label: 'Chat' },
   { id: 'board', icon: 'square-kanban', label: 'Board' },
   { id: 'plans', icon: 'book-open', label: 'Plans' },
   { id: 'projects', icon: 'folder', label: 'Projects' },
   { id: 'accounts', icon: 'users', label: 'Accounts' },
+  // The assistant that manages everything else — see chat-agent.js. Last and
+  // set apart: it is not another view of the work but the one that runs it.
+  // Called Buddy on screen, after the mascot in its sidebar; the id stays
+  // 'chat' because it is what the saved ui_state and the side-panel scope
+  // key on.
+  { id: 'chat', icon: 'messages-square', label: 'Buddy', separated: true, hint: `Buddy  ${formatShortcut('buddy', isMac)}` },
 ];
+
+// ⌘B — Buddy, from anywhere, ready to type into. Capture phase, like the
+// command palette's key: the focus is usually inside a terminal, and xterm's
+// helper textarea is downstream of the document.
+function openBuddy() {
+  store.spotlightOpen = false;
+  if (store.activeTab !== 'chat') setTab('chat');
+  // Already there, perhaps under Settings or a plan: the tab switch is what
+  // puts those away, so run it again.
+  else window.__sb?.onTabChange?.('chat');
+  focusBuddyComposer();
+}
+
+// The Chat view mounts on its first visit, so the composer may be a few
+// frames away.
+function focusBuddyComposer(tries = 30) {
+  const input = document.querySelector('#chat-viewer .sbx-sdk__input');
+  if (input && input.offsetParent !== null) { input.focus(); return; }
+  if (tries > 0) requestAnimationFrame(() => focusBuddyComposer(tries - 1));
+}
+
+function onAppKey(event) {
+  if (matchShortcut(event, isMac, APP_SHORTCUTS) !== 'buddy') return;
+  event.preventDefault();
+  event.stopPropagation();
+  openBuddy();
+}
+
+onMounted(() => document.addEventListener('keydown', onAppKey, true));
+onBeforeUnmount(() => document.removeEventListener('keydown', onAppKey, true));
 
 // ── Search ───────────────────────────────────────────────────────
 // The board renders the same sessions in another shape, so the sidebar keeps
@@ -413,7 +473,7 @@ const searchPlaceholder = computed(() => {
     case 'accounts': return 'Search accounts by name or folder…';
     case 'board': return 'Search the board by session or project…';
     // Nothing in this tab's sidebar to filter — the assistant is the search.
-    case 'chat': return 'Ask the assistant to find sessions…';
+    case 'chat': return 'Ask Buddy to find sessions…';
     default: return 'Search sessions by title or project…';
   }
 });
@@ -586,6 +646,20 @@ const sessionIndex = computed(() => {
   }
   return index;
 });
+
+// A short id to the full one, when exactly one known session starts with it.
+// Ambiguous or unknown is null — a guess would be a link to the wrong session.
+function sessionByPrefix(prefix) {
+  const p = String(prefix || '').toLowerCase();
+  if (p.length < 8) return null;
+  let found = null;
+  for (const id of sessionIndex.value.keys()) {
+    if (!String(id).toLowerCase().startsWith(p)) continue;
+    if (found) return null;
+    found = id;
+  }
+  return found;
+}
 
 function sessionInfo(id) {
   const s = sessionIndex.value.get(id) || sessionIndex.value.get(String(id || '').toLowerCase());
@@ -839,6 +913,7 @@ onMounted(async () => {
   };
   window.vueApp = { setTab };
   window.sbSessionInfo = sessionInfo;
+  window.sbSessionByPrefix = sessionByPrefix;
   // app.js is a classic script and cannot import the module this lives in, but
   // "is this a shell rather than a conversation" must have one answer — see
   // session-filter.js.
@@ -956,6 +1031,7 @@ onMounted(async () => {
       window.vueStore.settingsOpen = false;
       window.vueStore.showJsonl = false;
       window.vueStore.planViewerKind = kind;
+      window.vueStore.planViewerPath = filePath;
       window.vueStore.planViewerOpen = true;
     }
     window.vuePlanViewer?.open(title, filePath, content);

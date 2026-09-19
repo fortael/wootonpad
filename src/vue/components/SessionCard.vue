@@ -14,6 +14,15 @@
       <SessionMenu :session="session" :is-running="isRunning" />
     </div>
     <div class="sbx-board__cardtitle">
+      <!-- A group session's fingerprint, as on its sidebar row: every card in
+           the Grouped sessions column shares one header, so this is what tells
+           which group each one is. -->
+      <GroupAvatar
+        v-if="session.groupProjects?.length"
+        class="sbx-board__groupavatar"
+        :project-paths="session.groupProjects"
+        :size="16"
+      />
       <span
         v-if="pending"
         class="session-title-wait sbx-board__cardtitle--wait"
@@ -73,6 +82,7 @@ import { store } from '../store.js';
 import SbIcon from './SbIcon.vue';
 import UsageRing from './UsageRing.vue';
 import SessionMenu from './SessionMenu.vue';
+import GroupAvatar from './GroupAvatar.vue';
 import { focusLevel } from '../board-focus.js';
 import { contextPercent, formatContextLabel } from '../context-window.js';
 import { freshnessOpacity } from '../freshness.js';

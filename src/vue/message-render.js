@@ -623,9 +623,14 @@ function decorateMentions(root, only) {
 
   for (const node of targets) {
     const text = node.nodeValue;
+    // A short id resolves to a session only where session chips are wanted,
+    // and only against sessions the app knows — see findMentions.
+    const opts = (!only || only.has('session')) && window.sbSessionByPrefix
+      ? { resolveShortSession: window.sbSessionByPrefix }
+      : {};
     const mentions = only
-      ? findMentions(text).filter((m) => only.has(m.kind))
-      : findMentions(text);
+      ? findMentions(text, opts).filter((m) => only.has(m.kind))
+      : findMentions(text, opts);
     if (!mentions.length) continue;
     const frag = document.createDocumentFragment();
     let at = 0;

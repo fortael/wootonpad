@@ -45,6 +45,7 @@ const sessionGroups = require('./session-groups');
 const wootonMcp = require('./wooton-mcp');
 const chatAgent = require('./chat-agent');
 const projectFiles = require('./project-files');
+const dockerStatus = require('./docker-status');
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
@@ -521,6 +522,8 @@ function startSdkSessionFor(sessionId, projectPath, isNew, sessionOptions) {
     systemPrompt: sessionOptions?.systemPrompt || undefined,
     allowedTools: sessionOptions?.allowedTools || undefined,
     disallowedTools: sessionOptions?.disallowedTools || undefined,
+    settings: sessionOptions?.settings || undefined,
+    preToolUse: sessionOptions?.preToolUse || undefined,
     // The same account resolution every other spawn path uses, so an SDK
     // session writes its transcript into the folder this account's cache
     // watches rather than the default home.
@@ -534,13 +537,16 @@ function startSdkSessionFor(sessionId, projectPath, isNew, sessionOptions) {
     // Called when the permission flow falls through to a prompt. The session
     // is blocked on this promise, so the status has to say so — otherwise the
     // sidebar shows a session that looks busy and never finishes.
-    canUseTool: (toolName, input, options) => {
+    // `liveId` is the session's id now, which is not always the one it was
+    // started under — see sdk-session.js. Everything downstream (the dialog in
+    // the renderer, the status the sidebar and Buddy read) is keyed by it.
+    canUseTool: (toolName, input, options, liveId = sessionId) => {
       sessionStatus.apply({
-        session_id: sessionId,
+        session_id: liveId,
         hook_event_name: 'PermissionRequest',
         tool_name: toolName,
       });
-      return askPermission(sessionId, toolName, input, options);
+      return askPermission(liveId, toolName, input, options);
     },
 
     // Same stop, different channels — see askElicitation and askUserDialog.
@@ -560,14 +566,18 @@ function startSdkSessionFor(sessionId, projectPath, isNew, sessionOptions) {
     onSessionId: (oldId, newId) => {
       sessionStatus.rekey(oldId, newId);
       // The manager chat remembers its id across restarts; a re-key has to
-      // move what it remembers, or the next launch resumes a dead id.
+      // move what it remembers, or the next launch resumes a dead id — and
+      // its running spend with it, or the header's figure drops to zero.
       chatAgent.rekey(oldId, newId);
+      const spend = getSetting(spendKey());
+      if (spend?.sessionId === oldId) setSetting(spendKey(), { ...spend, sessionId: newId });
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('session-forked', oldId, newId);
       }
     },
 
     onMessage: (id, message) => {
+      if (message?.type === 'result') recordManagerSpend(id, message);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('sdk-message', id, message);
       }
@@ -2274,6 +2284,7 @@ wootonMcp.configure({
         if (!s) return null;
         return {
           sessionId: s.sessionId, title: s.title, projectPath: s.projectPath, modified: s.modified,
+          archived: s.archived,
           snippet: titleOnly === false ? String(hit.snippet || '').replace(/<\/?mark>/g, '') : '',
         };
       })
@@ -2385,6 +2396,40 @@ wootonMcp.configure({
 
   accountLimits: async () => managerLimits(),
 
+  // Every container docker knows, with its load. Through projectExecFile with
+  // "/" as the directory, so a WSL account asks the distribution's docker —
+  // where its compose stacks actually run.
+  listContainers: async ({ all } = {}) => {
+    const { execFile } = require('child_process');
+    const run = (argv, timeout) => new Promise((resolve) => {
+      const [file, args, options] = projectExecFile(argv, '/', {
+        encoding: 'utf8', timeout, env: { ...process.env, PATH: DOCKER_PATH }, maxBuffer: 8 * 1024 * 1024,
+      });
+      execFile(file, args, options, (err, stdout, stderr) => resolve({ err, stdout, stderr }));
+    });
+    const ps = await run(['docker', 'ps', ...(all ? ['-a'] : []), '--format', '{{json .}}'], 10000);
+    if (ps.err) {
+      const why = String(ps.stderr || ps.err.message || '');
+      if (ps.err.code === 'ENOENT') return { ok: false, error: 'docker is not installed (or not on PATH)' };
+      if (/Cannot connect to the Docker daemon|daemon.*running/i.test(why)) return { ok: false, error: 'Docker is not running' };
+      return { ok: false, error: why.trim().split('\n')[0] || 'docker ps failed' };
+    }
+    const containers = dockerStatus.parsePs(ps.stdout);
+    // Load only for what is running; stats on a stopped container is nothing.
+    const stats = containers.some(c => c.state === 'running')
+      ? dockerStatus.parseStats((await run(['docker', 'stats', '--no-stream', '--format', '{{json .}}'], 15000)).stdout)
+      : new Map();
+    const merged = dockerStatus.mergeContainers(containers, stats);
+    // A compose container names the directory it was started from; when that
+    // is a project the app knows, it is linked as one.
+    const known = new Set(buildProjectSets().all.filter(p => !p.isGroupContainer).map(p => p.projectPath));
+    for (const c of merged.containers) {
+      const dir = c.workingDir ? canonicalProjectPath(c.workingDir) : '';
+      c.projectPath = known.has(dir) ? dir : null;
+    }
+    return { ok: true, ...merged };
+  },
+
   // One directory or one file of a project the app knows — a real project or
   // a group folder, nothing else on disk. See project-files.js for the guards.
   listProjectFiles: (projectPath, dir) => {
@@ -2399,25 +2444,48 @@ wootonMcp.configure({
     return projectFiles.readFile(root, relPath, hostPath);
   },
 
-  listTodos: () => accountNotes.listNotes(activeNotesDir()).map(n => ({
-    filename: n.filename,
-    title: n.title,
-    projects: n.projects || [],
-    todos: (n.todos || []).map((t, index) => ({ text: t.text, done: !!t.done, index: t.index ?? index })),
-    modified: n.modified || null,
-  })),
+  // In the order the Notes list shows them — pinned, then soonest due.
+  // Archived notes only when asked for: they are put away.
+  listTodos: ({ includeArchived = false } = {}) => accountNotes.listNotes(activeNotesDir())
+    .filter(n => includeArchived || !n.archived)
+    .map(n => ({
+      filename: n.filename,
+      title: n.title,
+      projects: n.projects || [],
+      due: n.due || null,
+      archived: !!n.archived,
+      todos: (n.todos || []).map((t, index) => ({
+        text: t.text, done: !!t.done, index: t.index ?? index, due: t.due || null,
+      })),
+      modified: n.modified || null,
+    })),
 
-  createTodo: ({ title, body, projects }) => {
+  createTodo: ({ title, body, projects, due }) => {
     // A reminder asked for in one sentence is one checkbox, not an empty note
     // with a blank item under its heading.
     const text = body != null && String(body).trim() ? body : `- [ ] ${String(title || '').trim()}`;
-    const result = accountNotes.createNote(activeNotesDir(), { title, body: text, projects });
+    const result = accountNotes.createNote(activeNotesDir(), { title, body: text, projects, due });
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('notes-changed');
     return result?.ok === false ? result : { ok: true, filename: result?.filename };
   },
 
   toggleTodo: (filename, index) => {
     const result = accountNotes.toggleTodo(activeNotesDir(), filename, index);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('notes-changed');
+    return result?.ok === false ? result : { ok: true };
+  },
+
+  archiveTodo: (filename, archived) => {
+    const result = accountNotes.setNoteArchived(activeNotesDir(), filename, archived);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('notes-changed');
+    return result?.ok === false ? result : { ok: true };
+  },
+
+  // No index: the whole list's deadline. A null date clears it.
+  setTodoDue: (filename, index, due) => {
+    const result = index == null
+      ? accountNotes.setNoteDue(activeNotesDir(), filename, due)
+      : accountNotes.setTodoDue(activeNotesDir(), filename, index, due);
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('notes-changed');
     return result?.ok === false ? result : { ok: true };
   },
@@ -2441,9 +2509,70 @@ chatAgent.configure({
  * which is left out of `allowedTools` on purpose — goes through the ordinary
  * permission dialog, the same one every SDK session uses.
  */
+// --- Buddy's spend ---
+// What the Buddy conversation has cost, for the chip in its header. The SDK's
+// `result` carries a running total (total_cost_usd, modelUsage — sub-agents
+// included) for the life of one process, and a resumed session starts it from
+// zero. So the conversation's figure is what earlier processes reached, kept
+// in settings, plus what this one has reached so far. A new conversation (a
+// new id) starts from nothing. An estimate at list price, as the CLI's own is.
+
+const spendKey = () => `managerChatSpend:${getActiveAccount().id}`;
+const ZERO_SPEND = { cost: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+function addSpend(a, b) {
+  return {
+    cost: (a.cost || 0) + (b.cost || 0),
+    input: (a.input || 0) + (b.input || 0),
+    output: (a.output || 0) + (b.output || 0),
+    cacheRead: (a.cacheRead || 0) + (b.cacheRead || 0),
+    cacheWrite: (a.cacheWrite || 0) + (b.cacheWrite || 0),
+  };
+}
+
+function storedSpend(sessionId) {
+  const stored = getSetting(spendKey());
+  return stored?.sessionId === sessionId
+    ? { sessionId, base: { ...ZERO_SPEND, ...stored.base }, run: { ...ZERO_SPEND, ...stored.run } }
+    : { sessionId, base: { ...ZERO_SPEND }, run: { ...ZERO_SPEND } };
+}
+
+function managerSpend(sessionId) {
+  const { base, run } = storedSpend(sessionId);
+  return { sessionId, ...addSpend(base, run) };
+}
+
+/** A new process for the conversation: what the last one reached is banked. */
+function bankManagerSpend(sessionId) {
+  const s = storedSpend(sessionId);
+  setSetting(spendKey(), { sessionId, base: addSpend(s.base, s.run), run: { ...ZERO_SPEND } });
+}
+
+function recordManagerSpend(sessionId, result) {
+  if (!sessionId || sessionId !== chatAgent.current().sessionId) return;
+  const run = { ...ZERO_SPEND, cost: Number(result.total_cost_usd) || 0 };
+  for (const u of Object.values(result.modelUsage || {})) {
+    run.input += u.inputTokens || 0;
+    run.output += u.outputTokens || 0;
+    run.cacheRead += u.cacheReadInputTokens || 0;
+    run.cacheWrite += u.cacheCreationInputTokens || 0;
+  }
+  // A crashed turn can report zeros; it does not undo what was already spent.
+  const s = storedSpend(sessionId);
+  if (run.cost < s.run.cost) return;
+  setSetting(spendKey(), { sessionId, base: s.base, run });
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('buddy-spend-changed', managerSpend(sessionId));
+  }
+}
+
+ipcMain.handle('buddy-spend', () => managerSpend(chatAgent.current().sessionId));
+
 // The assistant's own tools run without asking, except these — see the
 // allowedTools below. One list, so the dev panel in Settings says the same.
-const MANAGER_ASK_FIRST = new Set(['delete_session']);
+// create_todo is here for testing the approval flow end to end — Buddy's
+// reaction, the dialog — with something harmless. Take it out once done.
+const MANAGER_ASK_FIRST = new Set(['delete_session', 'create_todo']);
 // Manual, fixed — the composer shows it without a picker, and
 // sdk-set-permission-mode refuses anything else for this session.
 const MANAGER_PERMISSION_MODE = 'default';
@@ -2475,6 +2604,9 @@ async function ensureManagerChat() {
     });
   }
 
+  // This process's running total starts at zero; bank the last one's first.
+  bankManagerSpend(chat.sessionId);
+
   const allowed = wootonMcp.TOOL_NAMES
     .filter(name => !MANAGER_ASK_FIRST.has(name))
     .map(name => `mcp__wooton__${name}`);
@@ -2484,6 +2616,8 @@ async function ensureManagerChat() {
   // reaches everyone who never edited it.
   const global = getSetting('global') || {};
   const prompt = chatAgent.composeSystemPrompt(global.managerChatPrompt, global.managerChatStyle);
+  // Memory is the CLI's own auto-memory; the side panel shows its files.
+  watchBuddyMemory();
 
   const result = await startSdkSessionFor(chat.sessionId, chat.projectPath, chat.isNew, {
     mode: 'sdk',
@@ -2497,12 +2631,48 @@ async function ensureManagerChat() {
     // Settings must not be a way to turn the manager into a coder.
     disallowedTools: chatAgent.FORBIDDEN_TOOLS,
     systemPrompt: { type: 'preset', preset: 'claude_code', append: prompt },
+    // The CLI's auto-memory is written with Write and Edit; those work in its
+    // memory folder and nowhere else. Decided in the PreToolUse hook because
+    // Read never reaches a permission prompt.
+    preToolUse: (_id, input) => chatAgent.fileToolVerdict(input?.tool_name, input?.tool_input),
   });
   if (!result.ok) return result;
   return { ok: true, ...chat, running: true };
 }
 
 ipcMain.handle('manager-chat-ensure', () => ensureManagerChat().catch(err => ({ ok: false, error: err.message })));
+
+// --- Buddy's memory, as files ---
+// The side panel shows the real auto-memory folder. Buddy writes it with the
+// CLI's own Write and Edit, so the app hears about a change by watching the
+// folder, not from a tool of its own.
+let buddyMemoryWatch = null;
+let buddyMemoryTimer = null;
+
+function watchBuddyMemory() {
+  const dir = chatAgent.memoryDir();
+  if (!dir) return;
+  if (buddyMemoryWatch?.dir === dir) return;
+  try { buddyMemoryWatch?.watcher.close(); } catch {}
+  buddyMemoryWatch = null;
+  try {
+    fs.mkdirSync(hostPath(dir), { recursive: true });
+    const watcher = fs.watch(hostPath(dir), () => {
+      clearTimeout(buddyMemoryTimer);
+      buddyMemoryTimer = setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('buddy-memory-changed');
+      }, 250);
+    });
+    buddyMemoryWatch = { dir, watcher };
+  } catch (err) {
+    log.warn(`[chat] cannot watch memory folder ${dir}: ${err.message}`);
+  }
+}
+
+ipcMain.handle('buddy-memory', () => {
+  watchBuddyMemory();
+  return chatAgent.listMemory();
+});
 
 // --- Dev: the assistant's toolset, inspectable ---
 // Settings → Assistant lists every wooton tool in a development build, and can
@@ -2686,6 +2856,17 @@ ipcMain.handle('toggle-note-todo', (_event, filename, index) =>
 
 ipcMain.handle('set-note-projects', (_event, filename, projectPaths) =>
   accountNotes.setNoteProjects(activeNotesDir(), filename, projectPaths));
+
+// Due dates: one item's (a `due:` token on its line) or the whole list's (a
+// `due:` frontmatter key). A null date clears it. See todo-due.js.
+ipcMain.handle('set-note-todo-due', (_event, filename, index, due) =>
+  accountNotes.setTodoDue(activeNotesDir(), filename, index, due || null));
+
+ipcMain.handle('set-note-due', (_event, filename, due) =>
+  accountNotes.setNoteDue(activeNotesDir(), filename, due || null));
+
+ipcMain.handle('set-note-archived', (_event, filename, archived) =>
+  accountNotes.setNoteArchived(activeNotesDir(), filename, !!archived));
 
 // Stats for one account: its own rows in the session cache, enriched with the
 // stats-cache.json `claude /stats` wrote into that account's config dir. The
@@ -3722,6 +3903,72 @@ ipcMain.handle('get-session-subagents', (_event, sessionId) => {
     log.warn('[subagents] list failed:', err.message);
     return [];
   }
+});
+
+// --- Live sub-agent updates ---
+// The Background tasks pane used to poll, and a list that moves every few
+// seconds reads as stale while an agent is visibly busy. While the pane is
+// open the renderer asks for a watch on the session's subagents folder (new
+// agents, every line an agent writes) and on its transcript (a background
+// agent's completion lands there as a <task-notification>), and hears
+// `subagents-changed` a moment after either moves. Coalesced, because an agent
+// writes several records per message.
+//
+// fs.watch is silent over the 9p share a WSL account lives on (see CLAUDE.md),
+// so the pane keeps a slow poll behind this; here it is best effort.
+const subagentWatches = new Map();   // sessionId → { watchers, timer, refs, retry }
+
+function notifySubagents(sessionId) {
+  const w = subagentWatches.get(sessionId);
+  if (!w || w.timer) return;
+  w.timer = setTimeout(() => {
+    w.timer = null;
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('subagents-changed', sessionId);
+  }, 250);
+}
+
+function armSubagentWatchers(sessionId) {
+  const w = subagentWatches.get(sessionId);
+  const paths = sessionTranscriptPaths(sessionId);
+  if (!w || !paths) return;
+  const targets = [subagentTasks.subagentsDir(paths.sessionDir), paths.parentPath];
+  for (const target of targets) {
+    if (w.watchers.has(target)) continue;
+    try {
+      const watcher = fs.watch(target, { persistent: false }, () => notifySubagents(sessionId));
+      watcher.on('error', () => { try { watcher.close(); } catch {} w.watchers.delete(target); });
+      w.watchers.set(target, watcher);
+    } catch {
+      // Not there yet — a session with no agents has no subagents folder until
+      // its first Task call. Looked for again below.
+    }
+  }
+  // Until both exist, check back: the folder appears with the first agent.
+  clearTimeout(w.retry);
+  if (w.watchers.size < targets.length) w.retry = setTimeout(() => armSubagentWatchers(sessionId), 2000);
+}
+
+ipcMain.handle('watch-subagents', (_event, sessionId) => {
+  if (!sessionId) return { ok: false };
+  let w = subagentWatches.get(sessionId);
+  if (!w) {
+    w = { watchers: new Map(), timer: null, refs: 0, retry: null };
+    subagentWatches.set(sessionId, w);
+  }
+  w.refs++;
+  armSubagentWatchers(sessionId);
+  return { ok: true };
+});
+
+ipcMain.handle('unwatch-subagents', (_event, sessionId) => {
+  const w = subagentWatches.get(sessionId);
+  if (!w) return { ok: true };
+  if (--w.refs > 0) return { ok: true };
+  clearTimeout(w.timer);
+  clearTimeout(w.retry);
+  for (const watcher of w.watchers.values()) { try { watcher.close(); } catch {} }
+  subagentWatches.delete(sessionId);
+  return { ok: true };
 });
 
 // Running counts for the sidebar rows and the board cards. The renderer only

@@ -1,0 +1,253 @@
+/* ─── TODO due dates and progress ──────────────────────────────────────
+   Shared by every place a note is drawn: the Notes & TODO list in the Plans
+   tab, the TODO pane beside a session or Buddy, and Buddy's sidebar. The
+   rules for what counts as overdue live in todo-due.js; these only colour
+   the answer. */
+
+/* A date, relative to today. Muted until it matters: amber for the next two
+   days, orange for today, red once it has passed. */
+.sbx-due {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+  background: var(--surface-card-hover);
+  text-decoration: none;
+}
+
+.sbx-due.is-soon {
+  color: var(--status-warning);
+  background: color-mix(in srgb, var(--status-warning) 12%, transparent);
+}
+.sbx-due.is-today {
+  color: var(--orange-500, var(--status-warning));
+  background: color-mix(in srgb, var(--orange-500, var(--status-warning)) 16%, transparent);
+  font-weight: var(--weight-semibold);
+}
+.sbx-due.is-overdue {
+  color: var(--status-danger);
+  background: color-mix(in srgb, var(--status-danger) 14%, transparent);
+  font-weight: var(--weight-semibold);
+}
+/* A ticked item keeps its date, quietly — it is history now. */
+.sbx-due.is-done {
+  color: var(--text-disabled);
+  background: transparent;
+}
+
+.sbx-due.is-editable { cursor: pointer; }
+.sbx-due.is-editable:hover { filter: brightness(1.15); }
+.sbx-due.is-editable:focus-visible { outline: none; box-shadow: var(--shadow-focus-ring); }
+
+/* No date yet: only a calendar, and only while the row it belongs to is
+   under the pointer — twenty empty calendars down a list is noise. */
+.sbx-due.is-empty {
+  padding: 0 3px;
+  background: transparent;
+  color: var(--text-disabled);
+  opacity: 0;
+}
+*:hover > .sbx-due.is-empty,
+.sbx-todo-meta:hover .sbx-due.is-empty,
+.note-item:hover .sbx-todo-meta .sbx-due.is-empty,
+.sbx-todo:hover .sbx-todo-meta .sbx-due.is-empty,
+.sbx-due.is-empty:focus-visible { opacity: 1; }
+/* Said in words ("Set deadline"): always there, it is the control itself. */
+.sbx-due.has-placeholder {
+  opacity: 1;
+  padding: 0 6px;
+  color: var(--text-tertiary);
+  border: var(--border-width-hairline) dashed var(--border-subtle);
+  font-family: var(--font-ui);
+}
+.sbx-due.is-empty:hover { color: var(--text-primary); background: var(--surface-card-hover); }
+
+.sbx-due__clear {
+  display: none;
+  margin: 0 -2px 0 1px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.sbx-due:hover .sbx-due__clear { display: inline; }
+.sbx-due__clear:hover { opacity: 1; }
+
+/* The system date picker anchors to this; it is never seen or clicked. */
+.sbx-due__input {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+  color-scheme: dark;
+}
+.theme-light .sbx-due__input,
+[data-theme="light"] .sbx-due__input { color-scheme: light; }
+
+/* How far through the list is. */
+.sbx-progress {
+  width: 100%;
+  height: 3px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: var(--surface-card-hover);
+  overflow: hidden;
+}
+.sbx-progress__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--blue-500);
+  transition: width 240ms ease;
+}
+.sbx-progress.is-done .sbx-progress__fill { background: var(--status-running); }
+.sbx-progress.is-overdue .sbx-progress__fill { background: var(--status-danger); }
+/* A list with nothing ticked still shows it is a list, and where it is late. */
+.sbx-progress.is-overdue { background: color-mix(in srgb, var(--status-danger) 18%, var(--surface-card-hover)); }
+
+/* ── Where they sit ── */
+
+/* Item text takes the row, so the dates line up on the right. */
+.note-todo__text,
+.sbx-todo__itemtext {
+  flex: 1;
+  min-width: 0;
+}
+.sbx-todo__itemtext { overflow-wrap: anywhere; }
+.note-todo .sbx-due,
+.sbx-todo__item .sbx-due { margin-top: 1px; }
+
+/* A ticked item's strike-through is on its text, not its date. */
+.sbx-todo__item.is-done { text-decoration: none; }
+.sbx-todo__item.is-done .sbx-todo__itemtext { text-decoration: line-through; }
+
+.note-due-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-2xs);
+  color: var(--text-tertiary);
+}
+.note-due-field .note-input--date {
+  flex: 1;
+  min-width: 0;
+  color-scheme: dark;
+}
+.theme-light .note-due-field .note-input--date { color-scheme: light; }
+
+/* Buddy's sidebar: title and date on one line, items with theirs. */
+.sbx-chatside__row-head,
+.sbx-chatside__todoitem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.sbx-chatside__row-head .sbx-chatside__row-title { flex: 1; min-width: 0; }
+.sbx-chatside__todotext {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sbx-chatside__row .sbx-progress { margin: 2px 0 1px; }
+
+/* The TODO rail badge, while something counted on it is overdue. */
+.sbx-panelrail__badge.is-danger { background: var(--status-danger); }
+
+/* A note's dates and progress, on a row of their own under its title. */
+.sbx-todo-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  min-height: 16px;
+}
+.sbx-todo-meta .sbx-progress { flex: 1; min-width: 24px; }
+/* No deadline yet: its hover-only flag goes after the bar, so the bar does
+   not start from an unexplained gap. */
+.sbx-todo-meta .sbx-due.is-empty { order: 1; }
+
+/* Put away: still readable, clearly not part of the live list. */
+.note-item.is-archived,
+.sbx-todo.is-archived { opacity: 0.55; }
+.note-item.is-archived:hover,
+.sbx-todo.is-archived:hover { opacity: 0.85; }
+
+.note-archived-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.note-archived-toggle:hover { background: var(--surface-card-hover); color: var(--text-secondary); }
+
+/* ── Above a note in an editor: deadline, progress, projects ── */
+.sbx-notemeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: var(--border-width-hairline) solid var(--border-subtle);
+  background: var(--surface-panel);
+  font-size: var(--text-2xs);
+}
+.sbx-notemeta__group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.sbx-notemeta__group--progress { flex: 0 1 180px; }
+.sbx-notemeta__group--progress .sbx-progress { flex: 1; min-width: 40px; }
+.sbx-notemeta__group--projects { flex-wrap: wrap; }
+.sbx-notemeta__label {
+  color: var(--text-disabled);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 10px;
+}
+.sbx-notemeta__count {
+  font-family: var(--font-mono);
+  color: var(--text-tertiary);
+}
+.sbx-notemeta__count.is-done { color: var(--status-running); }
+.sbx-notemeta__add { flex: 0 0 auto; max-width: 160px; }
+.sbx-notemeta__archived {
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--surface-card-hover);
+  color: var(--text-tertiary);
+  line-height: 16px;
+}
+/* In the side panel's editor the bar sits in a narrow column. */
+.sbx-sidepanel__pane--doc .sbx-notemeta { padding: var(--space-2) var(--space-3); gap: var(--space-2) var(--space-3); }

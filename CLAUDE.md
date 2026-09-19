@@ -149,7 +149,9 @@ session with `group` / `groupProjects`. Hidden from the Projects tab. Rules:
 3. A pending group row goes under the container, not its own folder —
    `injectSessionRow` / `pending.listPath` in `app.js`.
 
-The **Chat tab** is an SDK session in `<configDir>/wooton-chat` (hidden from
+The **Chat tab** (labelled **Buddy**; its id stays `chat`, which the saved
+ui_state and the side-panel scope key on) is an SDK session in
+`<configDir>/wooton-chat` (hidden from
 every list), resumed across restarts, rendered by the same `SessionSdkApp`,
 `SessionPanelRail` and `SessionSidePanelApp` via their `session` / `scope="chat"`
 props — `side-panel-tabs.js` `tabsFor()` decides which panes each scope gets,
@@ -160,8 +162,11 @@ Bash, and the built-in Read/Glob/Grep — it reads through its own scoped
 `read_project_file` instead) is enforced as `disallowedTools`, independent of
 the system prompt. It always runs in Manual mode (`MANAGER_PERMISSION_MODE`,
 picker hidden, `sdk-set-permission-mode` refuses) and defaults to Haiku. The
-prompt is editable in Settings → Assistant (`managerChatPrompt`, empty =
-default). It links
+prompt is editable in Settings → Buddy (`managerChatPrompt`, empty =
+default). Buddy keeps `MEMORY.md` in its folder across conversations: written
+only through its own `update_memory` tool (32 KB cap), read back into the
+system prompt at every start (`chatAgent.composeSystemPrompt(..., memory)`),
+shown in its side panel's Memory pane. It links
 sessions and projects as `@session:<uuid>` / `@project:<path>`; `chat-text.js`
 turns those into chips in assistant text too. Sessions it starts arrive in the
 renderer as `external-session-started`.

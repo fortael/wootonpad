@@ -5,12 +5,14 @@
     </div>
 
     <div class="sbx-topnav__tabs">
+      <template v-for="tab in tabs" :key="tab.id">
+      <!-- A tab that is not one more view of the same work — Buddy manages
+           the rest — sits apart, after a divider. -->
+      <span v-if="tab.separated" class="sbx-topnav__divider" aria-hidden="true"></span>
       <button
-        v-for="tab in tabs"
-        :key="tab.id"
         class="sbx-topnav__tab"
         :class="{ 'is-active': tab.id === activeId }"
-        :title="tab.label"
+        :title="tab.hint || tab.label"
         @click="emit('select', tab.id)"
       >
         <SbIcon :name="tab.icon" :size="14" :tone="tab.id === activeId ? 'accent' : 'muted'" />
@@ -18,6 +20,7 @@
         <span v-if="tab.badge" class="sbx-topnav__tab-badge">{{ tab.badge }}</span>
         <span class="sbx-topnav__tab-underline"></span>
       </button>
+      </template>
     </div>
 
     <div class="sbx-topnav__utils">
@@ -47,7 +50,7 @@
 import SbIcon from './SbIcon.vue';
 
 defineProps({
-  // [{ id, icon, label, badge? }] — empty while the CollapsedRail carries navigation
+  // [{ id, icon, label, badge?, separated? }] — empty while the CollapsedRail carries navigation
   tabs: { type: Array, default: () => [] },
   activeId: { type: String, default: '' },
   theme: { type: String, default: 'dark' },

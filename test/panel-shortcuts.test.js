@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { matchShortcut, formatShortcut, shortcutFor, PANEL_SHORTCUTS } = require('../src/vue/panel-shortcuts.js');
+const {
+  matchShortcut, formatShortcut, shortcutFor, PANEL_SHORTCUTS, APP_SHORTCUTS,
+} = require('../src/vue/panel-shortcuts.js');
 
 const key = (over = {}) => ({ key: 't', metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, ...over });
 
@@ -16,7 +18,8 @@ test('every panel gets its key', () => {
   assert.equal(at('t'), 'shell');
   assert.equal(at('d'), 'changes');
   assert.equal(at('o'), 'todos');
-  assert.equal(at('b'), 'tasks');
+  assert.equal(at('j'), 'tasks');
+  assert.equal(at('b'), null, '⌘B is the window\'s — it opens Buddy');
   assert.equal(at('p'), 'containers');
   assert.equal(at(';'), 'stop');
 });
@@ -68,4 +71,14 @@ test('every shortcut is unique', () => {
   const seen = new Set(PANEL_SHORTCUTS.map(s => `${s.shift ? 'S' : ''}${s.key}`));
   assert.equal(seen.size, PANEL_SHORTCUTS.length);
   assert.ok(shortcutFor('shell'));
+});
+
+test('⌘B opens Buddy from anywhere, and no rail key shadows it', () => {
+  const b = (isMac) => key({ key: 'b', metaKey: isMac, ctrlKey: !isMac });
+  assert.equal(matchShortcut(b(true), true, APP_SHORTCUTS), 'buddy');
+  assert.equal(matchShortcut(b(false), false, APP_SHORTCUTS), 'buddy');
+  assert.equal(matchShortcut(key({ key: 'b', metaKey: true, shiftKey: true }), true, APP_SHORTCUTS), null);
+  assert.equal(formatShortcut('buddy', true), '⌘B');
+  const appKeys = new Set(APP_SHORTCUTS.map(s => `${s.shift ? '⇧' : ''}${s.key}`));
+  for (const s of PANEL_SHORTCUTS) assert.ok(!appKeys.has(`${s.shift ? '⇧' : ''}${s.key}`), `${s.id} collides`);
 });

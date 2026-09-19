@@ -116,6 +116,8 @@ export const store = reactive({
   // come from different directories with different write guards, so the save
   // needs to know which one it is looking at.
   planViewerKind: 'plan',
+  // The file the Markdown pane has open — a note's is what its bar edits.
+  planViewerPath: '',
   gridViewActive: false,
   gridViewerCount: '',
   accountViewerOpen: false,      // Accounts tab detail panel in the main area
@@ -157,6 +159,8 @@ export const store = reactive({
   // has no project the user works in, so this is its only presence in the
   // renderer. null until the tab is first opened.
   chatSession: null,
+  // Bumped when Buddy rewrites its MEMORY.md, so the Memory pane re-reads it.
+  buddyMemoryRevision: 0,
   // sessionId → a first prompt to send once that session's chat view is up.
   // Written by whoever starts a session with a prompt already in hand (the
   // new group session dialog), consumed by SessionSdkApp on mount.

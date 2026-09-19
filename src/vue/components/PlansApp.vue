@@ -55,7 +55,7 @@
           :aria-label="creating ? 'Cancel new note' : 'New note'"
           @click="toggleCreate"
         ><SbIcon :name="creating ? 'x' : 'plus'" :size="13" tone="muted" /></button>
-        <span class="sbx-block__count">{{ notes.length }}</span>
+        <span class="sbx-block__count">{{ liveNotes.length }}</span>
       </header>
 
       <div class="sbx-block__body sbx-block__body--scroll">
@@ -68,6 +68,13 @@
             @keydown.enter.prevent="createNote"
             @keydown.escape="toggleCreate"
           />
+          <!-- The whole list's deadline. Items can carry their own, set from
+               the calendar beside each one once the note exists. -->
+          <label class="note-due-field">
+            <SbIcon name="calendar-days" :size="12" tone="muted" />
+            <span>Due</span>
+            <input v-model="newDue" type="date" class="note-input note-input--date" />
+          </label>
           <div v-if="newProjects.length" class="note-projects">
             <span v-for="p in newProjects" :key="p" class="note-project-chip" :title="p">
               {{ shortProject(p) }}
@@ -91,15 +98,15 @@
           </button>
         </div>
 
-        <div v-if="!notes.length" class="projects-empty-hint">
-          No notes yet. They live in this account's Claude home, not in a project.
+        <div v-if="!liveNotes.length" class="projects-empty-hint">
+          {{ archivedNotes.length ? 'Nothing left out — every note is archived.' : "No notes yet. They live in this account's Claude home, not in a project." }}
         </div>
 
         <div
-          v-for="note in notes"
+          v-for="note in visibleNotes"
           :key="note.filename"
           class="session-item note-item"
-          :class="{ active: activeNote === note.filename }"
+          :class="{ active: activeNote === note.filename, 'is-archived': note.archived }"
         >
           <div class="session-row">
             <div class="note-item__head" @click="openNote(note)">
@@ -109,10 +116,32 @@
               </span>
               <button
                 class="note-item__del"
+                :data-tooltip="note.archived ? 'Bring back' : 'Archive'"
+                :aria-label="note.archived ? 'Bring back' : 'Archive'"
+                @click.stop="archiveNote(note, !note.archived)"
+              ><SbIcon :name="note.archived ? 'archive-restore' : 'archive'" :size="12" tone="muted" /></button>
+              <button
+                class="note-item__del"
                 data-tooltip="Delete note"
                 aria-label="Delete note"
                 @click.stop="removeNote(note)"
               ><SbIcon name="trash-2" :size="12" tone="muted" /></button>
+            </div>
+            <!-- When it is due and how far along it is, under the title rather
+                 than beside it: the title gets the whole row. The first chip
+                 is the soonest open date when an item's comes before the
+                 list's own deadline; the flag is that deadline, set here. -->
+            <div class="sbx-todo-meta">
+              <DueChip v-if="note.nextDue && note.nextDue !== note.due" :due="note.nextDue" :hint="nextDueHint(note)" />
+              <DueChip
+                :due="note.due"
+                :done="!!note.total && note.done === note.total"
+                subject="list"
+                icon="flag"
+                editable
+                @set="date => setNoteDue(note, date)"
+              />
+              <TodoProgress :done="note.done" :total="note.total" :overdue="overdueCount(note, today)" />
             </div>
 
             <ul v-if="note.todos.length" class="note-todos">
@@ -125,6 +154,7 @@
               >
                 <SbIcon :name="todo.done ? 'square-check-big' : 'square'" :size="12" tone="muted" />
                 <span class="note-todo__text">{{ todo.text || '(empty)' }}</span>
+                <DueChip :due="todo.due" :done="todo.done" editable @set="date => setTodoDue(note, todo, date)" />
               </li>
               <li v-if="note.todos.length > TODO_PREVIEW" class="note-todos__more" @click="openNote(note)">
                 +{{ note.todos.length - TODO_PREVIEW }} more
@@ -162,6 +192,17 @@
             </div>
           </div>
         </div>
+
+        <!-- Put-away notes: out of the list, one click from coming back. -->
+        <button
+          v-if="archivedNotes.length"
+          type="button"
+          class="note-archived-toggle"
+          @click="showArchived = !showArchived"
+        >
+          <SbIcon name="archive" :size="12" tone="muted" />
+          {{ showArchived ? 'Hide archived' : `Archived (${archivedNotes.length})` }}
+        </button>
       </div>
     </section>
   </div>
@@ -171,6 +212,9 @@
 import { ref, computed, nextTick, onMounted, watch } from 'vue';
 import ListItem from './ListItem.vue';
 import SbIcon from './SbIcon.vue';
+import DueChip from './DueChip.vue';
+import TodoProgress from './TodoProgress.vue';
+import { useToday, overdueCount, nextDueHint } from '../todo-dates.js';
 import { store } from '../store.js';
 import { projectName } from '../project-search.js';
 
@@ -190,11 +234,22 @@ const TODO_PREVIEW = 4;
 
 const notes = ref([]);
 const activeNote = ref(null);
+const showArchived = ref(false);
+
+// Archived notes stay on disk and out of the list, until asked for — then at
+// the foot, after everything still live.
+const liveNotes = computed(() => notes.value.filter(n => !n.archived));
+const archivedNotes = computed(() => notes.value.filter(n => n.archived));
+const visibleNotes = computed(() => (showArchived.value
+  ? [...liveNotes.value, ...archivedNotes.value]
+  : liveNotes.value));
 const creating = ref(false);
 const saving = ref(false);
 const newTitle = ref('');
 const newProjects = ref([]);
+const newDue = ref('');
 const createInput = ref(null);
+const today = useToday();
 
 // store.allProjects, not store.projects: which projects exist is not a
 // question the sidebar's filter tab gets to answer.
@@ -234,6 +289,7 @@ async function toggleCreate() {
   creating.value = !creating.value;
   if (!creating.value) return;
   newTitle.value = '';
+  newDue.value = '';
   await nextTick();
   createInput.value?.focus();
 }
@@ -249,11 +305,16 @@ async function createNote() {
     // Copied flat: the ref hands back a reactive Proxy, and structured clone
     // refuses one even nested in a plain object — see doCommit in
     // SessionSidePanelApp.vue for the same trap.
-    const res = await window.api.createNote({ title: newTitle.value.trim(), projects: [...newProjects.value] });
+    const res = await window.api.createNote({
+      title: newTitle.value.trim(),
+      projects: [...newProjects.value],
+      due: newDue.value || null,
+    });
     if (!res?.ok) return;
     creating.value = false;
     newTitle.value = '';
     newProjects.value = [];
+    newDue.value = '';
     await refreshNotes();
     const created = notes.value.find(n => n.filename === res.filename);
     if (created) openNote(created);
@@ -273,6 +334,18 @@ async function toggleTodo(note, todo) {
   if (res?.ok) await refreshNotes();
 }
 
+// A date, or null to clear it. The item's lives on its own line, the list's
+// in the note's header — see todo-due.js.
+async function setTodoDue(note, todo, due) {
+  const res = await window.api.setNoteTodoDue(note.filename, todo.index, due);
+  if (res?.ok) await refreshNotes();
+}
+
+async function setNoteDue(note, due) {
+  const res = await window.api.setNoteDue(note.filename, due);
+  if (res?.ok) await refreshNotes();
+}
+
 async function addProject(note, projectPath) {
   if (!projectPath || note.projects.includes(projectPath)) return;
   await window.api.setNoteProjects(note.filename, [...note.projects, projectPath]);
@@ -282,6 +355,11 @@ async function addProject(note, projectPath) {
 async function removeProject(note, projectPath) {
   await window.api.setNoteProjects(note.filename, note.projects.filter(p => p !== projectPath));
   await refreshNotes();
+}
+
+async function archiveNote(note, archived) {
+  const res = await window.api.setNoteArchived(note.filename, archived);
+  if (res?.ok) await refreshNotes();
 }
 
 async function removeNote(note) {

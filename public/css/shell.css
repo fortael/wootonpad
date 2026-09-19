@@ -544,6 +544,16 @@
 }
 .note-project:focus-visible { outline: none; box-shadow: var(--shadow-focus-ring); }
 
+/* Shown on the note under the pointer only: on every row at once it read as
+   one button repeated down the list, next to chips that already say which
+   projects the note has. */
+.note-item .note-project {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.note-item:hover .note-project,
+.note-item .note-project:focus-visible { opacity: 1; }
+
 .note-item__date {
   flex-shrink: 0;
   font-size: var(--text-2xs);
@@ -577,4 +587,16 @@
    top margin would double it and it lands differently per tab. */
 .sbx-sidebar-panel .project-group:first-child {
   margin-top: 0;
+}
+
+/* Before a tab that stands apart from the rest — Buddy, the one that manages
+   the others (App.vue, `separated`). Half the bar's height, so it reads as a
+   pause in the row rather than as a wall. */
+.sbx-topnav__divider {
+  flex: none;
+  align-self: center;
+  width: 1px;
+  height: 16px;
+  margin: 0 var(--space-2);
+  background: var(--border-default, var(--border-subtle));
 }

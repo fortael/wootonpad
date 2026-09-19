@@ -5,13 +5,15 @@
 // a note about "the thing I still owe the payments repo" is not something to
 // leave inside that repo's working tree.
 //
-// A note is plain Markdown with a two-key frontmatter — the title and the
-// project it is about. Nothing here needs the general frontmatter parser in
-// schedule-runner: these files are written by this module, the shape is two
-// flat keys, and a note typed by hand with a missing header still opens.
+// A note is plain Markdown with a small frontmatter — the title, the projects
+// it is about and, optionally, the day the whole list is due by. Nothing here
+// needs the general frontmatter parser in schedule-runner: these files are
+// written by this module, the keys are flat, and a note typed by hand with a
+// missing header still opens.
 
 const fs = require('fs');
 const path = require('path');
+const { isDueDate, parseDueToken, setDueToken, nextDue } = require('./todo-due');
 
 const NOTE_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/;
 const TODO_RE = /^(\s*[-*]\s+\[)([ xX])(\].*)$/;
@@ -68,17 +70,23 @@ function parseNote(content) {
 // Every checkbox line in document order. The index is the position in this
 // list, which is what the sidebar sends back when a box is ticked — a line
 // number would move the moment anything above it is edited.
+//
+// An item's own due date rides in its text as a `due:YYYY-MM-DD` token (see
+// todo-due.js); it comes out as `due` and leaves the text, so nothing draws
+// the token as words.
 function noteTodos(body) {
   const todos = [];
   const lines = String(body).split('\n');
   for (let i = 0; i < lines.length; i++) {
     const m = lines[i].match(TODO_RE);
     if (!m) continue;
+    const { due, text } = parseDueToken(m[3].replace(/^\]\s*/, ''));
     todos.push({
       index: todos.length,
       line: i,
       done: m[2] !== ' ',
-      text: m[3].replace(/^\]\s*/, '').trim(),
+      text,
+      due,
     });
   }
   return todos;
@@ -108,7 +116,7 @@ function noteBlocks(body, todos) {
     const todo = todoByLine.get(i);
     if (todo) {
       flushText();
-      blocks.push({ type: 'todo', index: todo.index, done: todo.done, text: todo.text });
+      blocks.push({ type: 'todo', index: todo.index, done: todo.done, text: todo.text, due: todo.due });
       continue;
     }
     // The first heading is the card's own title; repeating it inside is noise.
@@ -128,13 +136,20 @@ function summarize(filename, filePath, content, stat) {
   const { meta, body } = parseNote(content);
   const todos = noteTodos(body);
   const heading = body.split('\n').find(l => l.trim().startsWith('# '));
+  const due = isDueDate(meta.due) ? meta.due : null;
   return {
     filename,
     filePath,
     title: meta.title || (heading ? heading.slice(2).trim() : filename.replace(/\.md$/, '')),
     projects: parseProjects(meta),
     pinned: meta.pinned === 'true',
+    // Put away: kept on disk, out of every list until someone asks for it.
+    archived: meta.archived === 'true',
     modified: stat.mtime.toISOString(),
+    // The list's own deadline, and the soonest day anything still open in it
+    // is due by — its own date or, failing that, the list's.
+    due,
+    nextDue: nextDue(todos, due),
     todos,
     blocks: noteBlocks(body, todos),
     done: todos.filter(t => t.done).length,
@@ -164,10 +179,21 @@ function listNotes(notesDir) {
       notes.push(summarize(filename, filePath, fs.readFileSync(filePath, 'utf8'), fs.statSync(filePath)));
     } catch {}
   }
-  // Pinned first, then most recently touched — the same order the plans list
-  // uses, plus the pin.
-  notes.sort((a, b) => Number(b.pinned) - Number(a.pinned) || new Date(b.modified) - new Date(a.modified));
+  // Pinned first, then whatever is due soonest — a list due tomorrow belongs
+  // above one edited this morning — then most recently touched, the order the
+  // plans list uses. A note with nothing open and dated sorts by touch alone.
+  notes.sort((a, b) => Number(a.archived) - Number(b.archived)
+    || Number(b.pinned) - Number(a.pinned)
+    || byNextDue(a, b)
+    || new Date(b.modified) - new Date(a.modified));
   return notes;
+}
+
+function byNextDue(a, b) {
+  if (a.nextDue && b.nextDue) return a.nextDue < b.nextDue ? -1 : a.nextDue > b.nextDue ? 1 : 0;
+  if (a.nextDue) return -1;
+  if (b.nextDue) return 1;
+  return 0;
 }
 
 function readNote(notesDir, filename) {
@@ -217,7 +243,7 @@ function uniqueFilename(notesDir, base) {
   return filename;
 }
 
-function createNote(notesDir, { title, projects, project, body } = {}) {
+function createNote(notesDir, { title, projects, project, body, due } = {}) {
   const cleanTitle = String(title || '').trim() || 'Untitled note';
   ensureDir(notesDir);
   const filename = uniqueFilename(notesDir, slugify(cleanTitle));
@@ -227,6 +253,7 @@ function createNote(notesDir, { title, projects, project, body } = {}) {
     '---',
     `title: ${cleanTitle}`,
     `projects: ${formatProjects(related)}`,
+    ...(isDueDate(due) ? [`due: ${due}`] : []),
     `created: ${new Date().toISOString()}`,
     '---',
     '',
@@ -280,6 +307,88 @@ function toggleTodo(notesDir, filename, index) {
   }
 }
 
+// Set or clear one item's due date. Same surgery as ticking a box: only that
+// line changes, and on it only the `due:` token — see todo-due.js.
+function setTodoDue(notesDir, filename, index, due) {
+  if (due != null && !isDueDate(due)) return { ok: false, error: `not a date: ${due}` };
+  const filePath = notePath(notesDir, filename);
+  if (!filePath) return { ok: false, error: 'invalid note name' };
+  let content;
+  try {
+    content = fs.readFileSync(filePath, 'utf8');
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  const { body } = parseNote(content);
+  const target = noteTodos(body)[index];
+  if (!target) return { ok: false, error: 'no such item' };
+
+  const offset = content.split('\n').length - body.split('\n').length;
+  const lines = content.split('\n');
+  const lineNo = target.line + offset;
+  const m = lines[lineNo]?.match(TODO_RE);
+  if (!m) return { ok: false, error: 'item moved — reload the note' };
+  lines[lineNo] = m[1] + m[2] + setDueToken(m[3], due || null);
+
+  try {
+    fs.writeFileSync(filePath, lines.join('\n'), 'utf8');
+    return { ok: true, due: due || null };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// Set or clear the deadline of a whole list — a `due:` frontmatter key.
+// Items with no date of their own are due by it.
+function setNoteDue(notesDir, filename, due) {
+  if (due != null && !isDueDate(due)) return { ok: false, error: `not a date: ${due}` };
+  return rewriteHeaderKey(notesDir, filename, 'due', due || null);
+}
+
+// Archive or bring back a note. Only a header key: the file stays where it is,
+// so a link to it, Buddy's memory of it and its history in git all survive.
+function setNoteArchived(notesDir, filename, archived) {
+  return rewriteHeaderKey(notesDir, filename, 'archived', archived ? 'true' : null);
+}
+
+// One frontmatter key replaced, added or (for null) removed, the rest of the
+// file untouched. A note typed by hand without a header gets one.
+function rewriteHeaderKey(notesDir, filename, key, value) {
+  const filePath = notePath(notesDir, filename);
+  if (!filePath) return { ok: false, error: 'invalid note name' };
+  let content;
+  try {
+    content = fs.readFileSync(filePath, 'utf8');
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+  const { meta, body } = parseNote(content);
+  const hasHeader = /^---\r?\n/.test(content);
+  const line = value == null ? null : `${key}: ${value}`;
+  const keyRe = new RegExp(`^${key}:.*(\\r?\\n|$)`, 'm');
+
+  if (!hasHeader) {
+    if (line == null) return { ok: true };
+    content = ['---', `title: ${meta.title || filename.replace(/\.md$/, '')}`, line, '---', '', body].join('\n');
+  } else {
+    // Only inside the header: a body line that happens to start with "due:"
+    // is the note's text, not its metadata.
+    const end = content.search(/\r?\n---\r?\n?/);
+    let header = content.slice(0, end + 1);
+    const rest = content.slice(end + 1);
+    if (key in meta) header = line == null ? header.replace(keyRe, '') : header.replace(new RegExp(`^${key}:.*$`, 'm'), line);
+    else if (line != null) header += `${line}\n`;
+    content = header + rest;
+  }
+
+  try {
+    fs.writeFileSync(filePath, content, 'utf8');
+    return { ok: true, [key]: value };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
 // Changing which projects a note relates to, without opening the editor.
 // Rewrites the frontmatter key — and retires a legacy single `project:` line
 // in the same pass, so a note has one answer rather than two.
@@ -323,6 +432,9 @@ module.exports = {
   createNote,
   deleteNote,
   toggleTodo,
+  setTodoDue,
+  setNoteDue,
+  setNoteArchived,
   setNoteProjects,
   ensureDir,
 };

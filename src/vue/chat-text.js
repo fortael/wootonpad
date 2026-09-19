@@ -79,7 +79,22 @@ const PREFIXED = [
  *          non-overlapping, in the order they appear; `index`/`length` cover the
  *          sigil as well as the name, because that is what gets replaced.
  */
-export function findMentions(text) {
+/**
+ * A bare 8-hex-digit token — a session's short id, the way the app prints one.
+ * Not part of anything longer: the first segment of a full UUID is followed by
+ * a hyphen, and `@session:` is already its own rule.
+ */
+const SHORT_ID_RE = /(?<![\w:-])([0-9a-f]{8})(?![\w-])/gi;
+
+/**
+ * @param {string} text
+ * @param {{ resolveShortSession?: (prefix: string) => string|null }} [opts]
+ *   Turns a short id into the full one, when it names exactly one session the
+ *   caller knows. Models abbreviate ids however often they are told not to;
+ *   with this, one they shortened still becomes a link — and only one that
+ *   really is a session, so a git hash in the same sentence stays text.
+ */
+export function findMentions(text, opts = {}) {
   const source = String(text || '');
   const found = [];
 
@@ -116,6 +131,16 @@ export function findMentions(text) {
     const index = match.index + match[1].length;
     if (claimed.has(index)) continue;
     found.push({ index, length: value.length + 1, kind: 'file', value });
+  }
+
+  if (typeof opts.resolveShortSession === 'function') {
+    SHORT_ID_RE.lastIndex = 0;
+    let short;
+    while ((short = SHORT_ID_RE.exec(source))) {
+      const full = opts.resolveShortSession(short[1].toLowerCase());
+      if (!full) continue;
+      found.push({ index: short.index, length: short[1].length, kind: 'session', value: full });
+    }
   }
 
   return found.sort((a, b) => a.index - b.index);

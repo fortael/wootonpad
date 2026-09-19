@@ -1230,3 +1230,34 @@
   background: var(--surface-card-hover);
   color: var(--orange-600, var(--orange-500));
 }
+
+/* A running agent's last words: more of them, brighter, and marked live — the
+   line updates as the agent writes (see the watch in SessionSidePanelApp). */
+.sbx-agent__last.is-live {
+  color: var(--text-secondary);
+  -webkit-line-clamp: 4;
+  border-left: 2px solid var(--status-running);
+  padding-left: var(--space-2);
+  animation: sbx-agent-live 1.6s ease-in-out infinite;
+}
+
+@keyframes sbx-agent-live {
+  0%, 100% { border-left-color: var(--status-running); }
+  50% { border-left-color: color-mix(in srgb, var(--status-running) 30%, transparent); }
+}
+
+.sbx-agent__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.sbx-agent__tokens {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sbx-agent__last.is-live { animation: none; }
+}
