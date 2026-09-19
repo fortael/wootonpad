@@ -17,7 +17,11 @@
       >
         <SbIcon :name="tab.icon" :size="14" :tone="tab.id === activeId ? 'accent' : 'muted'" />
         <span class="sbx-topnav__tab-label">{{ tab.label }}</span>
-        <span v-if="tab.badge" class="sbx-topnav__tab-badge">{{ tab.badge }}</span>
+        <span
+          v-if="tab.badge"
+          class="sbx-topnav__tab-badge"
+          :class="{ 'is-unread': tab.badgeKind === 'unread' }"
+        >{{ tab.badge }}</span>
         <span class="sbx-topnav__tab-underline"></span>
       </button>
       </template>

@@ -69,6 +69,9 @@ WootonPad = **Electron app**. Session manager + IDE emulator for Claude Code CLI
 | `session-groups.js` | Group sessions: `<configDir>/groups/group-N` folders, `wooton-group.json` manifest, generated CLAUDE.md |
 | `chat-agent.js` | Chat tab assistant: persistent per-account SDK session in `<configDir>/wooton-chat`, its system prompt |
 | `wooton-mcp.js` | In-process MCP server (`mcp__wooton__*`) giving the assistant the app's own tools; formatting only, deps from `main.js` |
+| `todo-due.js` | Due dates on TODO notes: parsing, status, labels, Buddy's agenda — shared by main and the renderer |
+| `session-alerts.js` | When a session is worth a system notification (waiting on you; finished a turn longer than the threshold) |
+| `tray-status.js` | Menu-bar status light (macOS): state from session statuses, icons drawn as bitmaps |
 | `project-files.js` | The assistant's only file access: one directory listing or one file (≤64 KB) inside a known project or group; refuses `..`, symlinks, secrets, binaries |
 | `public/app.js` | Renderer entry; top-level state, routing between sidebar views |
 | `public/sidebar.js` | Left sidebar: project/session list, search, starred/archived filters |
@@ -157,16 +160,47 @@ every list), resumed across restarts, rendered by the same `SessionSdkApp`,
 props — `side-panel-tabs.js` `tabsFor()` decides which panes each scope gets,
 and each scope keeps its own open pane. Its tools are `wooton-mcp.js`, all
 pre-approved except `delete_session`, which goes through the normal permission
-dialog. It manages and never works: `chatAgent.FORBIDDEN_TOOLS` (Edit, Write,
-Bash, and the built-in Read/Glob/Grep — it reads through its own scoped
-`read_project_file` instead) is enforced as `disallowedTools`, independent of
-the system prompt. It always runs in Manual mode (`MANAGER_PERMISSION_MODE`,
+dialog. It manages and never works: `chatAgent.FORBIDDEN_TOOLS` (Bash,
+Glob, Grep, NotebookEdit — it reads projects through its own scoped
+`read_project_file`) is enforced as `disallowedTools`, independent of the
+system prompt. It always runs in Manual mode (`MANAGER_PERMISSION_MODE`,
 picker hidden, `sdk-set-permission-mode` refuses) and defaults to Haiku. The
 prompt is editable in Settings → Buddy (`managerChatPrompt`, empty =
-default). Buddy keeps `MEMORY.md` in its folder across conversations: written
-only through its own `update_memory` tool (32 KB cap), read back into the
-system prompt at every start (`chatAgent.composeSystemPrompt(..., memory)`),
-shown in its side panel's Memory pane. It links
+default). Its memory is the CLI's own auto-memory
+(`<configDir>/projects/<encoded chat dir>/memory/`, MEMORY.md loaded by the
+CLI) — the app adds no memory mechanism of its own. Because that memory is
+written with Write/Edit, Buddy keeps Read/Write/Edit, fenced to that folder by
+`chatAgent.fileToolVerdict` in the PreToolUse hook (`preToolUse` in
+sdk-session.js — the only gate that also sees Read, which never prompts). The
+side panel's Memory pane lists the real files (`buddy-memory` IPC, folder
+watched for `buddy-memory-changed`). It links
 sessions and projects as `@session:<uuid>` / `@project:<path>`; `chat-text.js`
 turns those into chips in assistant text too. Sessions it starts arrive in the
 renderer as `external-session-started`.
+
+### TODO notes
+
+Account notes (`account-notes.js`, `<configDir>/notes/*.md`) carry due dates:
+a list deadline as a `due:` frontmatter key, an item's own as a
+`due:YYYY-MM-DD` token on its line (`📅 YYYY-MM-DD` read too). One set of
+rules in `todo-due.js`, required by main and bundled into the renderer, so
+chips, the rail badge and Buddy's `todo_agenda` agree on what is overdue — a
+done item or a finished list is never late. `archived: true` in the header
+puts a note away: out of lists, badges and the agenda, still on disk.
+
+### Unread counters, notifications, menu bar
+
+- **Unread** (`src/vue/unread.js`, setting `unreadCounters`, off by default):
+  per session, `assistantCount` from the cache (one per API message —
+  `read-session-file.js` folds consecutive blocks of one message id) minus the
+  count seen when it was last on screen (localStorage `unreadSeen`). First
+  sight and switching the feature on start at "all read". Buddy is counted from
+  its live stream (it has no cache row). Drawn on session rows and as tab badges.
+- **Notifications** (`session-alerts.js`, fed by the `SessionStatusTracker`
+  onChange in main): `requires_action` always notifies (sound via
+  `notifySound`); a turn ending notifies only after `notifyMinWorkSeconds`.
+  Never for the session on screen in a focused window — the renderer reports
+  it as `visible-session`. Clicks come back as `open-session-from-outside`.
+- **Menu bar** (`tray-status.js`, setting `trayIcon`, macOS): idle ring,
+  spinning arc while any live session runs, orange disc while one waits; its
+  menu lists them. Follows the setting on save (`set-setting` for `global`).

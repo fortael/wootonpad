@@ -17,6 +17,9 @@ import { parseQuestions, questionTitle, NOTES_ONLY } from './ask-question.js';
 import {
   isWootonTool, describeWootonCall, summarizeWootonResult, wootonResultText,
 } from './wooton-tools.js';
+import {
+  isMemoryCall, describeMemoryCall, memoryReadText, memoryCallLines,
+} from './memory-tools.js';
 import { LUCIDE } from './lucide-icons.js';
 
 // ── Helpers ───────────────────────────────────────────────────────
@@ -964,6 +967,91 @@ function markWootonDuration(card, ms) {
   if (took) took.textContent = formatDuration(ms);
 }
 
+// ── Memory, as cards ──────────────────────────────────────────────
+//
+// A Read, Write or Edit of a memory file (memory-tools.js) is remembering, not
+// file work, and gets a card of its own in the same shape as the tool cards
+// above: a brain, the act, which memory, and the text itself — what was saved,
+// what changed, what was recalled.
+
+/** The card's text: plain lines, or an edit's lines out (−) and in (+). */
+function renderMemoryLines(card, rows, { isError = false } = {}) {
+  card.querySelector(':scope > .sbx-wtool__result')?.remove();
+  if (!rows.length) return;
+  const section = wtoolPart('div', 'sbx-wtool__result');
+  const lines = wtoolPart('div', 'sbx-wtool__lines sbx-memcard__lines');
+  for (const row of rows) {
+    const cls = row.kind === 'removed' ? ' is-removed' : row.kind === 'added' ? ' is-added' : '';
+    lines.appendChild(wtoolPart('div', `sbx-wtool__line${row.text.trim() ? '' : ' is-blank'}${cls}`, row.text));
+  }
+  if (!isError && rows.length > WTOOL_FOLD_LINES) {
+    const toggle = wtoolPart('button', 'sbx-wtool__toggle');
+    toggle.type = 'button';
+    toggle.dataset.lines = String(rows.length);
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.append(
+      makeIcon('chevron-down', 12),
+      wtoolPart('span', 'sbx-wtool__toggle-label', `Show result (${rows.length} lines)`),
+    );
+    lines.hidden = true;
+    section.appendChild(toggle);
+  }
+  section.appendChild(lines);
+  card.appendChild(section);
+}
+
+/**
+ * A call that reads or writes a memory file, as its card. Dispatches through
+ * `data-wtool` like the tool cards, so results and durations land the same way.
+ */
+function renderMemoryCard(block) {
+  const call = describeMemoryCall(block.name, block.input);
+  const el = document.createElement('div');
+  el.className = 'sbx-wtool sbx-wtool--memory jsonl-tool-block';
+  el.dataset.wtool = 'memory';
+  el.dataset.memoryTool = call.tool;
+  el.dataset.keepOpen = '1';
+  if (block.id) el.dataset.toolUseId = block.id;
+
+  const head = wtoolPart('div', 'sbx-wtool__head');
+  const badge = wtoolPart('span', 'sbx-wtool__icon');
+  badge.appendChild(makeIcon(call.icon, 13));
+  const verb = wtoolPart('span', 'sbx-wtool__verb', call.verb);
+  verb.title = call.tool;
+  const detail = wtoolPart('span', 'sbx-wtool__detail', call.file);
+  detail.title = block.input?.file_path || call.file;
+  head.append(badge, verb, detail);
+  el.appendChild(head);
+
+  setWootonStatus(el, 'running');
+  // What goes in is known before the answer: show it now.
+  if (call.tool !== 'Read') renderMemoryLines(el, memoryCallLines(block.name, block.input));
+  return el;
+}
+
+/** A memory card's answer: a Read's text, or a failure's reason. */
+function applyMemoryResult(card, data) {
+  const { content, isError } = unwrapResult(data);
+  const text = wootonResultText(content);
+  if (isError) {
+    renderMemoryLines(card, [{ kind: 'plain', text: String(text || 'Failed').trim() }], { isError: true });
+  } else if (card.dataset.memoryTool === 'Read') {
+    const body = memoryReadText(text);
+    renderMemoryLines(card, body ? body.split('\n').map(line => ({ kind: 'plain', text: line })) : []);
+  }
+  setWootonStatus(card, isError ? 'error' : 'done', isError ? String(text || '').slice(0, 120) : '');
+  return isError;
+}
+
+/** One of the app's own tool calls, or a memory call — whichever card it is. */
+function isCardCall(name, input) {
+  return isWootonTool(name) || isMemoryCall(name, input);
+}
+
+function renderCallCard(block, opts) {
+  return isMemoryCall(block.name, block.input) ? renderMemoryCard(block) : renderWootonCard(block, opts);
+}
+
 /** A card as its own transcript entry, marked so a run of them can sit closer. */
 function wootonEntry(card) {
   const el = asEntry(card);
@@ -1789,6 +1877,7 @@ function markToolWeight(toolEl, content) {
 /** The tool's answer, into the call it belongs to, marked if it failed. */
 function applyToolResult(toolEl, data) {
   // A WootonPad tool card draws its answer itself — subjects, rows and pip.
+  if (toolEl?.dataset?.wtool === 'memory') return applyMemoryResult(toolEl, data);
   if (toolEl?.dataset?.wtool) return applyWootonResult(toolEl, data);
   const { content, isError } = unwrapResult(data);
   withToolContent(toolEl, (body) => renderToolResult(content, body));
@@ -2235,8 +2324,8 @@ function renderViewItems(items, toolResults, opts) {
         }
         // The workspace assistant acting on the app. Also its own entry rather
         // than a row in the run — see renderWootonCard.
-        if (isWootonTool(item.name)) {
-          const card = renderWootonCard({ name: item.name, input: item.input, id: item.id });
+        if (isCardCall(item.name, item.input)) {
+          const card = renderCallCard({ name: item.name, input: item.input, id: item.id });
           if (item.id && toolResults?.has(item.id)) {
             applyToolResult(card, toolResults.get(item.id));
             toolResults.delete(item.id);
@@ -2489,9 +2578,9 @@ function renderJsonlEntry(entry, toolResultMap, opts) {
       }
       // One of WootonPad's own tools: a card, out of the run like the question
       // above — see renderWootonCard.
-      if (isWootonTool(block.name)) {
+      if (isCardCall(block.name, block.input)) {
         group = null;
-        const card = renderWootonCard(block);
+        const card = renderCallCard(block);
         if (block.id && toolResultMap?.has(block.id)) {
           const resultData = toolResultMap.get(block.id);
           toolResultMap.delete(block.id);

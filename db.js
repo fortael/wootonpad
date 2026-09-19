@@ -65,7 +65,8 @@ db.exec(`
     contextLimit INTEGER DEFAULT 0,
     changedFiles INTEGER DEFAULT 0,
     linesAdded INTEGER DEFAULT 0,
-    linesRemoved INTEGER DEFAULT 0
+    linesRemoved INTEGER DEFAULT 0,
+    assistantCount INTEGER DEFAULT 0
   )
 `);
 
@@ -227,6 +228,13 @@ const migrations = [
   (db) => {
     try { db.exec('ALTER TABLE session_cache ADD COLUMN customTitle TEXT'); } catch {}
   },
+  // Messages from Claude per session, for the unread counter. Re-indexed so
+  // every existing session has the number rather than a zero.
+  (db) => {
+    try { db.exec('ALTER TABLE session_cache ADD COLUMN assistantCount INTEGER DEFAULT 0'); } catch {}
+    try { db.exec('DELETE FROM session_cache'); } catch {}
+    try { db.exec('DELETE FROM cache_meta'); } catch {}
+  },
 ];
 
 const currentDbVersion = (() => {
@@ -281,8 +289,8 @@ const stmts = {
   cacheCountByAccount: db.prepare("SELECT COUNT(*) as cnt FROM session_cache WHERE accountId = ?"),
   cacheGetByAccount: db.prepare('SELECT * FROM session_cache WHERE accountId = ?'),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, customTitle, accountId, contextTokens, contextLimit, changedFiles, linesAdded, linesRemoved)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, customTitle, accountId, contextTokens, contextLimit, changedFiles, linesAdded, linesRemoved, assistantCount)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
@@ -292,7 +300,8 @@ const stmts = {
       customTitle = excluded.customTitle, accountId = excluded.accountId,
       contextTokens = excluded.contextTokens, contextLimit = excluded.contextLimit,
       changedFiles = excluded.changedFiles,
-      linesAdded = excluded.linesAdded, linesRemoved = excluded.linesRemoved
+      linesAdded = excluded.linesAdded, linesRemoved = excluded.linesRemoved,
+      assistantCount = excluded.assistantCount
   `),
   cacheGetByFolder: db.prepare('SELECT sessionId, modified, customTitle FROM session_cache WHERE folder = ? AND accountId = ?'),
   cacheGetFolder: db.prepare('SELECT folder FROM session_cache WHERE sessionId = ?'),
@@ -387,7 +396,7 @@ const upsertCachedSessionsBatch = db.transaction((sessions, accountId) => {
       s.firstPrompt, s.created, s.modified, s.messageCount || 0,
       s.slug || null, s.aiTitle || null, s.customTitle || null,
       accountId, s.contextTokens || 0, s.contextLimit || 0, s.changedFiles || 0,
-      s.linesAdded || 0, s.linesRemoved || 0
+      s.linesAdded || 0, s.linesRemoved || 0, s.assistantCount || 0
     );
   }
 });

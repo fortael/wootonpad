@@ -5,7 +5,7 @@
        is *inside* the active tab, so moving the tabs into it as well would
        leave nowhere to switch from. -->
   <TopNavApp
-    :tabs="TABS"
+    :tabs="navTabs"
     :active-id="store.activeTab"
     :theme="store.theme"
     :sidebar-collapsed="store.sidebarCollapsed"
@@ -258,6 +258,7 @@ import { wantsAttention, activeSessions, stateFromStore } from '../session-colum
 import { parseRateLimitEvent } from '../rate-limits.js';
 import { sessionTitle } from '../session-title.js';
 import { matchShortcut, formatShortcut, APP_SHORTCUTS } from '../panel-shortcuts.js';
+import { installUnreadTracking, totalUnread, formatUnread } from '../unread.js';
 import PlansApp from './PlansApp.vue';
 import AccountsApp from './AccountsApp.vue';
 import AccountDropdownApp from './AccountDropdownApp.vue';
@@ -340,7 +341,7 @@ const planOnSave = async (filePath, content) => {
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 
 const TABS = [
-  { id: 'sessions', icon: 'sparkles', label: 'Sessions' },
+  { id: 'sessions', icon: 'messages-square', label: 'Sessions' },
   { id: 'board', icon: 'square-kanban', label: 'Board' },
   { id: 'plans', icon: 'book-open', label: 'Plans' },
   { id: 'projects', icon: 'folder', label: 'Projects' },
@@ -350,8 +351,17 @@ const TABS = [
   // Called Buddy on screen, after the mascot in its sidebar; the id stays
   // 'chat' because it is what the saved ui_state and the side-panel scope
   // key on.
-  { id: 'chat', icon: 'messages-square', label: 'Buddy', separated: true, hint: `Buddy  ${formatShortcut('buddy', isMac)}` },
+  { id: 'chat', icon: 'sparkles', label: 'Buddy', separated: true, hint: `Buddy  ${formatShortcut('buddy', isMac)}` },
 ];
+
+// The tabs with their unread counts — see unread.js. Sessions sums every
+// listed session; Buddy has its own.
+const navTabs = computed(() => TABS.map((tab) => {
+  let n = 0;
+  if (tab.id === 'sessions') n = totalUnread.value;
+  else if (tab.id === 'chat' && store.unreadCounters) n = store.buddyUnread || 0;
+  return n ? { ...tab, badge: formatUnread(n), badgeKind: 'unread' } : tab;
+}));
 
 // ⌘B — Buddy, from anywhere, ready to type into. Capture phase, like the
 // command palette's key: the focus is usually inside a terminal, and xterm's
@@ -381,6 +391,24 @@ function onAppKey(event) {
 }
 
 onMounted(() => document.addEventListener('keydown', onAppKey, true));
+installUnreadTracking();
+
+// Main does not notify about the session you are looking at — tell it which
+// one that is. Buddy's, while its tab is showing.
+watch(
+  () => [store.activeTab, store.activeSessionId, store.chatSession?.sessionId],
+  ([tab, active, chat]) => {
+    const id = tab === 'chat' ? chat : (tab === 'sessions' || tab === 'board') ? active : null;
+    window.api?.reportVisibleSession?.(id || null);
+  },
+  { immediate: true },
+);
+
+// A notification clicked, or a session picked from the menu-bar list.
+window.api?.onOpenSessionFromOutside?.((sessionId) => {
+  if (sessionId && sessionId === store.chatSession?.sessionId) openBuddy();
+  else if (sessionId) window.__sb?.openSessionById?.(sessionId);
+});
 onBeforeUnmount(() => document.removeEventListener('keydown', onAppKey, true));
 
 // ── Search ───────────────────────────────────────────────────────

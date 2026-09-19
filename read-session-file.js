@@ -81,6 +81,12 @@ function createAccumulator() {
     // session) and is complete where it is not.
     linesAdded: 0,
     linesRemoved: 0,
+    // Messages from Claude, for the unread counter: one per API message, not
+    // one per line — the CLI writes each content block of a message (thinking,
+    // text, a tool call) as its own line under the same message id, and those
+    // lines are always consecutive.
+    assistantCount: 0,
+    lastAssistantId: null,
   };
 }
 
@@ -133,6 +139,11 @@ function foldEntry(acc, entry) {
       (entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'))) {
     acc.messageCount++;
   }
+  if (entry.type === 'assistant' || (entry.type === 'message' && entry.role === 'assistant')) {
+    const id = entry.message?.id || null;
+    if (!id || id !== acc.lastAssistantId) acc.assistantCount++;
+    acc.lastAssistantId = id;
+  }
   const msg = entry.message;
   const text = typeof msg === 'string' ? msg :
     (typeof msg?.content === 'string' ? msg.content :
@@ -181,6 +192,7 @@ function finalize(acc, { sessionId, folder, projectPath, stat }) {
     changedFiles: acc.touchedFiles.size,
     linesAdded: acc.linesAdded,
     linesRemoved: acc.linesRemoved,
+    assistantCount: acc.assistantCount,
   };
 }
 

@@ -182,3 +182,22 @@ test('nothing usable yields nothing', () => {
     assert.equal(summaryFromUserText(v), null);
   }
 });
+
+// The unread counter counts messages from Claude, not lines: every content
+// block of one API message is its own line under the same message id.
+test('messages from Claude are counted once each, however many blocks they span', () => {
+  const block = (id, type) => ({ type: 'assistant', message: { id, role: 'assistant', content: [{ type }] } });
+  const { file, dir } = makeTmpSession([
+    { type: 'user', message: 'Do the thing', cwd: '/p', sessionId: 'abc123' },
+    block('msg_1', 'thinking'), block('msg_1', 'text'), block('msg_1', 'tool_use'),
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result' }] } },
+    block('msg_2', 'text'),
+    { type: 'assistant', message: 'no id, still a message' },
+  ]);
+  try {
+    const session = readSessionFile(file, 'f', '/p');
+    assert.equal(session.assistantCount, 3);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

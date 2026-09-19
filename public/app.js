@@ -1174,6 +1174,7 @@ setTimeout(() => {
       document.body.classList.add('hide-avatars');
     }
     window._setReduceMotion?.(global.reduceMotion === true);
+    window._setUnreadCounters?.(global.unreadCounters === true);
   }
 })();
 
@@ -1184,6 +1185,11 @@ window._setShowAvatars = (val) => {
 // The board reads this off the store when deciding whether to fly a card.
 window._setReduceMotion = (val) => {
   if (window.vueStore) window.vueStore.reduceMotion = val === true;
+};
+
+// Unread counters on rows, Buddy and the tabs — see src/vue/unread.js.
+window._setUnreadCounters = (val) => {
+  if (window.vueStore) window.vueStore.unreadCounters = val === true;
 };
 
 window._applyUiFont = (fontKey) => {

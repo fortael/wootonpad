@@ -145,3 +145,48 @@ test('a permission request after a re-key carries the new session id', async () 
   release();
   sdkSession.configure({ loadSdk: null });
 });
+
+// Read never reaches a permission prompt, so a path rule for it can only live
+// in the PreToolUse hook — and the hook has to hand the verdict back to the
+// CLI in the shape it reads, for every tool, with or without lifecycle hooks.
+
+test('a PreToolUse verdict reaches the CLI as a permission decision', async () => {
+  const sdkSession = require('../sdk-session');
+  let options = null;
+  let release;
+  const parked = new Promise(r => { release = r; });
+  const started = new Promise(resolve => {
+    sdkSession.configure({
+      loadSdk: async () => ({
+        query: ({ options: o }) => {
+          options = o;
+          resolve();
+          return (async function* () { await parked; })();
+        },
+      }),
+    });
+  });
+
+  sdkSession.startSdkSession('guarded', {
+    projectPath: '/tmp',
+    isNew: true,
+    onMessage: () => {},
+    settings: { autoMemoryEnabled: true },
+    preToolUse: (_id, input) => (input.tool_name === 'Read'
+      ? { decision: 'deny', reason: 'not here' }
+      : null),
+  });
+  await started;
+
+  assert.deepEqual(options.settings, { autoMemoryEnabled: true });
+  const hook = options.hooks.PreToolUse[0].hooks[0];
+  assert.deepEqual(await hook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: '/etc/passwd' } }), {
+    hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: 'not here' },
+  });
+  assert.deepEqual(await hook({ hook_event_name: 'PreToolUse', tool_name: 'mcp__wooton__list_todos', tool_input: {} }), {});
+  assert.equal(options.hooks.PostToolUse, undefined, 'without onHook only PreToolUse is hooked');
+
+  sdkSession.stopSdkSession('guarded');
+  release();
+  sdkSession.configure({ loadSdk: null });
+});

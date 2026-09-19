@@ -264,6 +264,11 @@ function current() {
   return { sessionId: stored.sessionId, projectPath: dir, isNew: !hasTranscript(stored.sessionId) };
 }
 
+/** The remembered session id, without creating one or touching the disk. */
+function storedSessionId() {
+  return deps.getSetting(settingKey())?.sessionId || null;
+}
+
 /** Forget the current conversation. The old transcript stays on disk. */
 function reset() {
   const next = { sessionId: crypto.randomUUID(), created: new Date().toISOString() };
@@ -282,6 +287,7 @@ function rekey(oldId, newId) {
 module.exports = {
   configure,
   current,
+  storedSessionId,
   reset,
   rekey,
   systemPromptAppend,

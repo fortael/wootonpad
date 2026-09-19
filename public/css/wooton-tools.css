@@ -532,3 +532,29 @@
 }
 
 .sbx-req--wooton .sbx-req__option.is-muted .sbx-req__option-label { color: var(--text-secondary); }
+
+/* ─── Memory cards ──────────────────────────────────────────────────────
+   A session reading or writing its memory (memory-tools.js): the same card,
+   in its own colour — teal, apart from the tools' violet and pink — with a
+   brain for an icon. The text is the memory itself; an edit shows its lines
+   out and in. */
+.sbx-wtool--memory {
+  --wtool-accent: #2fb8a6;
+}
+.sbx-wtool--memory::before {
+  background: linear-gradient(180deg, #2fb8a6, #4f9dff);
+}
+.theme-light .sbx-wtool--memory,
+[data-theme="light"] .sbx-wtool--memory {
+  --wtool-accent: #0f8f80;
+}
+
+.sbx-memcard__lines {
+  font-family: var(--font-mono);
+}
+.sbx-memcard__lines .sbx-wtool__line.is-removed {
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+}
+.sbx-memcard__lines .sbx-wtool__line.is-removed::before { content: '− '; color: var(--status-danger); }
+.sbx-memcard__lines .sbx-wtool__line.is-added::before { content: '+ '; color: var(--status-running); }

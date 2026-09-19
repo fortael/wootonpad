@@ -54,6 +54,12 @@ export const store = reactive({
   theme: 'dark',                 // 'dark' | 'light' — mirrored onto <html data-theme>
   // Board cards fly between columns unless this, or the OS setting, says no.
   reduceMotion: false,
+  // Unread counters — see unread.js. Off unless the setting is on.
+  unreadCounters: false,
+  // sessionId → how many of its messages from Claude were on screen last time.
+  unreadSeen: {},
+  // Buddy's own, counted from its live stream while its tab is not showing.
+  buddyUnread: 0,
   sessionFilterTab: 'recent',    // FilterTabs selection: recent | running | pinned
   sidebarViewMode: 'list',       // 'list' | 'grid'
   attentionProject: null,        // projectPath highlighted in the active-sessions rail

@@ -414,6 +414,64 @@
                   v-model.number="form.sessionMaxAgeDays" min="1" max="365" />
               </div>
             </div>
+
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <span class="settings-label">Unread counters</span>
+                <div class="settings-description">Count Claude's messages you have not seen yet — on each session row, on Buddy, and on the Sessions and Buddy tabs — so you can tell work is moving without opening anything.</div>
+              </div>
+              <div class="settings-field-control">
+                <SbSwitch v-model="form.unreadCounters" />
+              </div>
+            </div>
+          </div>
+
+          <!-- ── Notifications and the menu bar ─────────────────────
+               What happens outside the window: session-alerts.js decides,
+               main.js shows. -->
+          <div class="settings-section">
+            <div class="settings-section-title">Notifications</div>
+
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <span class="settings-label">System notifications</span>
+                <div class="settings-description">Tell you when a session finishes a stretch of work or stops to ask you something — unless you are looking at it.</div>
+              </div>
+              <div class="settings-field-control">
+                <SbSwitch v-model="form.notifyEnabled" />
+              </div>
+            </div>
+
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <span class="settings-label">Worth a notification after (seconds)</span>
+                <div class="settings-description">A finished turn only notifies if the session worked at least this long. Questions and permission prompts always do.</div>
+              </div>
+              <div class="settings-field-control">
+                <input type="number" class="settings-input settings-input-compact"
+                  v-model.number="form.notifyMinWorkSeconds" min="0" max="3600" :disabled="!form.notifyEnabled" />
+              </div>
+            </div>
+
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <span class="settings-label">Sound when a session waits for you</span>
+                <div class="settings-description">Play a sound with the notification when a session asks a question or needs a permission.</div>
+              </div>
+              <div class="settings-field-control">
+                <SbSwitch v-model="form.notifySound" :disabled="!form.notifyEnabled" />
+              </div>
+            </div>
+
+            <div v-if="isMac" class="settings-field">
+              <div class="settings-field-info">
+                <span class="settings-label">Menu bar icon</span>
+                <div class="settings-description">A status light in the menu bar: spins while any session works, turns orange when one waits for you. Its menu lists them.</div>
+              </div>
+              <div class="settings-field-control">
+                <SbSwitch v-model="form.trayIcon" />
+              </div>
+            </div>
           </div>
         </template>
 
@@ -634,6 +692,8 @@ import TerminalPreview from './TerminalPreview.vue';
 
 // ── Derived from store ────────────────────────────────────────────
 const isProject = computed(() => store.settingsScope === 'project');
+// The menu-bar icon is a macOS thing; elsewhere the setting would do nothing.
+const isMac = /Mac/.test(navigator.platform);
 const projectPath = computed(() => store.settingsProjectPath);
 const settingsKey = computed(() => isProject.value ? 'project:' + projectPath.value : 'global');
 // Name over path, the way the project page titles itself: what this is, then
@@ -729,6 +789,11 @@ const form = reactive({
   reduceMotion: false,
   shellProfile: 'auto',
   showAvatars: true,
+  unreadCounters: false,
+  notifyEnabled: true,
+  notifyMinWorkSeconds: 3,
+  notifySound: true,
+  trayIcon: true,
   monoFont: 'default',
   uiFont: 'default',
   uiFontSize: 13,
@@ -850,6 +915,11 @@ async function loadSettings() {
     form.reduceMotion = current.reduceMotion === true;
     form.shellProfile = current.shellProfile ?? 'auto';
     form.showAvatars = current.showAvatars !== false;
+    form.unreadCounters = current.unreadCounters === true;
+    form.notifyEnabled = current.notifyEnabled !== false;
+    form.notifyMinWorkSeconds = current.notifyMinWorkSeconds ?? 3;
+    form.notifySound = current.notifySound !== false;
+    form.trayIcon = current.trayIcon !== false;
     form.monoFont = current.monoFont ?? 'default';
     form.uiFont = current.uiFont ?? 'default';
     form.uiFontSize = current.uiFontSize ?? METRIC_DEFAULTS.uiFontSize;
@@ -914,6 +984,11 @@ async function save() {
       reduceMotion: form.reduceMotion,
       shellProfile: form.shellProfile || 'auto',
       showAvatars: form.showAvatars,
+      unreadCounters: form.unreadCounters,
+      notifyEnabled: form.notifyEnabled,
+      notifyMinWorkSeconds: Math.max(0, Number(form.notifyMinWorkSeconds) || 0),
+      notifySound: form.notifySound,
+      trayIcon: form.trayIcon,
       monoFont: form.monoFont || 'default',
       uiFont: form.uiFont || 'default',
       uiFontSize: Number(form.uiFontSize) || METRIC_DEFAULTS.uiFontSize,
@@ -936,6 +1011,7 @@ async function save() {
     window._applyTerminalTheme?.(settings.terminalTheme);
     window._setShowAvatars?.(settings.showAvatars);
     window._setReduceMotion?.(settings.reduceMotion);
+    window._setUnreadCounters?.(settings.unreadCounters);
     if (window.TERMINAL_FONTS?.[settings.monoFont]) {
       window._applyTerminalFont?.(window.TERMINAL_FONTS[settings.monoFont].family);
     }

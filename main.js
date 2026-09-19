@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, screen, shell, Notification, Tray, nativeImage } = require('electron');
 const { stripInheritedClaudeEnv } = require('./claude-env');
 const path = require('path');
 const fs = require('fs');
@@ -29,6 +29,8 @@ const {
   readTranscriptWindow, readSessionLandmarks, recordIndexAtTime, forgetTranscript,
 } = require('./transcript-window');
 const { createDockAttention } = require('./dock-attention');
+const { createSessionAlerts } = require('./session-alerts');
+const trayStatus = require('./tray-status');
 const {
   detectCompose, composeCheckDue, pollPlan, activeProjectPaths,
 } = require('./project-polling');
@@ -290,10 +292,168 @@ let mainWindow = null;
 // "finished a turn" and "waiting for you".
 const sessionStatus = new SessionStatusTracker({
   onChange: (sessionId, snapshot) => {
+    sessionAlerts.onChange(sessionId, snapshot);
+    scheduleTrayUpdate();
     if (!mainWindow || mainWindow.isDestroyed()) return;
     mainWindow.webContents.send('session-status', sessionId, snapshot);
   },
 });
+
+// --- System notifications ---
+// The rules are session-alerts.js's; this is Electron. "Watching" is the
+// window in front showing that very session — the renderer says which one is
+// on screen (visible-session).
+let visibleSessionId = null;
+ipcMain.on('visible-session', (_event, id) => { visibleSessionId = id || null; });
+
+const windowFocused = () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused();
+
+/** A session's name for a notification or the menu-bar list. */
+function alertTitle(sessionId) {
+  if (sessionId === chatAgent.storedSessionId()) return 'Buddy';
+  const row = getCachedSession(sessionId);
+  const meta = getMeta(sessionId);
+  const title = sessionTitle({ ...(row || {}), name: meta?.name }) || 'Session';
+  const flat = String(title).replace(/\s+/g, ' ').trim();
+  return flat.length > 60 ? `${flat.slice(0, 59)}…` : flat;
+}
+
+/** Bring the window forward on a session — from a notification or the menu bar. */
+function showSessionFromOutside(sessionId) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  if (sessionId) mainWindow.webContents.send('open-session-from-outside', sessionId);
+}
+
+// Held until closed: a Notification the garbage collector takes loses its
+// click handler, and clicking it then does nothing.
+const liveNotifications = new Set();
+
+const sessionAlerts = createSessionAlerts({
+  settings: () => getSetting('global') || {},
+  isWatching: (id) => windowFocused() && visibleSessionId === id,
+  titleFor: alertTitle,
+  notify: ({ kind, sessionId, title, body, sound }) => {
+    if (!Notification.isSupported()) return;
+    const n = new Notification({
+      title,
+      body,
+      silent: !sound,
+      // macOS system sound — a question should be heard across the room.
+      ...(sound && process.platform === 'darwin' ? { sound: 'Glass' } : {}),
+    });
+    liveNotifications.add(n);
+    const drop = () => liveNotifications.delete(n);
+    n.on('click', () => { drop(); showSessionFromOutside(sessionId); });
+    n.on('close', drop);
+    n.show();
+    log.info(`[alerts] ${kind} ${sessionId}`);
+  },
+});
+
+// --- Menu-bar status light (macOS) ---
+// tray-status.js draws the icons and reads the state; this owns the Tray.
+let tray = null;
+let trayImages = null;
+let trayFrame = 0;
+let trayAnimation = null;
+let trayUpdateTimer = null;
+let trayMenuKey = '';
+
+function trayImagesOnce() {
+  if (trayImages) return trayImages;
+  const icons = trayStatus.drawIcons();
+  const image = (buf, template) => {
+    const img = nativeImage.createFromBitmap(buf, { width: icons.size, height: icons.size, scaleFactor: icons.scaleFactor });
+    if (template) img.setTemplateImage(true);
+    return img;
+  };
+  trayImages = {
+    idle: image(icons.idle, true),
+    waiting: image(icons.waiting, false),
+    working: icons.working.map(b => image(b, true)),
+  };
+  return trayImages;
+}
+
+function scheduleTrayUpdate() {
+  if (!tray || trayUpdateTimer) return;
+  trayUpdateTimer = setTimeout(() => { trayUpdateTimer = null; updateTray(); }, 150);
+}
+
+function stopTrayAnimation() {
+  clearInterval(trayAnimation);
+  trayAnimation = null;
+}
+
+function updateTray() {
+  if (!tray || tray.isDestroyed()) return;
+  const live = liveSessionIds();
+  const summary = trayStatus.summarize(sessionStatus.all(), id => live.has(id));
+  const images = trayImagesOnce();
+
+  if (summary.state === 'working') {
+    if (!trayAnimation) {
+      trayAnimation = setInterval(() => {
+        if (!tray || tray.isDestroyed()) return stopTrayAnimation();
+        trayFrame = (trayFrame + 1) % images.working.length;
+        tray.setImage(images.working[trayFrame]);
+      }, 110);
+    }
+  } else {
+    stopTrayAnimation();
+    tray.setImage(summary.state === 'waiting' ? images.waiting : images.idle);
+  }
+  tray.setTitle(trayStatus.trayTitle(summary), { fontType: 'monospacedDigit' });
+  tray.setToolTip(trayStatus.trayTooltip(summary));
+
+  // The menu only when what it lists changed — not on every spinner frame.
+  const key = JSON.stringify([summary.waiting.map(s => s.sessionId), summary.working.map(s => s.sessionId)]);
+  if (key === trayMenuKey) return;
+  trayMenuKey = key;
+  const item = (s) => ({ label: alertTitle(s.sessionId), click: () => showSessionFromOutside(s.sessionId) });
+  const global = getSetting('global') || {};
+  const template = [];
+  if (summary.waiting.length) {
+    template.push({ label: 'Waiting for you', enabled: false }, ...summary.waiting.map(item), { type: 'separator' });
+  }
+  if (summary.working.length) {
+    template.push({ label: 'Working', enabled: false }, ...summary.working.map(item), { type: 'separator' });
+  }
+  if (!summary.waiting.length && !summary.working.length) {
+    template.push({ label: 'Nothing running', enabled: false }, { type: 'separator' });
+  }
+  template.push(
+    { label: 'Open WootonPad', click: () => showSessionFromOutside(null) },
+    {
+      label: 'Notifications',
+      type: 'checkbox',
+      checked: global.notifyEnabled !== false,
+      click: (menuItem) => {
+        setSetting('global', { ...(getSetting('global') || {}), notifyEnabled: menuItem.checked });
+        trayMenuKey = '';
+      },
+    },
+  );
+  tray.setContextMenu(Menu.buildFromTemplate(template));
+}
+
+/** Create or remove the light to match the setting. macOS only. */
+function applyTraySetting() {
+  if (process.platform !== 'darwin') return;
+  const want = (getSetting('global') || {}).trayIcon !== false;
+  if (want && !tray) {
+    tray = new Tray(trayImagesOnce().idle);
+    trayMenuKey = '';
+    updateTray();
+  } else if (!want && tray) {
+    stopTrayAnimation();
+    tray.destroy();
+    tray = null;
+  }
+}
 
 // Started on the first session that needs it rather than at app ready: a user
 // who never opens a session never opens a socket.
@@ -565,6 +725,7 @@ function startSdkSessionFor(sessionId, projectPath, isNew, sessionOptions) {
 
     onSessionId: (oldId, newId) => {
       sessionStatus.rekey(oldId, newId);
+      sessionAlerts.rekey(oldId, newId);
       // The manager chat remembers its id across restarts; a re-key has to
       // move what it remembers, or the next launch resumes a dead id — and
       // its running spend with it, or the header's figure drops to zero.
@@ -3195,6 +3356,8 @@ ipcMain.handle('get-setting', (_event, key) => {
 
 ipcMain.handle('set-setting', (_event, key, value) => {
   setSetting(key, value);
+  // The menu-bar light follows its setting at once, not at the next launch.
+  if (key === 'global') { applyTraySetting(); trayMenuKey = ''; scheduleTrayUpdate(); }
   return { ok: true };
 });
 
@@ -3781,6 +3944,17 @@ const SETTING_DEFAULTS = {
   // language name the prompt can carry. Empty means the model answers in
   // whatever the transcript is in.
   summaryLanguage: '',
+  // Unread counters on session rows, Buddy and the tabs. Off unless asked for:
+  // a number on every row is a lot of new ink for someone who did not want it.
+  unreadCounters: false,
+  // System notifications — see session-alerts.js. A finished turn notifies
+  // only past notifyMinWorkSeconds; a session waiting on you always does, with
+  // a sound unless notifySound is off.
+  notifyEnabled: true,
+  notifyMinWorkSeconds: 3,
+  notifySound: true,
+  // The menu-bar status light (macOS) — see tray-status.js.
+  trayIcon: true,
 };
 
 ipcMain.handle('get-shell-profiles', () => {
@@ -4781,6 +4955,7 @@ sessionTransitions.init({
   rekeyMcpServer: (oldId, newId) => {
     rekeyMcpServer(oldId, newId);
     sessionStatus.rekey(oldId, newId);
+    sessionAlerts.rekey(oldId, newId);
   },
 });
 const { detectSessionTransitions } = sessionTransitions;
@@ -4937,6 +5112,7 @@ ipcMain.handle('updater-install', () => {
 app.whenReady().then(() => {
   buildMenu();
   createWindow();
+  applyTraySetting();
   startProjectsWatcher();
   startActiveProjectPolling();
 

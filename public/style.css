@@ -1642,6 +1642,32 @@ body { display: flex; flex-direction: column; }
   opacity: 0.55;
 }
 
+/* ---- Unread messages ----
+   A filled circle on the right, in the accent: the one thing on a row that
+   says "something new happened here". Steps aside for the menu on hover —
+   they share the corner. */
+.session-unread {
+  flex-shrink: 0;
+  align-self: center;
+  margin-left: auto;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--orange-500);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: var(--weight-semibold);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+.session-item:hover .session-unread { opacity: 0; }
+
 /* ---- What this session changed ----
    The same pair the board's cards carry, from the same numbers — counted from
    the session's own transcript, so a worktree reports its own work. Pushed to

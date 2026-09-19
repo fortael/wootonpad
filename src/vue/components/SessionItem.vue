@@ -67,6 +67,15 @@
         </div>
       </div>
 
+      <!-- Messages from Claude you have not seen — unread.js. A number that
+           grows while the session works, so you can tell it is moving
+           without opening it. -->
+      <span
+        v-if="unread"
+        class="session-unread"
+        :data-tooltip="`${unread} new message${unread > 1 ? 's' : ''}`"
+      >{{ formatUnread(unread) }}</span>
+
       <!-- One menu instead of the five hover buttons this row used to carry —
            the same menu the board's cards open, so an action is in one place
            whichever view you are looking at. Renaming is in there too: the
@@ -91,6 +100,7 @@ import {
   sessionTitle, sessionSubtitle, sessionFirstPrompt, titlePending,
 } from '../session-title.js';
 import { store } from '../store.js';
+import { unreadFor, formatUnread } from '../unread.js';
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -143,6 +153,7 @@ const msgSuffix = computed(() =>
 
 // Shared with the board's cards — see session-churn.js.
 const churn = computed(() => sessionChurn(props.session));
+const unread = computed(() => unreadFor(props.session));
 
 const itemClasses = computed(() => ({
   active: props.isActive,

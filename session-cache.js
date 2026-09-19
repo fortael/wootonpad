@@ -362,6 +362,7 @@ function buildProjectsFromCache(showArchived, snapshot = readProjectsSnapshot())
       changedFiles: row.changedFiles || 0,
       linesAdded: row.linesAdded || 0,
       linesRemoved: row.linesRemoved || 0,
+      assistantCount: row.assistantCount || 0,
       name: meta?.name || null,
       starred: meta?.starred || 0,
       archived: meta?.archived || 0,

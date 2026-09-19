@@ -194,6 +194,10 @@ contextBridge.exposeInMainWorld('api', {
   // How many sessions want something, for the dock badge — and which ones are
   // blocked, so a newly blocked one can bounce the icon. See main.js.
   reportAttention: (summary) => ipcRenderer.send('attention-summary', summary),
+  // Which session is on screen, so a notification about it is not sent — and
+  // the way back in when one is clicked, or picked from the menu-bar list.
+  reportVisibleSession: (sessionId) => ipcRenderer.send('visible-session', sessionId || null),
+  onOpenSessionFromOutside: (callback) => subscribe('open-session-from-outside', callback),
   // A whole prompt for an SDK session. `content` is a string, or the Messages
   // API content blocks a prompt with a pasted image needs — see
   // composer-attachments.js. `sendInput` above stays the PTY's channel.

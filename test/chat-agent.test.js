@@ -33,46 +33,63 @@ test('the style asks for brevity and scannable lists', () => {
   assert.match(style, /Short bullets/);
 });
 
-test('the assistant is never handed a tool that edits files or runs commands', () => {
-  for (const name of ['Edit', 'Write', 'Bash', 'NotebookEdit']) {
+test('the assistant is never handed a tool that runs commands or searches trees', () => {
+  for (const name of ['Bash', 'NotebookEdit', 'Glob', 'Grep']) {
     assert.ok(chatAgent.FORBIDDEN_TOOLS.includes(name), `${name} is forbidden`);
   }
 });
 
 // ── Memory ────────────────────────────────────────────────────────
+//
+// The CLI's own auto-memory. The app reads its files and fences Buddy's file
+// tools into its folder; it writes nothing itself.
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-test('Buddy\'s memory is written to its own folder and read back', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wootonpad-buddy-'));
-  try {
-    chatAgent.configure({ chatDir: () => dir });
-    assert.equal(chatAgent.readMemory(), '', 'nothing before the first write');
-    const res = chatAgent.writeMemory('## Projects\n### clip-service\nGo, publishes views');
-    assert.equal(res.ok, true);
-    assert.equal(chatAgent.memoryPath(), path.join(dir, 'MEMORY.md'));
-    assert.match(chatAgent.readMemory(), /clip-service/);
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+function withAccount(fn) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'wootonpad-buddy-'));
+  const chatDir = path.join(home, 'wooton-chat');
+  const projectsDir = path.join(home, 'projects');
+  chatAgent.configure({
+    chatDir: () => chatDir,
+    projectsDir: () => projectsDir,
+    encodeProjectPath: p => p.replace(/[^A-Za-z0-9]/g, '-'),
+    hostPath: p => p,
+  });
+  try { return fn({ home, chatDir, projectsDir }); } finally { fs.rmSync(home, { recursive: true, force: true }); }
+}
+
+test('the memory folder is the CLI\'s auto-memory folder for Buddy\'s cwd', () => {
+  withAccount(({ chatDir, projectsDir }) => {
+    assert.equal(chatAgent.memoryDir(), path.join(projectsDir, chatDir.replace(/[^A-Za-z0-9]/g, '-'), 'memory'));
+  });
 });
 
-test('a memory past the cap is refused, not truncated', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wootonpad-buddy-'));
-  try {
-    chatAgent.configure({ chatDir: () => dir });
-    const res = chatAgent.writeMemory('x'.repeat(chatAgent.MEMORY_MAX_BYTES + 1));
-    assert.equal(res.ok, false);
-    assert.match(res.error, /condense/);
-    assert.equal(chatAgent.readMemory(), '');
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
+test('Read, Write and Edit work inside the memory folder and nowhere else', () => {
+  withAccount(({ chatDir }) => {
+    const dir = chatAgent.memoryDir();
+    assert.deepEqual(chatAgent.fileToolVerdict('Write', { file_path: path.join(dir, 'MEMORY.md') }), { decision: 'allow' });
+    assert.deepEqual(chatAgent.fileToolVerdict('Read', { file_path: path.join(dir, 'project-clip.md') }), { decision: 'allow' });
+    for (const target of ['/etc/passwd', path.join(chatDir, 'x.md'), path.join(dir, '..', 'escape.jsonl'), dir]) {
+      assert.equal(chatAgent.fileToolVerdict('Edit', { file_path: target }).decision, 'deny', target);
+    }
+    assert.equal(chatAgent.fileToolVerdict('Read', {}).decision, 'deny', 'no path is no pass');
+    assert.equal(chatAgent.fileToolVerdict('mcp__wooton__list_todos', {}), null, 'other tools get no verdict');
+  });
 });
 
-test('the memory is part of the prompt, and says so when empty', () => {
-  assert.match(chatAgent.composeSystemPrompt('', '', '### clip-service\nGo'), /# Your memory \(MEMORY\.md\)\n\n### clip-service/);
-  assert.match(chatAgent.composeSystemPrompt('', '', ''), /nothing remembered yet/);
+test('the memory files list with the index first', () => {
+  withAccount(() => {
+    const dir = chatAgent.memoryDir();
+    assert.deepEqual(chatAgent.listMemory().files, [], 'no folder yet is no files');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'project-clip.md'), 'clip-service: Go\n');
+    fs.writeFileSync(path.join(dir, 'MEMORY.md'), '- [Clip](project-clip.md)\n');
+    fs.writeFileSync(path.join(dir, 'notes.txt'), 'not memory');
+    const { files } = chatAgent.listMemory();
+    assert.deepEqual(files.map(f => f.name), ['MEMORY.md', 'project-clip.md']);
+    assert.match(files[1].content, /clip-service/);
+  });
 });
