@@ -425,17 +425,19 @@
               </div>
             </div>
           </div>
+        </template>
 
-          <!-- ── Notifications and the menu bar ─────────────────────
-               What happens outside the window: session-alerts.js decides,
-               main.js shows. -->
+        <!-- ══ Notifications (global only) ═══════════════════════
+             What happens outside the window: session-alerts.js decides when,
+             main.js shows it; tray-status.js is the menu-bar light. -->
+        <template v-if="tab === 'notifications' && !isProject">
           <div class="settings-section">
-            <div class="settings-section-title">Notifications</div>
+            <div class="settings-section-title">System notifications</div>
 
             <div class="settings-field">
               <div class="settings-field-info">
-                <span class="settings-label">System notifications</span>
-                <div class="settings-description">Tell you when a session finishes a stretch of work or stops to ask you something — unless you are looking at it.</div>
+                <span class="settings-label">Notify me</span>
+                <div class="settings-description">When a session finishes a stretch of work or stops to ask you something — unless you are looking at it.</div>
               </div>
               <div class="settings-field-control">
                 <SbSwitch v-model="form.notifyEnabled" />
@@ -456,14 +458,34 @@
             <div class="settings-field">
               <div class="settings-field-info">
                 <span class="settings-label">Sound when a session waits for you</span>
-                <div class="settings-description">Play a sound with the notification when a session asks a question or needs a permission.</div>
+                <div class="settings-description">Played by the app itself, so you hear it even when the system keeps the banner quiet.</div>
               </div>
               <div class="settings-field-control">
                 <SbSwitch v-model="form.notifySound" :disabled="!form.notifyEnabled" />
               </div>
             </div>
 
-            <div v-if="isMac" class="settings-field">
+            <!-- A real one, through the same path as a session's — the only
+                 way to find out whether the system lets them through. -->
+            <div class="settings-field">
+              <div class="settings-field-info">
+                <span class="settings-label">Try it</span>
+                <div class="settings-description">Send a test notification and play the sound.</div>
+                <div v-if="notifyTest" class="settings-description settings-notify-result" :class="{ 'is-warn': notifyTest.warn }">
+                  {{ notifyTest.text }}
+                </div>
+              </div>
+              <div class="settings-field-control">
+                <button type="button" class="settings-reset-btn" :disabled="notifyTesting" @click="testNotification">
+                  {{ notifyTesting ? 'Sending…' : 'Send test' }}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="isMac" class="settings-section">
+            <div class="settings-section-title">Menu bar</div>
+            <div class="settings-field">
               <div class="settings-field-info">
                 <span class="settings-label">Menu bar icon</span>
                 <div class="settings-description">A status light in the menu bar: spins while any session works, turns orange when one waits for you. Its menu lists them.</div>
@@ -694,6 +716,31 @@ import TerminalPreview from './TerminalPreview.vue';
 const isProject = computed(() => store.settingsScope === 'project');
 // The menu-bar icon is a macOS thing; elsewhere the setting would do nothing.
 const isMac = /Mac/.test(navigator.platform);
+
+// ── Test notification ─────────────────────────────────────────────
+// Goes through main's real path, and says which way it went: the app's own
+// notification, or AppleScript when macOS refused the app's (an unsigned dev
+// build is refused without a word).
+const notifyTesting = ref(false);
+const notifyTest = ref(null);
+
+async function testNotification() {
+  notifyTesting.value = true;
+  notifyTest.value = null;
+  try {
+    const res = await window.api.testNotification?.({ sound: form.notifySound !== false });
+    if (!res) notifyTest.value = { text: 'This build cannot send notifications.', warn: true };
+    else if (res.via === 'native') notifyTest.value = { text: 'Sent. Clicking a notification opens its session.' };
+    else if (res.via === 'applescript') {
+      notifyTest.value = {
+        text: `macOS refused the app's own notification${res.error ? ` (${res.error})` : ''}, so it came through AppleScript — it shows, but clicking it will not open the session. A signed build does not need this.`,
+        warn: true,
+      };
+    } else notifyTest.value = { text: res.error || 'Nothing could be shown.', warn: true };
+  } finally {
+    notifyTesting.value = false;
+  }
+}
 const projectPath = computed(() => store.settingsProjectPath);
 const settingsKey = computed(() => isProject.value ? 'project:' + projectPath.value : 'global');
 // Name over path, the way the project page titles itself: what this is, then
@@ -713,6 +760,7 @@ const TABS = [
   { id: 'agent', label: 'Agent', globalOnly: false },
   { id: 'git', label: 'Git', globalOnly: true },
   { id: 'assistant', label: 'Buddy', globalOnly: true },
+  { id: 'notifications', label: 'Notifications', globalOnly: true },
   { id: 'appearance', label: 'Appearance', globalOnly: true },
 ];
 const tabs = computed(() => TABS.filter(t => !t.globalOnly || !isProject.value));

@@ -192,7 +192,16 @@ function agentUsage(filePath, size) {
   return { tokens: usageTotal(state.last), outputTokens: output, toolUses: state.tools.size };
 }
 
-function listSubagents(sessionDir, parentJsonlPath) {
+/**
+ * @param {string} sessionDir
+ * @param {string} parentJsonlPath
+ * @param {{ parentLive?: boolean }} [opts]  whether the session's CLI process is
+ *   up. An agent runs inside that process — a background one too — so when it
+ *   is gone, an agent with no completion recorded did not finish: it was
+ *   stopped with its session, and says so rather than "running" for the hour
+ *   the silence rule below would take to notice.
+ */
+function listSubagents(sessionDir, parentJsonlPath, { parentLive = true } = {}) {
   const dir = subagentsDir(sessionDir);
   let files;
   try {
@@ -224,6 +233,7 @@ function listSubagents(sessionDir, parentJsonlPath) {
       ...agentUsage(filePath, stat.size),
       // Filled in below — it takes the parent transcript to answer.
       running: false,
+      stopped: false,
     });
   }
 
@@ -243,7 +253,9 @@ function listSubagents(sessionDir, parentJsonlPath) {
       // is the only evidence there is. Long enough that a single slow tool call
       // — a test suite, a build — cannot be mistaken for it.
       const silent = new Date(agent.updatedAt).getTime() < abandoned;
-      agent.running = !finished && !silent;
+      const unfinished = !finished && !silent;
+      agent.running = unfinished && parentLive;
+      agent.stopped = unfinished && !parentLive;
     }
   }
 

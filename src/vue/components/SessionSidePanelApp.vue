@@ -614,10 +614,14 @@
             @click="openSubagent(agent)"
           >
             <span class="sbx-agent__head">
-              <span class="sbx-agent__dot" :class="{ 'is-running': agent.running }"></span>
+              <span class="sbx-agent__dot" :class="{ 'is-running': agent.running, 'is-stopped': agent.stopped }"></span>
               <span class="sbx-agent__type">{{ agent.agentType }}</span>
               <span class="sbx-sidepanel__spacer"></span>
-              <span class="sbx-agent__state">{{ agent.running ? 'running' : 'finished' }}</span>
+              <span
+                class="sbx-agent__state"
+                :class="{ 'is-stopped': agent.stopped }"
+                :data-tooltip="agent.stopped ? 'Stopped with its session before it finished' : null"
+              >{{ agent.running ? 'running' : agent.stopped ? 'stopped' : 'finished' }}</span>
             </span>
             <span class="sbx-agent__desc">{{ agent.description || agent.agentId }}</span>
             <!-- What it last wrote, re-read on every line it writes (see the
@@ -1554,6 +1558,12 @@ function watchAgents(id) {
   watchedSession = id || '';
   if (watchedSession) window.api.watchSubagents?.(watchedSession);
 }
+
+// The session's process ending is the moment its agents stop being able to
+// run — and nothing is written anywhere to say so. Re-read then.
+watch(() => store.activePtyIds.has(sessionId.value), (live, was) => {
+  if (was && !live && tab.value === 'tasks') loadSubagents();
+});
 
 const offSubagents = window.api.onSubagentsChanged?.((id) => {
   if (id && id === sessionId.value && tab.value === 'tasks') loadSubagents();

@@ -331,25 +331,89 @@ function showSessionFromOutside(sessionId) {
 // click handler, and clicking it then does nothing.
 const liveNotifications = new Set();
 
+// macOS drops an app's notifications without a word when it will not trust
+// its signature — the dev build's Electron is ad-hoc signed, and never even
+// appears in System Settings → Notifications. Electron reports that as
+// 'failed'; from then on this run goes straight to AppleScript, which the
+// system does let through (under Script Editor's name, and a click on it
+// cannot come back here).
+let nativeNotificationsRefused = false;
+
+/** The alert sound, played by the app — heard whatever the banner does. */
+function playAlertSound() {
+  if (process.platform === 'darwin') {
+    require('child_process').execFile('afplay', ['/System/Library/Sounds/Glass.aiff'], () => {});
+  } else {
+    shell.beep();
+  }
+}
+
+function appleScriptNotification(title, body) {
+  if (process.platform !== 'darwin') return Promise.resolve(false);
+  const quote = (text) => `"${String(text || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  const script = `display notification ${quote(body)} with title "WootonPad" subtitle ${quote(title)}`;
+  return new Promise((resolve) => {
+    require('child_process').execFile('osascript', ['-e', script], (err) => resolve(!err));
+  });
+}
+
+/**
+ * Show one notification, the app's own if the system takes it, AppleScript's
+ * if not. Resolves with which way it went, for Settings → Notifications → Try
+ * it.
+ *
+ * @returns {Promise<{ ok: boolean, via: 'native'|'applescript'|'none', error?: string }>}
+ */
+function showNotification({ title, body, sessionId = null, sound = false }) {
+  if (sound) playAlertSound();
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (result) => { if (!settled) { settled = true; resolve(result); } };
+    const fallback = async (error) => {
+      const shown = await appleScriptNotification(title, body);
+      settle(shown ? { ok: true, via: 'applescript', error } : { ok: false, via: 'none', error });
+    };
+
+    if (nativeNotificationsRefused || !Notification.isSupported()) {
+      fallback(nativeNotificationsRefused ? 'refused by macOS earlier this run' : 'not supported here');
+      return;
+    }
+    const n = new Notification({ title, body, silent: true });
+    liveNotifications.add(n);
+    const drop = () => liveNotifications.delete(n);
+    n.on('show', () => settle({ ok: true, via: 'native' }));
+    n.on('failed', (_event, error) => {
+      drop();
+      nativeNotificationsRefused = true;
+      log.warn(`[alerts] native notification refused: ${error}`);
+      // Shown either way — even if the wait below already answered "sent".
+      appleScriptNotification(title, body).then((shown) => settle(shown
+        ? { ok: true, via: 'applescript', error: String(error || '') }
+        : { ok: false, via: 'none', error: String(error || '') }));
+    });
+    n.on('click', () => { drop(); showSessionFromOutside(sessionId); });
+    n.on('close', drop);
+    n.show();
+    // Neither shown nor failed yet: the system took it and has not said more.
+    setTimeout(() => settle({ ok: true, via: 'native' }), 2000);
+  });
+}
+
+ipcMain.handle('test-notification', (_event, opts) => showNotification({
+  title: 'Test — a session is waiting for you',
+  body: 'This is how WootonPad tells you a session needs an answer.',
+  sound: opts?.sound !== false,
+}));
+
 const sessionAlerts = createSessionAlerts({
   settings: () => getSetting('global') || {},
   isWatching: (id) => windowFocused() && visibleSessionId === id,
   titleFor: alertTitle,
   notify: ({ kind, sessionId, title, body, sound }) => {
-    if (!Notification.isSupported()) return;
-    const n = new Notification({
-      title,
-      body,
-      silent: !sound,
-      // macOS system sound — a question should be heard across the room.
-      ...(sound && process.platform === 'darwin' ? { sound: 'Glass' } : {}),
-    });
-    liveNotifications.add(n);
-    const drop = () => liveNotifications.delete(n);
-    n.on('click', () => { drop(); showSessionFromOutside(sessionId); });
-    n.on('close', drop);
-    n.show();
     log.info(`[alerts] ${kind} ${sessionId}`);
+    showNotification({ title, body, sessionId, sound }).then((r) => {
+      if (r.via !== 'native') log.info(`[alerts] ${kind} ${sessionId} shown via ${r.via}${r.error ? ` (${r.error})` : ''}`);
+    });
   },
 });
 
@@ -4072,7 +4136,10 @@ ipcMain.handle('get-session-subagents', (_event, sessionId) => {
   const paths = sessionTranscriptPaths(sessionId);
   if (!paths) return [];
   try {
-    return subagentTasks.listSubagents(paths.sessionDir, paths.parentPath);
+    // Its agents live and die with the session's process — see listSubagents.
+    return subagentTasks.listSubagents(paths.sessionDir, paths.parentPath, {
+      parentLive: liveSessionIds().has(sessionId),
+    });
   } catch (err) {
     log.warn('[subagents] list failed:', err.message);
     return [];

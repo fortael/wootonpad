@@ -197,6 +197,8 @@ contextBridge.exposeInMainWorld('api', {
   // Which session is on screen, so a notification about it is not sent — and
   // the way back in when one is clicked, or picked from the menu-bar list.
   reportVisibleSession: (sessionId) => ipcRenderer.send('visible-session', sessionId || null),
+  // Settings → Notifications → Try it: a real one, and which way it went.
+  testNotification: (opts) => ipcRenderer.invoke('test-notification', opts),
   onOpenSessionFromOutside: (callback) => subscribe('open-session-from-outside', callback),
   // A whole prompt for an SDK session. `content` is a string, or the Messages
   // API content blocks a prompt with a pasted image needs — see

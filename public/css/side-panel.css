@@ -791,6 +791,10 @@
 
 .sbx-agent__state { font-size: var(--text-2xs); color: var(--text-tertiary); }
 
+/* Killed with its session before it finished: not working, not done either. */
+.sbx-agent__dot.is-stopped { background: var(--status-warning); }
+.sbx-agent__state.is-stopped { color: var(--status-warning); }
+
 .sbx-agent__desc {
   font-size: var(--text-2xs);
   color: var(--text-secondary);

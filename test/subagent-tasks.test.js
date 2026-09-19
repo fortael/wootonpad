@@ -193,3 +193,34 @@ test('a half-written last line is picked up once it is finished', () => {
     fsT.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// A background agent runs inside its session's CLI process. Stop the session
+// and the agent dies with it — no completion is ever written, so the parent
+// transcript alone would call it running for the hour the silence rule takes.
+test('an unfinished agent of a session that is no longer running is stopped, not running', () => {
+  const s = makeSession();
+  try {
+    writeAgent(s.sessionDir, 'bg1', { agentType: 'Explore', description: 'Explore infra', toolUseId: 'toolu_bg' }, [
+      { type: 'user', isSidechain: true, timestamp: new Date().toISOString(), message: { role: 'user', content: 'go' } },
+    ]);
+    writeAgent(s.sessionDir, 'fin1', { agentType: 'Explore', description: 'Done one', toolUseId: 'toolu_fin' }, [
+      { type: 'user', isSidechain: true, timestamp: new Date().toISOString(), message: { role: 'user', content: 'go' } },
+    ]);
+    fs.writeFileSync(s.parentPath, [
+      JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_bg', content: 'launched' }] }, toolUseResult: { status: 'async_launched', agentId: 'bg1' } }),
+      JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_fin', content: 'answer' }] } }),
+    ].join('\n'), 'utf8');
+
+    const live = listSubagents(s.sessionDir, s.parentPath, { parentLive: true });
+    assert.equal(live.find(a => a.agentId === 'bg1').running, true);
+
+    const dead = listSubagents(s.sessionDir, s.parentPath, { parentLive: false });
+    const bg = dead.find(a => a.agentId === 'bg1');
+    assert.equal(bg.running, false);
+    assert.equal(bg.stopped, true);
+    const fin = dead.find(a => a.agentId === 'fin1');
+    assert.equal(fin.stopped, false, 'a finished agent is finished, not stopped');
+  } finally {
+    fs.rmSync(s.root, { recursive: true, force: true });
+  }
+});

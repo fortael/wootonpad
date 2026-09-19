@@ -1062,3 +1062,7 @@
 .sbx-chatside__buddyblock .sbx-block__count {
   color: var(--chat-accent);
 }
+
+/* Settings → Notifications: what the test send reported. */
+.settings-notify-result { margin-top: 4px; color: var(--status-running); }
+.settings-notify-result.is-warn { color: var(--status-warning); }
