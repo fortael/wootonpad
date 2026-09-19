@@ -32,6 +32,8 @@ const ICONS = [
   'paperclip', 'file',
   // Board — the summarizer's focus flag
   'flag',
+  // Chat tab and group sessions
+  'messages-square', 'layers', 'lock',
 ];
 
 const SRC = path.join(__dirname, '..', 'node_modules', 'lucide-static', 'icons');

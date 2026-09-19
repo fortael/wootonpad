@@ -974,6 +974,32 @@
   color: var(--text-primary);
 }
 
+/* `@session:<uuid>` and `@project:<path>`: the app's own objects, named in the
+   answer that refers to them. Their own hues, because they do not open a file —
+   they move you somewhere else — and the label they show is the short form, so
+   the colour is most of what tells the two apart at a glance. */
+.jsonl-mention--session {
+  background: color-mix(in srgb, var(--purple-400) 16%, transparent);
+  color: color-mix(in srgb, var(--purple-400) 72%, var(--text-primary));
+  font-weight: var(--weight-medium);
+}
+
+.jsonl-mention--session:hover {
+  background: color-mix(in srgb, var(--purple-400) 28%, transparent);
+  color: var(--text-primary);
+}
+
+.jsonl-mention--project {
+  background: color-mix(in srgb, var(--green-500) 16%, transparent);
+  color: color-mix(in srgb, var(--green-500) 72%, var(--text-primary));
+  font-weight: var(--weight-medium);
+}
+
+.jsonl-mention--project:hover {
+  background: color-mix(in srgb, var(--green-500) 28%, transparent);
+  color: var(--text-primary);
+}
+
 .jsonl-mention:focus-visible {
   outline: none;
   box-shadow: var(--shadow-focus-ring);
@@ -2450,4 +2476,76 @@
   flex: none;
   font-variant-numeric: tabular-nums;
   color: var(--status-running);
+}
+
+/* A session the app knows: avatar, title, and the short id in brackets. The
+   title is what the eye reads; the id is there to tell two same-named sessions
+   apart, so it is quieter. Capped so one long title cannot take a whole line. */
+.jsonl-mention--named {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 36ch;
+  vertical-align: bottom;
+}
+
+.jsonl-mention__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jsonl-mention__id {
+  flex: none;
+  opacity: 0.6;
+  font-weight: var(--weight-regular, 400);
+  font-size: 0.9em;
+}
+
+.jsonl-mention__mark {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  overflow: hidden;
+  display: inline-grid;
+}
+
+.jsonl-mention__mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.jsonl-mention__tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--white, #fff);
+  font-size: 7px;
+  font-weight: var(--weight-semibold, 600);
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+/* A group session: the members' monograms tiled, the shapes GroupAvatar.vue
+   uses — two side by side, three or four in a square. */
+.jsonl-mention__mark--group { gap: 1px; background: var(--border-subtle); }
+.jsonl-mention__mark--group .jsonl-mention__tile { font-size: 0; }
+.jsonl-mention__mark--group.is-2 { grid-template-columns: 1fr 1fr; }
+.jsonl-mention__mark--group.is-3,
+.jsonl-mention__mark--group.is-4 { grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; }
+.jsonl-mention__mark--group.is-3 > :first-child { grid-row: span 2; }
+
+/* A permission mode shown but not offered — see lockPermissionMode. Sized to
+   sit where the picker would, so the control row does not jump. */
+.sbx-sdk__fixedmode {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 var(--space-2);
+  color: var(--text-tertiary);
+  font-size: var(--text-xs, 12px);
+  cursor: default;
 }

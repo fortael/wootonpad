@@ -111,6 +111,9 @@
     <div id="board-sidebar-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'board'">
       <BoardSidebarApp :callbacks="boardSidebarCallbacks" />
     </div>
+    <div id="chat-sidebar-content" class="sbx-sidebar-panel sbx-sidebar-panel--blocks" v-show="store.activeTab === 'chat'">
+      <ChatSidebarApp />
+    </div>
   </div>
 
   <!-- ── RESIZE HANDLE ──────────────────────────────────────────── -->
@@ -162,6 +165,12 @@
     </div>
     <div id="account-viewer" v-show="store.accountViewerOpen">
       <AccountViewerApp ref="accountViewerRef" />
+    </div>
+    <!-- Mounted on first visit and kept: the assistant's conversation is a
+         long one, and rebuilding it from the transcript on every tab switch
+         would lose the scroll position and any turn still streaming in. -->
+    <div id="chat-viewer" v-if="chatMounted" v-show="chatVisible">
+      <ChatApp ref="chatRef" />
     </div>
     <!-- The side panel is absolutely positioned inside #terminal-area and the
          terminal split is given a matching right margin (css/side-panel.css).
@@ -221,7 +230,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { store } from '../store.js';
 import SbIcon from './SbIcon.vue';
 import TopNavApp from './TopNavApp.vue';
@@ -234,11 +243,12 @@ import SessionHeaderApp from './SessionHeaderApp.vue';
 import SessionSidePanelApp from './SessionSidePanelApp.vue';
 import SessionPanelRail from './SessionPanelRail.vue';
 import SessionSdkApp from './SessionSdkApp.vue';
-import { loadSidePanelTab } from '../side-panel-tabs.js';
+import { loadSidePanelTab, loadChatSidePanelTab, tabsFor } from '../side-panel-tabs.js';
 import { isPlainTerminal } from '../session-filter.js';
 import { matchProjectPaths } from '../project-search.js';
 import { wantsAttention, activeSessions, stateFromStore } from '../session-column.js';
 import { parseRateLimitEvent } from '../rate-limits.js';
+import { sessionTitle } from '../session-title.js';
 import PlansApp from './PlansApp.vue';
 import AccountsApp from './AccountsApp.vue';
 import AccountDropdownApp from './AccountDropdownApp.vue';
@@ -254,6 +264,8 @@ import BoardSidebarApp from './BoardSidebarApp.vue';
 import ViewerContentApp from './ViewerContentApp.vue';
 import DialogsApp from './DialogsApp.vue';
 import SpotlightApp from './SpotlightApp.vue';
+import ChatApp from './ChatApp.vue';
+import ChatSidebarApp from './ChatSidebarApp.vue';
 
 // ── Template refs ────────────────────────────────────────────────
 const plansRef = ref(null);
@@ -268,6 +280,7 @@ const accountViewerRef = ref(null);
 const planViewerRef = ref(null);
 const dialogsRef = ref(null);
 const boardRef = ref(null);
+const chatRef = ref(null);
 
 // One Markdown pane serves plans and account notes, and each has its own
 // path-guarded write in the main process — so the save has to go to the one
@@ -302,6 +315,8 @@ const planOnSave = async (filePath, content) => {
 // ── Tab config ───────────────────────────────────────────────────
 const TABS = [
   { id: 'sessions', icon: 'sparkles', label: 'Sessions' },
+  // The assistant that manages everything else — see chat-agent.js.
+  { id: 'chat', icon: 'messages-square', label: 'Chat' },
   { id: 'board', icon: 'square-kanban', label: 'Board' },
   { id: 'plans', icon: 'book-open', label: 'Plans' },
   { id: 'projects', icon: 'folder', label: 'Projects' },
@@ -365,6 +380,29 @@ const boardSplitActive = computed(() =>
 
 const sessionListVisible = computed(() => store.activeTab === 'sessions');
 
+// ── Chat tab ─────────────────────────────────────────────────────
+// The view is built the first time the tab is opened and kept from then on.
+// Anything that takes over the main area — a sub-agent's transcript opened
+// from the chat's own side panel, a note, the settings — covers it the way it
+// covers a session, and closing that brings the chat back.
+const chatMounted = ref(false);
+const chatVisible = computed(() => store.activeTab === 'chat' && !mainViewerOpen.value);
+
+watch(() => store.activeTab, async (tab) => {
+  if (tab !== 'chat') return;
+  chatMounted.value = true;
+  await nextTick();
+  chatRef.value?.ensure();
+}, { immediate: true });
+
+// Each account keeps its own assistant conversation (chat-agent.js keys it by
+// account). After a switch the one on screen belongs to the account just left.
+watch(() => store.activeAccountId, (next, prev) => {
+  if (!prev || next === prev || !store.chatSession) return;
+  store.chatSession = null;
+  if (store.activeTab === 'chat') nextTick(() => chatRef.value?.ensure());
+});
+
 // Each tab searches what it shows, and the placeholder says which fields —
 // there is no modifier on the field any more, so the rule has to be readable
 // from the bar itself.
@@ -374,6 +412,8 @@ const searchPlaceholder = computed(() => {
     case 'projects': return 'Search projects by name or folder…';
     case 'accounts': return 'Search accounts by name or folder…';
     case 'board': return 'Search the board by session or project…';
+    // Nothing in this tab's sidebar to filter — the assistant is the search.
+    case 'chat': return 'Ask the assistant to find sessions…';
     default: return 'Search sessions by title or project…';
   }
 });
@@ -529,8 +569,42 @@ watch(() => store.highlightFresh, (on) => window.__sb?.setHighlightFresh?.(on));
 const activeRows = computed(() =>
   activeSessions(store.projects, stateFromStore(store), store.activePtyIds));
 
+// ── Session lookup for chips ─────────────────────────────────────
+// message-render.js is plain DOM and stays free of the store — the transcript
+// viewer uses it too — so an `@session:` chip asks here what to call a session
+// and which avatar to draw. Indexed once per list refresh rather than searched
+// per chip: a long answer can mention the same twenty sessions twice over.
+const sessionIndex = computed(() => {
+  const index = new Map();
+  const lists = [store.allProjects, store.projects];
+  for (const list of lists) {
+    for (const project of list || []) {
+      for (const s of project.sessions || []) {
+        if (!index.has(s.sessionId)) index.set(s.sessionId, s);
+      }
+    }
+  }
+  return index;
+});
+
+function sessionInfo(id) {
+  const s = sessionIndex.value.get(id) || sessionIndex.value.get(String(id || '').toLowerCase());
+  if (!s) return null;
+  const title = sessionTitle(s, '');
+  return {
+    title,
+    projectPath: s.projectPath,
+    groupProjects: s.groupProjects || [],
+    avatarUrl: store.avatarDataUrls[s.projectPath] || null,
+  };
+}
+
 function openRailSession(session) {
-  if (session) window.__sb?.openSession?.(session);
+  if (!session) return;
+  // The chat tab has no session pane of its own; a session picked from the
+  // rail there opens where sessions live.
+  if (store.activeTab === 'chat') setTab('sessions');
+  window.__sb?.openSession?.(session);
 }
 
 // The collapsed rail's accounts list hands over the account; the viewer wants
@@ -601,8 +675,12 @@ function onViewMode(mode) {
 // next real session.
 const headerIsTerminal = computed(() => isPlainTerminal(store.headerSession));
 
+// And never on a pane this session does not have: the group pane stays the
+// remembered choice while you look at an ordinary session, and comes back with
+// the next group session rather than drawing an empty panel in between.
 const sidePanelVisible = computed(() =>
   !!store.sidePanelTab && !!store.headerSession && !headerIsTerminal.value
+  && tabsFor(store.headerSession).some(t => t.id === store.sidePanelTab)
 );
 
 // An SDK-backed session has no xterm to show. Keyed by session id in the
@@ -760,6 +838,7 @@ onMounted(async () => {
     openFile: (relPath) => projectViewerRef.value?.openFile(relPath),
   };
   window.vueApp = { setTab };
+  window.sbSessionInfo = sessionInfo;
   // app.js is a classic script and cannot import the module this lives in, but
   // "is this a shell rather than a conversation" must have one answer — see
   // session-filter.js.
@@ -792,6 +871,7 @@ onMounted(async () => {
     openResumeSession: (...args) => dialogsRef.value?.openResumeSession(...args),
     openAddProject: (...args) => dialogsRef.value?.openAddProject(...args),
     openPopover: (...args) => dialogsRef.value?.openPopover(...args),
+    openNewGroup: (...args) => dialogsRef.value?.openNewGroup(...args),
   });
 
   Object.assign(window.vuePlanViewer, {
@@ -851,6 +931,7 @@ onMounted(async () => {
 
   // Session side panel — the open pane and the width survive a restart.
   store.sidePanelTab = loadSidePanelTab();
+  store.chatSidePanelTab = loadChatSidePanelTab();
   const savedPanelWidth = parseInt(localStorage.getItem('sessionSidePanelWidth'), 10);
   if (Number.isFinite(savedPanelWidth) && savedPanelWidth >= 280) store.sidePanelWidth = savedPanelWidth;
 

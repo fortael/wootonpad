@@ -486,7 +486,9 @@ window.createPanelTerminal = async function createPanelTerminal(host, projectPat
   });
   entry.observer.observe(host);
 
-  const result = await window.api.openTerminal(id, projectPath, true, { type: 'terminal', ephemeral: true });
+  const result = await window.api.openTerminal(id, projectPath, true, {
+    type: 'terminal', ephemeral: true, ephemeralSlot: slot,
+  });
   // The pane may have been closed while the PTY was starting.
   if (panelTerms.get(slot) !== entry) return null;
   if (!result?.ok) {

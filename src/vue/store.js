@@ -129,7 +129,10 @@ export const store = reactive({
   // across a session switch. Keeping the shell open and stepping through
   // sessions is the point — the pane stays, its contents re-scope to whatever
   // session is now in front. null means closed.
-  sidePanelTab: null,            // null | 'changes' | 'containers' | 'shell'
+  sidePanelTab: null,            // null | 'group' | 'changes' | 'todos' | 'tasks' | 'containers' | 'shell'
+  // The same panel beside the Chat tab's assistant, with its own open pane —
+  // see side-panel-tabs.js. Only 'todos' and 'tasks' apply there.
+  chatSidePanelTab: null,
   sidePanelWidth: 380,
   // Last get-project-detail the panel loaded, published so the rail can badge
   // its buttons without issuing a second call — get-project-detail broadcasts
@@ -149,4 +152,15 @@ export const store = reactive({
 
   // Project avatars: projectPath → data: URL string
   avatarDataUrls: {},
+
+  // The Chat tab's assistant — see chat-agent.js. Not a row in any list: it
+  // has no project the user works in, so this is its only presence in the
+  // renderer. null until the tab is first opened.
+  chatSession: null,
+  // sessionId → a first prompt to send once that session's chat view is up.
+  // Written by whoever starts a session with a prompt already in hand (the
+  // new group session dialog), consumed by SessionSdkApp on mount.
+  pendingPrompts: new Map(),
+  chatStarting: false,
+  chatError: '',
 });

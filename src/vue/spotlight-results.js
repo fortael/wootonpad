@@ -43,13 +43,17 @@ export function spotlightResults({ projects, plans = [], query = '', projectMeta
   const q = String(query || '').trim().toLowerCase();
   const live = livingProjects(projects, projectMeta);
 
-  if (!q) return { projects: live, sessions: [], plans: [] };
+  // The Grouped sessions entry has sessions worth finding but is not a
+  // project anyone opens or starts a session in — so it never ranks as one.
+  const openable = live.filter(project => !project.isGroupContainer);
+
+  if (!q) return { projects: openable, sessions: [], plans: [] };
 
   // Ranked, not just filtered: with fuzzy matching several projects can
   // qualify on three letters, so which one is first is the whole answer.
   const scoredProjects = [];
   const matched = new Set();
-  for (const project of live) {
+  for (const project of openable) {
     const hit = matchProject(project, q);
     if (!hit) continue;
     matched.add(project.projectPath);

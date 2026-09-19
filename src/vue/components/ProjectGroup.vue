@@ -9,6 +9,17 @@
       <button class="project-new-btn worktree-new-btn" data-tooltip="New session in worktree" @click.stop="$emit('new-session', project, $event.currentTarget)"><SbIcon name="plus" :size="12" tone="muted" /></button>
     </div>
 
+    <!-- Grouped sessions header. Not a project: it has no page to open, no
+         settings of its own and no single project to start a session in —
+         the + asks which projects the new one should span instead. -->
+    <div v-else-if="project.isGroupContainer" class="project-header project-header--groups" :class="{ collapsed, 'has-active-session': hasActiveSession }" :id="'ph-' + folderId" @click.self="toggle">
+      <span class="arrow" @click.stop="toggle">&#9660;</span>
+      <span class="project-header-avatar project-header-avatar--groups" @click.stop="toggle"><SbIcon name="layers" :size="13" /></span>
+      <span class="project-name" @click.stop="toggle">Grouped sessions</span>
+      <button class="project-archive-btn" data-tooltip="Archive all sessions" @click.stop="archiveAll"><SbIcon name="archive" :size="13" tone="muted" /></button>
+      <button class="project-new-btn" data-tooltip="New group session" @click.stop="newGroup"><SbIcon name="plus" :size="13" tone="muted" /></button>
+    </div>
+
     <!-- Project header -->
     <div v-else class="project-header" :class="{ collapsed, 'has-active-session': hasActiveSession }" :id="'ph-' + folderId" @click.self="toggle">
       <span class="arrow" @click.stop="toggle">&#9660;</span>
@@ -275,6 +286,11 @@ const olderItems = computed(() => {
 
 async function archiveAll() {
   emit('archive-sessions', props.project.sessions.filter(s => !s.archived));
+}
+
+// Picks the projects first — see showNewGroupDialog in app.js.
+function newGroup() {
+  window.__sb?.newGroupSession?.();
 }
 
 // ProjectsApp.vue reaches the project viewer the same way.

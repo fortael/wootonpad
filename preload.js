@@ -201,6 +201,28 @@ contextBridge.exposeInMainWorld('api', {
   onSessionForked: (callback) => {
     ipcRenderer.on('session-forked', (_event, oldId, newId) => callback(oldId, newId));
   },
+
+  // Group sessions — one session over several projects. See session-groups.js.
+  listSessionGroups: () => ipcRenderer.invoke('list-session-groups'),
+  getSessionGroup: (groupId) => ipcRenderer.invoke('get-session-group', groupId),
+  createSessionGroup: (options) => ipcRenderer.invoke('create-session-group', options),
+  setGroupProjects: (groupId, projects) => ipcRenderer.invoke('set-group-projects', groupId, projects),
+
+  // The Chat tab's assistant — see chat-agent.js.
+  managerChatEnsure: () => ipcRenderer.invoke('manager-chat-ensure'),
+  managerChatReset: () => ipcRenderer.invoke('manager-chat-reset'),
+  // Same conversation, restarted — so an edited system prompt takes effect.
+  managerChatRestart: () => ipcRenderer.invoke('manager-chat-restart'),
+  managerChatDefaultPrompt: () => ipcRenderer.invoke('manager-chat-default-prompt'),
+  managerChatDefaultStyle: () => ipcRenderer.invoke('manager-chat-default-style'),
+  // Dev builds only: the assistant's tools, and a way to run the read-only ones.
+  wootonMcpTools: () => ipcRenderer.invoke('wooton-mcp-tools'),
+  wootonMcpRun: (name, args) => ipcRenderer.invoke('wooton-mcp-run', name, args),
+  // A session the assistant started. The renderer adds its row; it does not
+  // switch to it, because the user is still talking to the assistant.
+  onExternalSessionStarted: (callback) => subscribe('external-session-started', callback),
+  // A note written from outside the notes UI — the assistant's create_todo.
+  onNotesChanged: (callback) => subscribe('notes-changed', callback),
   onProjectsChanged: (callback) => {
     ipcRenderer.on('projects-changed', () => callback());
   },

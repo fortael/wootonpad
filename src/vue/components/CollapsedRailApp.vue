@@ -27,8 +27,14 @@
         :aria-label="item.label"
         @click="pick(item)"
       >
+        <GroupAvatar
+          v-if="item.groupProjects?.length"
+          class="sbx-rail__avatar"
+          :project-paths="item.groupProjects"
+          :size="26"
+        />
         <ProjectAvatar
-          v-if="item.projectPath"
+          v-else-if="item.projectPath"
           class="sbx-rail__avatar"
           :project-path="item.projectPath"
         />
@@ -61,6 +67,7 @@ import { computed } from 'vue';
 import { store } from '../store.js';
 import SbIcon from './SbIcon.vue';
 import ProjectAvatar from './ProjectAvatar.vue';
+import GroupAvatar from './GroupAvatar.vue';
 import { filterSessions } from '../session-filter.js';
 import { boardProjectRows } from '../board-projects.js';
 import { columnOf, stateFromStore } from '../session-column.js';
@@ -132,6 +139,7 @@ const sessionItems = computed(() => {
       out.push({
         key: session.sessionId,
         projectPath: project.projectPath,
+        groupProjects: session.groupProjects || null,
         label: `${shortPath(project.projectPath)} — ${sessionTitle(session, session.sessionId)}`,
         status: columnOf(session.sessionId, state),
         active: session.sessionId === store.activeSessionId,
@@ -185,7 +193,7 @@ const WORKTREE_RE = /\/\.claude\/worktrees\/[^/]+\/?$/;
 const projectItems = computed(() => {
   const all = store.allProjects?.length ? store.allProjects : store.projects;
   return (all || [])
-    .filter(p => !WORKTREE_RE.test(p.projectPath))
+    .filter(p => !WORKTREE_RE.test(p.projectPath) && !p.isGroupContainer)
     .map(p => ({
       key: p.projectPath,
       projectPath: p.projectPath,

@@ -36,7 +36,15 @@
              bounces, so the pip and the badge stay stuck to the corners of the
              thing that is jumping. -->
         <span class="sbx-unread__stack">
-          <ProjectAvatar class="sbx-unread__monogram" :project-path="row.projectPath" />
+          <!-- A group session is drawn as the grid of every project it spans —
+               the one picture that tells two group sessions apart. -->
+          <GroupAvatar
+            v-if="row.session?.groupProjects?.length"
+            class="sbx-unread__monogram"
+            :project-paths="row.session.groupProjects"
+            :size="22"
+          />
+          <ProjectAvatar v-else class="sbx-unread__monogram" :project-path="row.projectPath" />
           <!-- The session's own status mark, repeated small in the corner — the
                spinning arc, the orange dot and the blue one the sidebar row
                already draws. Idle is the only lane without one: it is making
@@ -65,6 +73,7 @@
 <script setup>
 import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import ProjectAvatar from './ProjectAvatar.vue';
+import GroupAvatar from './GroupAvatar.vue';
 import { sessionTitle } from '../session-title.js';
 
 // Four lanes now, not two — see activeSessions() in session-column.js. The

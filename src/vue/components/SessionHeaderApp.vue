@@ -6,7 +6,13 @@
          path where it read as another piece of metadata rather than as what
          this session is about. -->
     <div class="sbx-sesshead__identity">
-      <ProjectAvatar class="sbx-sesshead__avatar" :project-path="session.projectPath" />
+      <GroupAvatar
+        v-if="session.groupProjects?.length"
+        class="sbx-sesshead__avatar"
+        :project-paths="session.groupProjects"
+        :size="22"
+      />
+      <ProjectAvatar v-else class="sbx-sesshead__avatar" :project-path="session.projectPath" />
 
       <div class="sbx-sesshead__text">
         <div class="sbx-sesshead__titlerow">
@@ -91,6 +97,7 @@
 import { computed } from 'vue';
 import { store } from '../store.js';
 import ProjectAvatar from './ProjectAvatar.vue';
+import GroupAvatar from './GroupAvatar.vue';
 import SessionMenu from './SessionMenu.vue';
 import { sessionTitle, sessionSubtitle, sessionFirstPrompt, titlePending } from '../session-title.js';
 import { tick, fastTick } from '../time-tick.js';
@@ -99,6 +106,9 @@ const session = computed(() => store.headerSession);
 const sessionId = computed(() => session.value?.sessionId);
 
 const projectShortPath = computed(() => {
+  // A group session's folder is `groups/group-3`, which says nothing. Its
+  // group's name is what the user chose, or the projects joined if they did not.
+  if (session.value?.group?.name) return session.value.group.name;
   const p = session.value?.projectPath || '';
   return p.split('/').filter(Boolean).slice(-2).join('/');
 });

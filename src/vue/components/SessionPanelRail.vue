@@ -6,15 +6,15 @@
        replaces what is under the rail, not the rail itself. -->
   <!-- `is-open` shifts the rail clear of the panel. A terminal never has one
        open beside it, however the store's remembered tab happens to be set. -->
-  <div class="sbx-panelrail" :class="{ 'is-open': !!store.sidePanelTab && visibleTabs.length > 0 }">
+  <div class="sbx-panelrail" :class="{ 'is-open': !!openTab && visibleTabs.some(t => t.id === openTab) }">
     <button
       v-for="tab in visibleTabs"
       :key="tab.id"
       type="button"
       class="sbx-panelrail__btn"
-      :class="{ 'is-active': store.sidePanelTab === tab.id }"
+      :class="{ 'is-active': openTab === tab.id }"
       :data-tooltip="tipFor(tab)"
-      :aria-pressed="store.sidePanelTab === tab.id"
+      :aria-pressed="openTab === tab.id"
       :aria-label="tab.label"
       @click="select(tab.id)"
     >
@@ -36,7 +36,10 @@
       <SbIcon name="square" :size="14" />
     </button>
 
+    <!-- The assistant's view is the Chat tab itself; there is nothing to put
+         away it into. -->
     <button
+      v-if="scope !== 'chat'"
       type="button"
       class="sbx-panelrail__btn"
       data-tooltip="Close this view — the session keeps running"
@@ -52,12 +55,25 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { store } from '../store.js';
 import SbIcon from './SbIcon.vue';
-import { TABS, setSidePanelTab } from '../side-panel-tabs.js';
+import { tabsFor, panelTab, setSidePanelTab } from '../side-panel-tabs.js';
 import { matchShortcut, formatShortcut } from '../panel-shortcuts.js';
 import { isPlainTerminal } from '../session-filter.js';
 
-const projectPath = computed(() => store.headerSession?.projectPath || '');
-const sessionId = computed(() => store.headerSession?.sessionId || '');
+// Two rails exist at once: the one over the open session and the one beside
+// the Chat tab's assistant. Each takes its subject and its own open pane — see
+// side-panel-tabs.js.
+const props = defineProps({
+  session: { type: Object, default: null },
+  scope: { type: String, default: 'session' },   // 'session' | 'chat'
+});
+
+const subject = computed(() => props.session || store.headerSession);
+const openTab = computed(() => panelTab(props.scope));
+const projectPath = computed(() => subject.value?.projectPath || '');
+const sessionId = computed(() => subject.value?.sessionId || '');
+// A group session has no working tree of its own; its badges are the sum of
+// the projects it spans.
+const groupProjects = computed(() => subject.value?.groupProjects || []);
 
 // Stop and Close stay for everything — a terminal is still a process you may
 // want to end and a view you may want to put away. The three panel tabs do
@@ -65,7 +81,7 @@ const sessionId = computed(() => store.headerSession?.sessionId || '');
 // session working in a project, and a terminal already is a shell in that
 // project. Offering it a second one is the rail answering a question its own
 // subject has answered.
-const visibleTabs = computed(() => (isPlainTerminal(store.headerSession) ? [] : TABS));
+const visibleTabs = computed(() => tabsFor(subject.value, props.scope));
 
 // Whatever `get-project-detail` last wrote for this project, straight out of
 // SQLite. A plain row read: no git, no docker, no `projects-changed` broadcast
@@ -76,17 +92,27 @@ const cached = ref(null);
 
 async function loadCounts() {
   const p = projectPath.value;
-  // Nothing draws these for a terminal, so nothing should fetch them either.
-  if (!p || isPlainTerminal(store.headerSession)) { cached.value = null; return; }
+  // Nothing draws these for a terminal, so nothing should fetch them either —
+  // nor for the assistant, which has no working tree.
+  if (!p || isPlainTerminal(subject.value) || props.scope === 'chat') { cached.value = null; return; }
+  if (groupProjects.value.length) {
+    const rows = await Promise.all(groupProjects.value.map(gp =>
+      window.api.getProjectGitCache(gp).catch(() => null)));
+    if (projectPath.value !== p) return;
+    cached.value = { changedCount: rows.reduce((n, r) => n + (r?.changedCount || 0), 0) };
+    return;
+  }
   const row = await window.api.getProjectGitCache(p).catch(() => null);
   if (projectPath.value === p) cached.value = row;
 }
 
-// The open panel holds fresher numbers than the row does, so prefer it.
-const detail = computed(() => store.sidePanelDetail || cached.value);
+// The open panel holds fresher numbers than the row does, so prefer it — except
+// for a group, where the panel holds one project's and the badge means all.
+const detail = computed(() =>
+  (groupProjects.value.length || props.scope === 'chat') ? cached.value : (store.sidePanelDetail || cached.value));
 
 function badgeFor(id) {
-  if (id === 'changes') return detail.value?.changedFiles?.length || 0;
+  if (id === 'changes') return detail.value?.changedFiles?.length ?? detail.value?.changedCount ?? 0;
   if (id === 'containers') {
     const running = (detail.value?.containers || [])
       .filter(c => (c.state || '').includes('running')).length;
@@ -113,11 +139,16 @@ const runningAgents = computed(() => store.subagentCounts.get(sessionId.value) |
 
 async function loadTodoBadge() {
   const p = projectPath.value;
-  if (!p || isPlainTerminal(store.headerSession)) { openTodos.value = 0; return; }
+  if (!p || isPlainTerminal(subject.value)) { openTodos.value = 0; return; }
   const notes = await window.api.getNotes().catch(() => []);
   if (projectPath.value !== p) return;
+  // The assistant's list is the whole account's; a group's is every project
+  // it spans; anything else is its own project's.
+  const scopeOf = props.scope === 'chat'
+    ? null
+    : new Set(groupProjects.value.length ? groupProjects.value : [p]);
   openTodos.value = (notes || [])
-    .filter(n => (n.projects || []).includes(p))
+    .filter(n => !scopeOf || (n.projects || []).some(q => scopeOf.has(q)))
     .reduce((sum, n) => sum + Math.max((n.total || 0) - (n.done || 0), 0), 0);
 }
 
@@ -139,7 +170,7 @@ watch(() => store.notesRevision, loadTodoBadge);
 // Opening the TODO pane is also a moment the count is worth re-reading: the
 // notes are files on disk and anything — a session, an editor, another window
 // — may have written one since this rail last looked.
-watch(() => store.sidePanelTab, (tab) => {
+watch(openTab, (tab) => {
   if (!tab) loadCounts();
   if (tab === 'todos') loadTodoBadge();
 });
@@ -152,14 +183,14 @@ watch(() => !!store.sessionBusyState.get(sessionId.value), (busy, wasBusy) => {
 });
 
 function select(id) {
-  setSidePanelTab(store.sidePanelTab === id ? null : id);
+  setSidePanelTab(openTab.value === id ? null : id, props.scope);
 }
 
 // Moved off the session header with the panel toggles, for the same reason:
 // the header does not exist in the board's bottom split, and stopping the
 // session you are looking at should not require leaving that view.
 function stop() {
-  const id = store.headerSession?.sessionId;
+  const id = sessionId.value;
   if (id && window.confirmAndStopSession) window.confirmAndStopSession(id);
 }
 
@@ -176,7 +207,7 @@ function closeView() { window.__sb?.closeSessionView?.(); }
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 
 function tipFor(tab) {
-  const label = store.sidePanelTab === tab.id ? `Hide ${tab.label.toLowerCase()}` : tab.label;
+  const label = openTab.value === tab.id ? `Hide ${tab.label.toLowerCase()}` : tab.label;
   return withKey(label, tab.id);
 }
 
@@ -186,6 +217,9 @@ function withKey(label, id) {
 }
 
 function onKey(event) {
+  // Both rails are mounted while the Chat tab is kept alive behind another
+  // one; only the rail on screen answers.
+  if ((store.activeTab === 'chat') !== (props.scope === 'chat')) return;
   const id = matchShortcut(event, isMac);
   if (!id) return;
   // Only once it is going to be acted on: everything else on the keyboard
@@ -194,7 +228,7 @@ function onKey(event) {
   event.stopPropagation();
 
   if (id === 'stop') { stop(); return; }
-  if (id === 'hide') { setSidePanelTab(null); return; }
+  if (id === 'hide') { setSidePanelTab(null, props.scope); return; }
   // A pane a terminal does not get is not a pane its rail can open.
   if (visibleTabs.value.some(tab => tab.id === id)) select(id);
 }

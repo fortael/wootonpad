@@ -5,12 +5,22 @@ const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { deriveProjectPath } = require('./derive-project-path');
 const { readSessionFile, readSessionFileIncremental } = require('./read-session-file');
 const { encodeProjectPath } = require('./encode-project-path');
+const sessionGroups = require('./session-groups');
 
 /**
  * Session cache module.
  * Call init(ctx) once with the shared context object.
  */
 let PROJECTS_DIR, accountId, activeSessions, getMainWindow, log;
+// Where the account's group directories live, and how to open one from this
+// host — both account-scoped, so they arrive as functions rather than values:
+// init() runs once per account switch, but a WSL account's translation has to
+// be read per call. See CLAUDE.md on WSL-backed accounts.
+let getGroupsRoot = () => null;
+let groupHostPath = (p) => p;
+// Directories that hold a session but are not a project the user has: the
+// manager chat's own home. Hidden outright rather than folded.
+let getInternalPaths = () => [];
 let deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession;
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, getMeta, setName, getAllProjectGitCounts;
@@ -24,6 +34,9 @@ function init(ctx) {
   activeSessions = ctx.activeSessions;
   getMainWindow = ctx.getMainWindow;
   log = ctx.log;
+  if (ctx.getGroupsRoot) getGroupsRoot = ctx.getGroupsRoot;
+  if (ctx.groupHostPath) groupHostPath = ctx.groupHostPath;
+  if (ctx.getInternalPaths) getInternalPaths = ctx.getInternalPaths;
   // DB functions
   deleteCachedFolder = ctx.db.deleteCachedFolder;
   getCachedByFolder = ctx.db.getCachedByFolder;
@@ -243,6 +256,18 @@ function readProjectsSnapshot() {
       .map(d => d.name);
   } catch { /* no projects directory yet */ }
 
+  // Read once per snapshot, not once per project row: buildProjectSets() runs
+  // two passes over the same snapshot and a group's manifest is the same file
+  // in both. Small directory, so this is a handful of reads on a render that is
+  // already doing a full table scan of the cache.
+  const groupsRoot = getGroupsRoot();
+  const groups = new Map();
+  if (groupsRoot) {
+    for (const group of sessionGroups.listGroups(groupsRoot, groupHostPath)) {
+      groups.set(group.id, group);
+    }
+  }
+
   return {
     metaMap: getAllMeta(),
     cachedRows: getAllCached(accountId),
@@ -250,7 +275,58 @@ function readProjectsSnapshot() {
     gitCounts: getAllProjectGitCounts?.() || new Map(),
     folderMeta: getAllFolderMeta(),
     dirs,
+    groupsRoot,
+    groups,
+    internalPaths: new Set(getInternalPaths()),
   };
+}
+
+/**
+ * Fold the group directories into one entry.
+ *
+ * A group is a project as far as everything below the renderer is concerned —
+ * its own directory, its own `~/.claude/projects/` folder, its own transcripts.
+ * Listing them that way would put one single-session project in the sidebar per
+ * group, named after a directory the user never chose, which is exactly the
+ * shape a group exists to avoid. So every group directory's sessions are merged
+ * into one synthetic project standing at the groups root.
+ *
+ * Each session carries its own group's manifest, because the sessions in this
+ * one entry do not share a project list — the avatars under a group session are
+ * that session's group, not the container's.
+ */
+function foldGroups(projectMap, snapshot) {
+  const { groupsRoot, groups } = snapshot;
+  if (!groupsRoot) return;
+
+  const sessions = [];
+  let modified = null;
+
+  for (const [projectPath, proj] of [...projectMap]) {
+    if (!sessionGroups.isGroupPath(groupsRoot, projectPath)) continue;
+    projectMap.delete(projectPath);
+    const id = sessionGroups.groupIdFromPath(groupsRoot, projectPath);
+    const group = (id && groups.get(id)) || null;
+    for (const s of proj.sessions) {
+      // `groupProjects` is flattened out of the manifest so the renderer can
+      // draw the avatar tiles without a second lookup per row.
+      sessions.push({ ...s, group, groupId: id, groupProjects: group?.projects || [] });
+      if (!modified || s.modified > modified) modified = s.modified;
+    }
+  }
+
+  // Present even with no sessions in it: its + is how the first group is
+  // created, so hiding the header until a group exists would hide the only
+  // way to make one. The renderer decides when an empty one is worth showing.
+
+  projectMap.set(groupsRoot, {
+    folder: encodeProjectPath(groupsRoot),
+    projectPath: groupsRoot,
+    isGroupContainer: true,
+    groups: [...groups.values()],
+    sessions,
+    modified,
+  });
 }
 
 /** Build projects response from cached data */
@@ -269,6 +345,7 @@ function buildProjectsFromCache(showArchived, snapshot = readProjectsSnapshot())
   for (const row of cachedRows) {
     if (!row.projectPath) continue;
     if (hiddenProjects.has(row.projectPath)) continue;
+    if (snapshot.internalPaths?.has(row.projectPath)) continue;
     const meta = metaMap.get(row.sessionId);
     const s = {
       sessionId: row.sessionId,
@@ -321,6 +398,7 @@ function buildProjectsFromCache(showArchived, snapshot = readProjectsSnapshot())
       }
       if (!projectPath) continue;
       if (hiddenProjects.has(projectPath)) continue;
+      if (snapshot.internalPaths?.has(projectPath)) continue;
       if (!projectMap.has(projectPath)) {
         projectMap.set(projectPath, {
           folder: encodeProjectPath(projectPath),
@@ -331,11 +409,17 @@ function buildProjectsFromCache(showArchived, snapshot = readProjectsSnapshot())
     }
   } catch {}
 
-  // Inject active plain terminal sessions so they participate in sorting
+  // Inject active plain terminal sessions so they participate in sorting.
+  // Ephemeral ones are excluded: those are the scratch shells owned by a pane
+  // (the session side panel, the project page's Terminal tab), which spawns and
+  // kills them with the pane. They are not sessions the user created, so they
+  // get no row in the list — the same rule `get-active-sessions` already
+  // applies to the running-dot and the grid.
   for (const [sessionId, session] of activeSessions) {
-    if (session.exited || !session.isPlainTerminal) continue;
+    if (session.exited || !session.isPlainTerminal || session.isEphemeral) continue;
     if (!session.projectPath) continue;
     if (hiddenProjects.has(session.projectPath)) continue;
+    if (snapshot.internalPaths?.has(session.projectPath)) continue;
     if (!projectMap.has(session.projectPath)) {
       projectMap.set(session.projectPath, {
         folder: encodeProjectPath(session.projectPath),
@@ -355,6 +439,8 @@ function buildProjectsFromCache(showArchived, snapshot = readProjectsSnapshot())
     }
   }
 
+  foldGroups(projectMap, snapshot);
+
   const projects = [];
   for (const proj of projectMap.values()) {
     proj.sessions.sort((a, b) => new Date(b.modified) - new Date(a.modified));
@@ -367,6 +453,11 @@ function buildProjectsFromCache(showArchived, snapshot = readProjectsSnapshot())
   }
 
   projects.sort((a, b) => {
+    // The group container is not a project and does not sort like one: it is
+    // named after a directory ("groups") the user never picked, so alphabetical
+    // order would file it under G among their own repositories. Pinned to the
+    // top, where the one entry that spans everything belongs.
+    if (a.isGroupContainer !== b.isGroupContainer) return a.isGroupContainer ? -1 : 1;
     // Empty projects go to the bottom
     if (a.sessions.length === 0 && b.sessions.length > 0) return 1;
     if (b.sessions.length === 0 && a.sessions.length > 0) return -1;

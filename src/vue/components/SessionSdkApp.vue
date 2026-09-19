@@ -146,7 +146,18 @@
            conversation was gone on reopen — and none of them can affect a turn
            that has already started anyway. -->
       <div class="sbx-sdk__controls" :class="{ 'is-locked': busy }">
+        <!-- A session whose mode is not the user's to change — the Chat tab's
+             assistant — shows it without a picker. -->
+        <span
+          v-if="lockPermissionMode"
+          class="sbx-sdk__fixedmode"
+          data-tooltip="Fixed: the assistant's own tools run without asking, everything else asks you"
+        >
+          <SbIcon name="lock" :size="11" />
+          {{ lockedModeLabel }}
+        </span>
         <select
+          v-else
           class="sbx-sdk__select" :value="permissionMode" :disabled="busy"
           :title="busy ? LOCKED_HINT : ''" @change="onPermissionMode"
         >
@@ -184,6 +195,7 @@
 
         <span v-if="init" class="sbx-sdk__about" :title="aboutTitle">v{{ init.claude_code_version }}</span>
       </div>
+
     </div>
 
     <!-- Hover breakdown for the ring above. Teleported: the control bar clips
@@ -251,6 +263,9 @@ const PERMISSION_MODES = [
   { value: 'plan', label: 'Plan' },
 ];
 
+const lockedModeLabel = computed(() =>
+  PERMISSION_MODES.find(m => m.value === props.lockPermissionMode)?.label || props.lockPermissionMode);
+
 // …but a session already running on one of them must not read as Manual, so
 // the mode in force is always an option — it just stops being offered once the
 // session is off it.
@@ -307,7 +322,23 @@ const modelTitle = computed(() => {
   return `${m.description || m.displayName}${running}`;
 });
 
-const sessionId = computed(() => store.headerSession?.sessionId || '');
+// The session this view renders. The sessions tab passes nothing and shows
+// whatever is in the header; the Chat tab passes its own assistant session,
+// which has no header, no row and no project of its own — see ChatApp.vue.
+const props = defineProps({
+  session: { type: Object, default: null },
+  // Starts the session again when a prompt is typed into a stopped one.
+  // Defaults to the sessions tab's own path, which looks the session up by its
+  // sidebar row — something the assistant's session does not have.
+  resume: { type: Function, default: null },
+  // A permission mode this view must not offer to change. main.js refuses the
+  // change as well; this is the half that keeps the picker off the screen.
+  lockPermissionMode: { type: String, default: '' },
+});
+
+const subject = computed(() => props.session || store.headerSession);
+
+const sessionId = computed(() => subject.value?.sessionId || '');
 
 // Tool results arrive as their own message, after the call that produced them.
 // Holding them here lets renderViewItems fold a result into the call it belongs
@@ -916,6 +947,15 @@ function echoFragment(text, list, at) {
   return renderViewItems([echoOf(text)], null, { at });
 }
 
+function sendQueuedPrompt() {
+  const id = sessionId.value;
+  const text = id && store.pendingPrompts.get(id);
+  if (!text) return;
+  store.pendingPrompts.delete(id);
+  draft.value = text;
+  send();
+}
+
 async function send() {
   const list = attachments.value;
   const text = promptText(draft.value, list);
@@ -938,7 +978,9 @@ async function send() {
   // session is gone", which is what it used to do.
   if (!store.activePtyIds?.has(sessionId.value)) {
     activity.value = 'Resuming';
-    const back = await window.__sb?.resumeSession?.(sessionId.value);
+    const back = props.resume
+      ? await props.resume(sessionId.value)
+      : await window.__sb?.resumeSession?.(sessionId.value);
     if (!back) {
       busy.value = false;
       append(renderViewItems([{
@@ -1010,7 +1052,7 @@ async function attachFiles(files) {
       refuseAttachment(`${file.name || 'That file'} is not a file on disk — save it somewhere first, then attach it.`);
       continue;
     }
-    const mention = mentionFor(path, store.headerSession?.projectPath || '');
+    const mention = mentionFor(path, subject.value?.projectPath || '');
     if (attachments.value.some(item => item.path === path)) continue;
     attachments.value = [...attachments.value, {
       id: `a${++attachmentSeq}`,
@@ -1193,7 +1235,7 @@ async function onEffort(event) {
 
 /** What main.js started this session on: `{ permissionMode, effort }`. */
 async function launchDefaults() {
-  const projectPath = store.headerSession?.projectPath || '';
+  const projectPath = subject.value?.projectPath || '';
   if (!projectPath) return {};
   try {
     const effective = await window.api.getEffectiveSettings(projectPath) || {};
@@ -1225,7 +1267,9 @@ async function applyStoredControls(entries) {
   // changed by hand three turns ago. The launch defaults are only shown — the
   // session is already on them, and a control request before its first turn
   // opens would fail and leave the picker back on its own hardcoded guess.
-  if (isKnownMode(found.permissionMode)) {
+  if (props.lockPermissionMode) {
+    permissionMode.value = props.lockPermissionMode;
+  } else if (isKnownMode(found.permissionMode)) {
     const res = await window.api.sdkSetPermissionMode(id, found.permissionMode);
     if (res?.ok && sessionId.value === id) permissionMode.value = found.permissionMode;
   } else if (isKnownMode(defaults.permissionMode)) {
@@ -1452,7 +1496,7 @@ const externalToken = computed(() => {
 
 watch(externalToken, async (token) => {
   pathEntries.value = [];
-  const projectPath = store.headerSession?.projectPath;
+  const projectPath = subject.value?.projectPath;
   if (!token || !projectPath) return;
   const res = await window.api.listPathCompletions?.(projectPath, token).catch(() => null);
   // The token may have moved on while the read was in flight; a menu for a
@@ -1537,7 +1581,7 @@ async function loadCommands() {
 // (no .git, no node_modules, five levels deep), so this is a list of the paths
 // a person would actually reference.
 async function loadFiles() {
-  const projectPath = store.headerSession?.projectPath;
+  const projectPath = subject.value?.projectPath;
   if (!projectPath) return;
   const res = await window.api.getFileTree(projectPath).catch(() => null);
   if (!res?.ok) return;
@@ -1588,7 +1632,7 @@ async function interrupt() {
 
 /** `../a/b` against the project, `~` against the home directory, `/a` as-is. */
 function resolveMention(value) {
-  const projectPath = store.headerSession?.projectPath || '';
+  const projectPath = subject.value?.projectPath || '';
   if (value.startsWith('/') || value.startsWith('~')) return value;
   if (!projectPath) return value;
   return `${projectPath.replace(/\/$/, '')}/${value}`;
@@ -1609,7 +1653,7 @@ function onBodyClick(event) {
   // The side panel, not the MCP file panel: this is a reference while you read
   // the conversation, so it belongs in the island beside it — same place the
   // uncommitted-changes diff and the scratch shell open.
-  if (file) openSidePanelFile(resolveMention(file));
+  if (file) openSidePanelFile(resolveMention(file), subject.value?.isManagerChat ? 'chat' : 'session');
 }
 
 // ── Wiring ────────────────────────────────────────────────────────
@@ -1689,7 +1733,7 @@ const railVisible = computed(() => {
   // The cache's own count, which is what the sidebar row shows. A record is not
   // a message — attachments, titles and mode changes are records too — so the
   // file's length is only the fallback, for a session too new to be indexed.
-  const counted = store.headerSession?.messageCount;
+  const counted = subject.value?.messageCount;
   const messages = Number.isFinite(counted) && counted > 0 ? counted : historyTotal.value;
   return messages >= RAIL_MIN_MESSAGES;
 });
@@ -2260,7 +2304,10 @@ onMounted(() => {
   // whole transcript, at the resolution the coarsest unit needs.
   whenTimer = setInterval(() => refreshWhen(bodyRef.value), 30000);
 
-  loadHistory();
+  // A prompt that was written before this view existed — the new group
+  // session dialog asks for one. Sent through send() once the (empty) history
+  // is on screen, so it is echoed and tracked like one typed here.
+  Promise.resolve(loadHistory()).then(sendQueuedPrompt);
   loadLandmarks();
   loadPending();
   loadModels();

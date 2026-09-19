@@ -32,7 +32,8 @@
 
           <div v-for="group in col.groups" :key="group.projectPath" class="sbx-board__group">
             <div class="sbx-board__grouphead">
-              <ProjectAvatar class="sbx-board__avatar" :project-path="group.projectPath" />
+              <span v-if="group.isGroupContainer" class="sbx-board__avatar project-header-avatar--groups"><SbIcon name="layers" :size="12" /></span>
+              <ProjectAvatar v-else class="sbx-board__avatar" :project-path="group.projectPath" />
               <span class="sbx-board__grouppath" :title="group.projectPath">{{ group.label }}</span>
             </div>
 
@@ -132,7 +133,12 @@ const board = computed(() => {
     for (const [colId, items] of buckets) {
       items.sort((a, b) => new Date(b.modified) - new Date(a.modified));
       const col = byId.get(colId);
-      col.groups.push({ projectPath: project.projectPath, label: shortPath(project.projectPath), items });
+      col.groups.push({
+        projectPath: project.projectPath,
+        label: project.isGroupContainer ? 'Grouped sessions' : shortPath(project.projectPath),
+        isGroupContainer: !!project.isGroupContainer,
+        items,
+      });
       col.total += items.length;
     }
   }

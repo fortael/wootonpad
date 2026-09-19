@@ -93,7 +93,11 @@ const visibleProjects = computed(() => {
     // A project with nothing surviving the filters is a collapsible header with
     // nothing behind it, so it is not listed. The rules are filterSessions' —
     // written out a second time here, they drifted.
-    projects = projects.filter(p => projectHasVisibleSessions(p, {
+    // The Grouped sessions header stays on the unfiltered list even when it
+    // has nothing in it — its + is where a group session is started from.
+    const unfiltered = !store.showArchived && !store.showStarredOnly
+      && !store.showRunningOnly && !store.showTodayOnly;
+    projects = projects.filter(p => (p.isGroupContainer && unfiltered) || projectHasVisibleSessions(p, {
       showArchived: store.showArchived,
       showStarredOnly: store.showStarredOnly,
       showRunningOnly: store.showRunningOnly,

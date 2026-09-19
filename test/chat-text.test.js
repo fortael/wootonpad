@@ -69,6 +69,77 @@ test('a command and a file in one message are both found, in order', () => {
   assert.deepEqual(found.map(m => m.kind), ['command', 'file']);
 });
 
+// ── Session and project mentions ──────────────────────────────────
+//
+// The two things the app owns, named in prose so an answer can point at one.
+
+const UUID = '3f7a1b20-4c5d-4e6f-8a9b-0c1d2e3f4a5b';
+
+test('a session mention carries its uuid and covers the whole token', () => {
+  const found = findMentions(`picked up from @session:${UUID} yesterday`);
+  assert.deepEqual(found, [{
+    index: 'picked up from '.length,
+    length: `@session:${UUID}`.length,
+    kind: 'session',
+    value: UUID,
+  }]);
+});
+
+test('a session uuid is matched whatever case it was written in', () => {
+  const found = findMentions(`@session:${UUID.toUpperCase()}`);
+  assert.deepEqual(found.map(m => m.kind), ['session']);
+  assert.equal(found[0].value, UUID.toUpperCase());
+});
+
+// Anything looser than 8-4-4-4-12 opens nothing, so it stays prose — the file
+// rule still claims it, which is what an unrecognised `@token` has always been.
+test('a malformed session mention is not a session', () => {
+  for (const text of [
+    '@session:not-a-uuid',
+    '@session:3f7a1b20-4c5d-4e6f-8a9b',
+    `@session:${UUID}0`,
+    `@session:${UUID}-extra`,
+  ]) {
+    const kinds = findMentions(text).map(m => m.kind);
+    assert.ok(!kinds.includes('session'), `${text} → ${kinds.join(',')}`);
+  }
+});
+
+test('a project mention carries its absolute path', () => {
+  const found = findMentions('the fix landed in @project:/Users/x/switchboard today');
+  assert.deepEqual(found, [{
+    index: 'the fix landed in '.length,
+    length: '@project:/Users/x/switchboard'.length,
+    kind: 'project',
+    value: '/Users/x/switchboard',
+  }]);
+});
+
+test('sentence punctuation after a project path is not part of it', () => {
+  assert.deepEqual(findMentions('see @project:/Users/x/foo.').map(m => m.value), ['/Users/x/foo']);
+});
+
+// `@project:/Users/x/foo` is also a perfectly good `@path` token, and both
+// rules start at the same character. The specific one has to win.
+test('the file rule does not swallow a project or session mention', () => {
+  assert.deepEqual(findMentions('@project:/Users/x/foo').map(m => m.kind), ['project']);
+  assert.deepEqual(findMentions(`@session:${UUID}`).map(m => m.kind), ['session']);
+});
+
+test('a plain file mention still works beside the new kinds', () => {
+  const found = findMentions(`@project:/Users/x/foo and @src/app.js and @session:${UUID}`);
+  assert.deepEqual(found.map(m => m.kind), ['project', 'file', 'session']);
+  assert.deepEqual(found.map(m => m.value), ['/Users/x/foo', 'src/app.js', UUID]);
+  // Callers walk the list with a cursor, so it has to stay in reading order.
+  for (let i = 1; i < found.length; i++) assert.ok(found[i].index > found[i - 1].index);
+});
+
+// A relative path is not a project: the chip opens a project by path, and half
+// a path opens nothing.
+test('a project mention has to be absolute', () => {
+  assert.deepEqual(findMentions('@project:switchboard').map(m => m.kind), ['file']);
+});
+
 // ── Path tokens ───────────────────────────────────────────────────
 
 test('a path token splits at its last slash', () => {

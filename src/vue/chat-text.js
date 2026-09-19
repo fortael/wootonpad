@@ -39,6 +39,10 @@ export function previewLine(text, max = 120) {
 // something this app can act on. In the CLI they are syntax the composer
 // highlights; in the transcript they were plain prose, indistinguishable from
 // the sentence around them.
+//
+// `@session:<uuid>` and `@project:<path>` are the other direction: the two
+// things the app itself owns, so an answer can point at one — "picked up from
+// @session:…" — and have it open rather than have the reader go and find it.
 
 /** Only at position 0: that is the only place the CLI reads one as a command. */
 const COMMAND_RE = /^\/([a-zA-Z][\w:.-]*)/;
@@ -46,12 +50,32 @@ const COMMAND_RE = /^\/([a-zA-Z][\w:.-]*)/;
 /** `@` after a boundary, so an email address in the middle of a word is not one. */
 const FILE_RE = /(^|[\s(\[<"'])@([^\s@()[\]<>"']+)/g;
 
+/**
+ * `@session:<uuid>` — the canonical 8-4-4-4-12 form and nothing looser.
+ *
+ * Strict on purpose: the only thing that makes this different from a file
+ * called `session:something` is that it is a session id, so a token that is not
+ * one falls through to the file rule rather than becoming a chip that opens
+ * nothing. The trailing guard keeps a longer id from matching by its prefix.
+ */
+const SESSION_RE = /(^|[\s(\[<"'])@session:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?![\w-])/gi;
+
+/** `@project:<absolute path>` — POSIX and absolute, to the first whitespace. */
+const PROJECT_RE = /(^|[\s(\[<"'])@project:(\/\S*)/g;
+
 /** Sentence punctuation that followed the path rather than belonging to it. */
 const TRAILING_PUNCTUATION = /[.,;:!?)\]]+$/;
 
+/** The two `@kind:value` mentions, in the order they are claimed. */
+const PREFIXED = [
+  { kind: 'session', re: SESSION_RE, trim: false },
+  { kind: 'project', re: PROJECT_RE, trim: true },
+];
+
 /**
  * @param {string} text
- * @returns {Array<{ index: number, length: number, kind: 'command'|'file', value: string }>}
+ * @returns {Array<{ index: number, length: number,
+ *                   kind: 'command'|'file'|'session'|'project', value: string }>}
  *          non-overlapping, in the order they appear; `index`/`length` cover the
  *          sigil as well as the name, because that is what gets replaced.
  */
@@ -66,12 +90,32 @@ export function findMentions(text) {
     found.push({ index: 0, length: command[0].length, kind: 'command', value: command[1] });
   }
 
+  // Read before `@path`, because the file rule matches these too:
+  // `@project:/Users/x/foo` is a perfectly good `@` token. Where both start at
+  // the same character the specific one wins and the file mention is dropped —
+  // callers walk the list with a cursor and would otherwise take whichever
+  // came first out of the sort.
+  const claimed = new Set();
+  for (const { kind, re, trim } of PREFIXED) {
+    re.lastIndex = 0;
+    let match;
+    while ((match = re.exec(source))) {
+      const value = trim ? match[2].replace(TRAILING_PUNCTUATION, '') : match[2];
+      if (!value) continue;
+      const index = match.index + match[1].length;
+      claimed.add(index);
+      found.push({ index, length: `@${kind}:`.length + value.length, kind, value });
+    }
+  }
+
   FILE_RE.lastIndex = 0;
   let match;
   while ((match = FILE_RE.exec(source))) {
     const value = match[2].replace(TRAILING_PUNCTUATION, '');
     if (!value) continue;
-    found.push({ index: match.index + match[1].length, length: value.length + 1, kind: 'file', value });
+    const index = match.index + match[1].length;
+    if (claimed.has(index)) continue;
+    found.push({ index, length: value.length + 1, kind: 'file', value });
   }
 
   return found.sort((a, b) => a.index - b.index);

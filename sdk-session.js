@@ -149,6 +149,11 @@ function isPromptContent(content) {
  * @param {string} [opts.forkFrom]    resume this id and fork into `sessionId`
  * @param {string} [opts.permissionMode]
  * @param {string} [opts.model]
+ * @param {string[]} [opts.additionalDirectories]  extra working roots
+ * @param {Record<string,object>} [opts.mcpServers]
+ * @param {object|string} [opts.systemPrompt]
+ * @param {string[]} [opts.allowedTools]
+ * @param {string[]} [opts.disallowedTools]
  * @param {Record<string,string>} [opts.env]
  * @param {(sessionId: string, message: object) => void} opts.onMessage
  * @param {(sessionId: string, state: string) => void} [opts.onState]
@@ -226,6 +231,22 @@ async function startSdkSession(sessionId, opts) {
   } else {
     options.resume = sessionId;
   }
+
+  // A group session's cwd is the group's own folder, which holds nothing but
+  // its instructions — the projects it spans are mounted here. Without them the
+  // session can read its CLAUDE.md and nothing it names. See session-groups.js.
+  if (opts.additionalDirectories?.length) {
+    options.additionalDirectories = [...opts.additionalDirectories];
+  }
+  // In-process MCP servers. The manager chat's toolset arrives this way rather
+  // than as a spawned server: it calls straight into this process, so there is
+  // no socket, no second copy of the session cache and no lifetime to manage.
+  if (opts.mcpServers) options.mcpServers = opts.mcpServers;
+  // `systemPrompt` replaces the CLI's own preset unless it says otherwise —
+  // callers pass the `{ type: 'preset', append }` shape when they mean to add.
+  if (opts.systemPrompt) options.systemPrompt = opts.systemPrompt;
+  if (opts.allowedTools?.length) options.allowedTools = [...opts.allowedTools];
+  if (opts.disallowedTools?.length) options.disallowedTools = [...opts.disallowedTools];
 
   if (opts.permissionMode) {
     options.permissionMode = opts.permissionMode;

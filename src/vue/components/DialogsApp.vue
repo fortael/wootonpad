@@ -84,6 +84,73 @@
     </div>
   </Teleport>
 
+  <!-- New Group Session Dialog
+       One session over several projects. Pick at least two; the name and the
+       first prompt are optional — the name defaults to the projects joined,
+       and without a prompt the session simply opens and waits. -->
+  <Teleport to="body">
+    <div v-if="groupOpen" class="new-session-overlay" @mousedown.self="closeNewGroup">
+      <div class="new-session-dialog sbx-groupdlg">
+        <h3>New group session</h3>
+        <div class="add-project-hint">
+          One session that works across several projects. It gets a folder of its
+          own with a CLAUDE.md naming every project, and keeps a MEMORY.md for the task.
+        </div>
+
+        <input
+          ref="groupFilterRef"
+          v-model="groupFilter"
+          type="text"
+          class="settings-input sbx-groupdlg__filter"
+          placeholder="Filter projects…"
+          spellcheck="false"
+        >
+        <div class="sbx-groupdlg__list">
+          <label
+            v-for="p in filteredGroupProjects"
+            :key="p.projectPath"
+            class="sbx-groupdlg__row"
+            :class="{ 'is-picked': groupPicked.has(p.projectPath) }"
+          >
+            <input type="checkbox" :checked="groupPicked.has(p.projectPath)" @change="toggleGroupProject(p.projectPath)">
+            <ProjectAvatar class="sbx-groupdlg__avatar" :project-path="p.projectPath" />
+            <span class="sbx-groupdlg__name">{{ baseName(p.projectPath) }}</span>
+            <span class="sbx-groupdlg__path">{{ shortPath(p.projectPath) }}</span>
+          </label>
+          <div v-if="!filteredGroupProjects.length" class="pv-empty">No project matches.</div>
+        </div>
+
+        <div class="sbx-groupdlg__picked">
+          <GroupAvatar v-if="groupPicked.size" :project-paths="[...groupPicked]" :size="28" />
+          <span>{{ groupPicked.size }} selected{{ groupPicked.size < 2 ? ' — pick at least two' : '' }}</span>
+        </div>
+
+        <input
+          v-model="groupName"
+          type="text"
+          class="settings-input sbx-groupdlg__input"
+          :placeholder="groupNamePlaceholder || 'Name (optional)'"
+        >
+        <textarea
+          v-model="groupPrompt"
+          class="settings-input sbx-groupdlg__prompt"
+          rows="4"
+          placeholder="What is the task? (optional — sent as the first message)"
+          @keydown.meta.enter.prevent="startNewGroup"
+          @keydown.ctrl.enter.prevent="startNewGroup"
+        ></textarea>
+
+        <div class="add-project-error" v-show="groupError">{{ groupError }}</div>
+        <div class="new-session-actions">
+          <button class="new-session-cancel-btn" @click="closeNewGroup">Cancel</button>
+          <button class="btn-green" :disabled="groupPicked.size < 2 || groupBusy" @click="startNewGroup">
+            {{ groupBusy ? 'Starting…' : 'Start' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
+
   <!-- Resume Session Dialog -->
   <Teleport to="body">
     <div v-if="resumeSession" class="new-session-overlay" @mousedown.self="closeResumeSession">
@@ -167,6 +234,8 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue';
 import SbSwitch from './SbSwitch.vue';
+import ProjectAvatar from './ProjectAvatar.vue';
+import GroupAvatar from './GroupAvatar.vue';
 import { sessionTitle } from '../session-title.js';
 
 // The CLI's modes, in the order they escalate — the same set the settings panel
@@ -244,6 +313,73 @@ function popoverTerminal() {
   const p = popoverProject.value;
   closePopover();
   popoverCbs.onTerminal?.(p);
+}
+
+// ── New Group Session Dialog ─────────────────────────────────────
+const groupOpen = ref(false);
+const groupProjects = ref([]);
+const groupPicked = ref(new Set());
+const groupFilter = ref('');
+const groupName = ref('');
+const groupPrompt = ref('');
+const groupError = ref('');
+const groupBusy = ref(false);
+const groupFilterRef = ref(null);
+let groupOnStart = null;
+
+const baseName = (p) => String(p || '').split('/').filter(Boolean).pop() || p;
+
+// Most recently used first: the projects a task spans are almost always ones
+// you have been in lately, and a long alphabetical list buries them.
+const filteredGroupProjects = computed(() => {
+  const needle = groupFilter.value.trim().toLowerCase();
+  return [...groupProjects.value]
+    .filter(p => !needle || p.projectPath.toLowerCase().includes(needle))
+    .sort((a, b) => String(b.lastActivity || '').localeCompare(String(a.lastActivity || '')));
+});
+
+const groupNamePlaceholder = computed(() =>
+  groupPicked.value.size ? [...groupPicked.value].map(baseName).join(' + ') : '');
+
+function openNewGroup(projects, onStart) {
+  groupProjects.value = projects || [];
+  groupPicked.value = new Set();
+  groupFilter.value = '';
+  groupName.value = '';
+  groupPrompt.value = '';
+  groupError.value = '';
+  groupBusy.value = false;
+  groupOnStart = onStart;
+  groupOpen.value = true;
+  nextTick(() => groupFilterRef.value?.focus());
+}
+
+function closeNewGroup() {
+  groupOpen.value = false;
+  groupOnStart = null;
+}
+
+function toggleGroupProject(path) {
+  const next = new Set(groupPicked.value);
+  if (next.has(path)) next.delete(path); else next.add(path);
+  groupPicked.value = next;
+}
+
+async function startNewGroup() {
+  if (groupPicked.value.size < 2 || groupBusy.value || !groupOnStart) return;
+  groupBusy.value = true;
+  groupError.value = '';
+  try {
+    const res = await groupOnStart({
+      projects: [...groupPicked.value],
+      name: groupName.value.trim(),
+      prompt: groupPrompt.value.trim(),
+    });
+    if (res && res.ok === false) { groupError.value = res.error || 'Could not start the group session'; return; }
+    closeNewGroup();
+  } finally {
+    groupBusy.value = false;
+  }
 }
 
 // ── New Session Dialog ────────────────────────────────────────────
@@ -388,6 +524,7 @@ function onDocKeydown(e) {
     if (newSessionProject.value) { closeNewSession(); return; }
     if (resumeSession.value) { closeResumeSession(); return; }
     if (addProjectOpen.value) { closeAddProject(); return; }
+    if (groupOpen.value) { closeNewGroup(); return; }
   }
   if (e.key === 'Enter' && !e.target.matches('input, select, textarea')) {
     if (newSessionProject.value) { startNewSession(); return; }
@@ -399,5 +536,5 @@ function onDocKeydown(e) {
 onMounted(() => document.addEventListener('keydown', onDocKeydown));
 onUnmounted(() => document.removeEventListener('keydown', onDocKeydown));
 
-defineExpose({ openNewSession, openResumeSession, openAddProject, openPopover });
+defineExpose({ openNewSession, openResumeSession, openAddProject, openPopover, openNewGroup });
 </script>

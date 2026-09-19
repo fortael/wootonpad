@@ -1,10 +1,19 @@
 // The session side panel's panes, in one place so the rail that opens them
 // and the panel that renders them cannot drift apart.
+//
+// Two panels share this: the one beside an open session, and the one beside
+// the Chat tab's assistant. They are the same component with a `scope`, and
+// each scope remembers its own open pane — the assistant's TODO list staying
+// open must not open one over the next session you look at.
 import { store } from './store.js';
+import { isPlainTerminal } from './session-filter.js';
 
-const TAB_KEY = 'sessionSidePanelTab';
+const TAB_KEYS = { session: 'sessionSidePanelTab', chat: 'chatSidePanelTab' };
 
 export const TABS = [
+  // A group session's own pane: the projects it spans and the two files that
+  // describe the task — see session-groups.js. Only offered beside a group.
+  { id: 'group', label: 'Group projects and memory', icon: 'layers' },
   { id: 'changes', label: 'Uncommitted changes', icon: 'file-diff' },
   { id: 'todos', label: 'TODOs and plans', icon: 'list-todo' },
   // Sub-agents have transcripts but no session rows, so this rail is the only
@@ -16,15 +25,44 @@ export const TABS = [
 
 const IDS = new Set(TABS.map(t => t.id));
 
+// The assistant manages the workspace and works in no repository, so there is
+// no working tree, no compose file and nowhere a shell would be useful.
+const CHAT_TABS = new Set(['todos', 'tasks']);
+
+/**
+ * The panes that make sense beside this subject, in rail order.
+ *
+ * A plain terminal gets none — it already is a shell in its project. A group
+ * session gets the group pane first; everywhere else it is not offered.
+ */
+export function tabsFor(session, scope = 'session') {
+  if (scope === 'chat') return TABS.filter(t => CHAT_TABS.has(t.id));
+  if (!session || isPlainTerminal(session)) return [];
+  if (session.groupProjects?.length) return TABS;
+  return TABS.filter(t => t.id !== 'group');
+}
+
+/** The open pane for a scope, or null. */
+export function panelTab(scope = 'session') {
+  return scope === 'chat' ? store.chatSidePanelTab : store.sidePanelTab;
+}
+
 /** Restore the pane the user last had open. Runs once, at app start. */
 export function loadSidePanelTab() {
   // Migration: the panel used to be a boolean with three stacked sections.
   // Someone who had it open gets the first pane rather than a closed panel.
   const legacy = localStorage.getItem('sessionSidePanelOpen');
-  const saved = localStorage.getItem(TAB_KEY);
+  const saved = localStorage.getItem(TAB_KEYS.session);
   if (saved && IDS.has(saved)) return saved;
-  if (!saved && legacy === '1') return TABS[0].id;
+  if (!saved && legacy === '1') return 'changes';
   return null;
+}
+
+/** The Chat tab's counterpart — opened on TODOs the first time. */
+export function loadChatSidePanelTab() {
+  const saved = localStorage.getItem(TAB_KEYS.chat);
+  if (saved === 'none') return null;
+  return saved && CHAT_TABS.has(saved) ? saved : 'todos';
 }
 
 /**
@@ -35,18 +73,29 @@ export function loadSidePanelTab() {
  * lands. `path` is absolute; the chat resolves a mention against the session's
  * own project before calling this.
  */
-export function openSidePanelFile(path) {
+export function openSidePanelFile(path, scope = 'session') {
   if (!path) return;
   store.sidePanelFile = path;
-  if (!store.sidePanelTab) setSidePanelTab(TABS[0].id);
+  if (!panelTab(scope)) setSidePanelTab(scope === 'chat' ? 'todos' : 'changes', scope);
 }
 
-/** @param {string|null} id */
-export function setSidePanelTab(id) {
+/**
+ * @param {string|null} id
+ * @param {'session'|'chat'} [scope]
+ */
+export function setSidePanelTab(id, scope = 'session') {
+  if (scope === 'chat') {
+    const next = id && CHAT_TABS.has(id) ? id : null;
+    store.chatSidePanelTab = next;
+    // Remembered as closed too: the chat opens with its TODOs showing unless
+    // someone has put them away.
+    localStorage.setItem(TAB_KEYS.chat, next || 'none');
+    return;
+  }
   const next = id && IDS.has(id) ? id : null;
   store.sidePanelTab = next;
-  if (next) localStorage.setItem(TAB_KEY, next);
-  else localStorage.removeItem(TAB_KEY);
+  if (next) localStorage.setItem(TAB_KEYS.session, next);
+  else localStorage.removeItem(TAB_KEYS.session);
   // The boolean is gone; clear it so a downgrade cannot resurrect the old
   // three-section layout on top of the new one.
   localStorage.removeItem('sessionSidePanelOpen');

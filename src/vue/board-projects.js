@@ -43,7 +43,9 @@ export function boardProjectRows(store) {
     if (!count) continue;
     out.push({
       projectPath: project.projectPath,
-      name: project.projectPath.split('/').filter(Boolean).pop() || project.projectPath,
+      name: project.isGroupContainer
+        ? 'Grouped sessions'
+        : (project.projectPath.split('/').filter(Boolean).pop() || project.projectPath),
       count,
       // The new-session popover needs the project itself, not just its path.
       project,

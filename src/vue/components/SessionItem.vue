@@ -8,6 +8,15 @@
   >
     <div class="session-row">
       <span class="session-status-dot" :class="{ running: isRunning }"></span>
+      <!-- A group session's fingerprint: the projects it spans, tiled. Every
+           row under "Grouped sessions" shares one header, so this is the only
+           thing telling two of them apart at a glance. -->
+      <GroupAvatar
+        v-if="session.groupProjects?.length"
+        class="session-group-avatar"
+        :project-paths="session.groupProjects"
+        :size="18"
+      />
 
       <div class="session-info">
         <div class="session-summary">
@@ -72,6 +81,7 @@
 <script setup>
 import { computed } from 'vue';
 import SbIcon from './SbIcon.vue';
+import GroupAvatar from './GroupAvatar.vue';
 import UsageRing from './UsageRing.vue';
 import SessionMenu from './SessionMenu.vue';
 import { contextPercent, formatContextLabel } from '../context-window.js';

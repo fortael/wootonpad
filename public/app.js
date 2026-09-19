@@ -128,6 +128,14 @@ function setActivity(sessionId, active) {
   sessionBusyState.set(sessionId, active);
   if (wasActive && !active) scheduleCounterRefresh();
 
+  // The Chat tab's assistant has no row, no card and no way to be "opened" by
+  // the gestures that clear an unread mark — so a finished turn there would
+  // light the dock badge for good. Its turns are read in the tab they happen in.
+  if (wasActive && !active && sessionId === window.vueStore?.chatSession?.sessionId) {
+    window.vueSidebar?.setBusy(sessionId, active);
+    return;
+  }
+
   if (wasActive && !active) {
     // A finished turn always owes the board a DONE card, whether or not you
     // happened to be looking when it landed. Which set it goes in decides only
@@ -688,17 +696,7 @@ async function loadProjects({ resort = false } = {}) {
     } else {
       hasReinjected = true;
       // Still pending — re-inject into cached data
-      for (const projList of [cachedProjects, cachedAllProjects]) {
-        let proj = projList.find(p => p.projectPath === pending.projectPath);
-        if (!proj) {
-          // Project not in list (no other sessions) — create a synthetic entry
-          proj = { folder: pending.folder, projectPath: pending.projectPath, sessions: [] };
-          projList.unshift(proj);
-        }
-        if (!proj.sessions.some(s => s.sessionId === sid)) {
-          proj.sessions.unshift(pending.session);
-        }
-      }
+      injectSessionRow(pending.session, pending);
     }
   }
 
@@ -778,6 +776,38 @@ function refreshHeaderSession() {
 
 
 
+// Put a session's row into both cached lists before the cache has heard of it.
+//
+// A group session's row does not go under its own project path — that is the
+// group's folder, which the list never shows — but under the one "Grouped
+// sessions" entry every group folds into (see foldGroups in session-cache.js).
+// `pending.listPath` says which; everything else is the project's own path.
+function injectSessionRow(session, pending) {
+  const listPath = pending.listPath || pending.projectPath;
+  for (const projList of [cachedProjects, cachedAllProjects]) {
+    let proj = projList.find(p => p.projectPath === listPath);
+    if (!proj) {
+      // Project not in list (no other sessions) — create a synthetic entry
+      proj = {
+        folder: pending.folder, projectPath: listPath, sessions: [],
+        ...(pending.listPath ? { isGroupContainer: true, groups: [] } : {}),
+      };
+      projList.unshift(proj);
+    }
+    if (!proj.sessions.some(s => s.sessionId === session.sessionId)) {
+      proj.sessions.unshift(session);
+    }
+  }
+}
+
+// The fields a group session's row carries, from its manifest. The cache adds
+// the same ones on every rebuild; a row injected before that needs them too,
+// or it is drawn as a project-less session until the next refresh.
+function groupFields(group) {
+  if (!group) return {};
+  return { group, groupId: group.id, groupProjects: group.projects || [] };
+}
+
 // `sessionOptions` is what the session is started with — permission mode,
 // worktree, model, and which transport it runs on. Omitting it does not mean
 // "no options": it means "whatever this project is configured for", which is
@@ -787,11 +817,12 @@ function refreshHeaderSession() {
 // view the setting was there to replace — and with an xterm behind it.
 //
 // A caller that genuinely wants a plain shell says so with `{ type: 'terminal' }`.
-async function launchNewSession(project, sessionOptions) {
+async function launchNewSession(project, sessionOptions, extra = {}) {
   const options = sessionOptions || await resolveDefaultSessionOptions(project);
   const sessionId = crypto.randomUUID();
   const projectPath = project.projectPath;
   const session = {
+    ...groupFields(extra.group),
     sessionId,
     summary: 'New session',
     firstPrompt: '',
@@ -804,21 +835,18 @@ async function launchNewSession(project, sessionOptions) {
     created: new Date().toISOString(),
     accountId: activeAccountId,
   };
+  if (extra.name) session.name = extra.name;
 
   // Track as pending (no .jsonl yet)
-  const folder = encodeProjectPath(projectPath);
-  pendingSessions.set(sessionId, { session, projectPath, folder });
+  const folder = encodeProjectPath(extra.listPath || projectPath);
+  const pending = { session, projectPath, folder, listPath: extra.listPath || null };
+  pendingSessions.set(sessionId, pending);
 
   // Inject into cached project data so it appears in sidebar immediately
   sessionMap.set(sessionId, session);
-  for (const projList of [cachedProjects, cachedAllProjects]) {
-    let proj = projList.find(p => p.projectPath === projectPath);
-    if (!proj) {
-      proj = { folder, projectPath, sessions: [] };
-      projList.unshift(proj);
-    }
-    proj.sessions.unshift(session);
-  }
+  injectSessionRow(session, pending);
+  // Sent by the chat view once it is up, so it is echoed like a typed one.
+  if (extra.prompt) window.vueStore?.pendingPrompts?.set(sessionId, extra.prompt);
   refreshSidebar();
 
   // Switch to sessions tab and highlight the new session
@@ -828,7 +856,7 @@ async function launchNewSession(project, sessionOptions) {
   setActiveSession(sessionId);
 
   // Expand the project group in sidebar if it's collapsed
-  const _folderId = 'project-' + projectPath.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const _folderId = 'project-' + (extra.listPath || projectPath).replace(/[^a-zA-Z0-9_-]/g, '_');
   const _groupHeader = document.getElementById('ph-' + _folderId);
   if (_groupHeader?.classList.contains('collapsed')) _groupHeader.click();
 
@@ -849,6 +877,68 @@ async function launchNewSession(project, sessionOptions) {
   showSession(sessionId);
   pollActiveSessions();
 }
+
+// --- Group sessions ---
+// One session over several projects, run from a folder of its own — see
+// session-groups.js. main.js creates the folder; from there it is an ordinary
+// launch, which open-terminal recognises by its path and starts as a chat with
+// every project mounted.
+async function launchGroupSession({ projects, name, prompt }) {
+  const res = await window.api.createSessionGroup({ projects, name });
+  if (!res?.ok) return res || { ok: false, error: 'Could not create the group' };
+  const group = res.group;
+  const listPath = group.dir.slice(0, group.dir.lastIndexOf('/'));
+  await launchNewSession({ projectPath: group.dir }, { mode: 'sdk' }, {
+    group, listPath, name: group.name, prompt,
+  });
+  return { ok: true, group };
+}
+
+function showNewGroupDialog() {
+  // Real projects only: the group container is not something a group can
+  // contain, and a worktree is reached through its parent.
+  const projects = cachedAllProjects
+    .filter(p => !p.isGroupContainer && !/\/\.claude\/worktrees\//.test(p.projectPath))
+    .map(p => ({ projectPath: p.projectPath, lastActivity: p.sessions[0]?.modified || null }));
+  window.vueDialogs?.openNewGroup(projects, (answers) => launchGroupSession(answers));
+}
+
+// A session the Chat tab's assistant started. main.js has already launched it
+// and queued its prompt; this only gives it a row, marks it as a chat and lets
+// the running dot catch up. The view stays where it is — the user is in the
+// middle of talking to the assistant.
+window.api.onExternalSessionStarted?.((info) => {
+  if (!info?.sessionId || sessionMap.has(info.sessionId)) return;
+  const now = new Date().toISOString();
+  const session = {
+    ...groupFields(info.group),
+    sessionId: info.sessionId,
+    summary: 'New session',
+    firstPrompt: info.prompt || '',
+    projectPath: info.projectPath,
+    name: info.name || null,
+    starred: 0, archived: 0, messageCount: 0,
+    modified: now, created: now,
+    accountId: activeAccountId,
+  };
+  const listPath = info.groupsRoot || null;
+  const pending = {
+    session, projectPath: info.projectPath,
+    folder: encodeProjectPath(listPath || info.projectPath), listPath,
+  };
+  pendingSessions.set(info.sessionId, pending);
+  sessionMap.set(info.sessionId, session);
+  injectSessionRow(session, pending);
+  markSessionMode(info.sessionId, info.mode || 'sdk');
+  refreshSidebar();
+  pollActiveSessions();
+});
+
+// A note written by the assistant. Anything showing notes re-reads on this.
+window.api.onNotesChanged?.(() => {
+  if (window.vueStore) window.vueStore.notesRevision++;
+  window.vuePlans?.refreshNotes?.();
+});
 
 // Legacy alias
 function openNewSession(project) {
@@ -1344,7 +1434,9 @@ function openProjectViewer(project) {
 }
 
 function renderProjectsPanel() {
-  window.vueProjects?.setProjects(cachedAllProjects);
+  // The Grouped sessions entry is not a project — it has no folder the user
+  // chose, no git state and no page. It lives in the session list only.
+  window.vueProjects?.setProjects(cachedAllProjects.filter(p => !p.isGroupContainer));
 }
 
 async function refreshAccountUsage() {
@@ -1479,6 +1571,14 @@ window.__sb = {
         projectsChangedWhileAway = false;
         loadProjects();
       }
+    } else if (tabName === 'chat') {
+      // The assistant's view is a Vue panel over the main area (ChatApp.vue).
+      // The session pane under it has to go, or its xterm canvas keeps taking
+      // the pointer events meant for the chat.
+      saveUiState({ panel: 'chat' });
+      hideAllViewers();
+      terminalArea.style.display = 'none';
+      placeholder.style.display = 'none';
     } else if (tabName === 'plans') {
       hideAllViewers();
       loadPlans();
@@ -1563,6 +1663,25 @@ window.__sb = {
   toggleGridView: () => toggleGridView(),
 
   openSession: (session) => openSession(session),
+
+  // For views that hold a session id and want the running dot to catch up now
+  // rather than on the next three-second poll — the Chat tab after starting
+  // its assistant.
+  pollActive: () => pollActiveSessions(),
+
+  // A `@project:` chip in a chat, or a project avatar under a group session.
+  // Only projects in the list can be opened; a path the app has never seen is
+  // not somewhere it can show anything about.
+  openProjectByPath: (projectPath) => {
+    const project = cachedAllProjects.find(p => p.projectPath === projectPath);
+    if (!project) return;
+    window.vueApp?.setTab('projects');
+    openProjectViewer(project);
+  },
+
+  // The + on the Grouped sessions header. Picks the projects, then starts the
+  // session through the same path as any other — see launchGroupSession.
+  newGroupSession: () => showNewGroupDialog(),
 
   // Puts the session view away without touching the session. The PTY keeps
   // running and the row stays in the sidebar — this is "stop looking at it",

@@ -41,6 +41,10 @@ const { probeMcpServer } = require('./mcp-probe');
 const accountNotes = require('./account-notes');
 const pluginCatalog = require('./plugin-catalog');
 const subagentTasks = require('./subagent-tasks');
+const sessionGroups = require('./session-groups');
+const wootonMcp = require('./wooton-mcp');
+const chatAgent = require('./chat-agent');
+const projectFiles = require('./project-files');
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
@@ -165,6 +169,19 @@ function activeConfigDir() {
 // rather than the Windows home.
 function activePlansDir() {
   return path.join(activeConfigDir(), 'plans');
+}
+
+// A group session's working directory, and the manager chat's. Both are real
+// directories holding real transcripts — the account owns them the way it owns
+// its plans, so they follow it rather than the Windows home. See CLAUDE.md.
+function activeGroupsRoot() {
+  return sessionGroups.groupsRoot(activeConfigDir());
+}
+
+// The Chat tab's own session lives here. Hidden from the project list: it is
+// not somewhere the user works, it is the app talking about itself.
+function activeChatDir() {
+  return path.join(activeConfigDir(), 'wooton-chat');
 }
 
 // --- WSL-backed accounts ---
@@ -497,6 +514,13 @@ function startSdkSessionFor(sessionId, projectPath, isNew, sessionOptions) {
     // Not a query() option: effort rides the session-scoped flag layer, so
     // sdk-session.js applies it once the session is answering.
     effort: sessionOptions?.effort || undefined,
+    // A group session runs in its own folder with every project it spans
+    // mounted alongside — see session-groups.js.
+    additionalDirectories: sessionOptions?.additionalDirectories || undefined,
+    mcpServers: sessionOptions?.mcpServers || undefined,
+    systemPrompt: sessionOptions?.systemPrompt || undefined,
+    allowedTools: sessionOptions?.allowedTools || undefined,
+    disallowedTools: sessionOptions?.disallowedTools || undefined,
     // The same account resolution every other spawn path uses, so an SDK
     // session writes its transcript into the folder this account's cache
     // watches rather than the default home.
@@ -535,6 +559,9 @@ function startSdkSessionFor(sessionId, projectPath, isNew, sessionOptions) {
 
     onSessionId: (oldId, newId) => {
       sessionStatus.rekey(oldId, newId);
+      // The manager chat remembers its id across restarts; a re-key has to
+      // move what it remembers, or the next launch resumes a dead id.
+      chatAgent.rekey(oldId, newId);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('session-forked', oldId, newId);
       }
@@ -688,6 +715,16 @@ function createWindow() {
   // window.open() then sets location.href) routes through our IPC instead of
   // creating a child BrowserWindow.
   mainWindow.webContents.on('did-finish-load', () => {
+    // A fresh document owns no scratch shells. Anything ephemeral still running
+    // belongs to the document that was just replaced, whose panes never got to
+    // run their own teardown — reap it here rather than leaving it to the next
+    // pane that happens to open on that slot.
+    for (const [, s] of activeSessions) {
+      if (s.isEphemeral && !s.exited) {
+        try { s.pty.kill(); } catch {}
+      }
+    }
+
     const startupProject = parseProjectArg(process.argv);
     if (startupProject) mainWindow.webContents.send('launch-project-session', startupProject);
     for (const { filePath, continueSession } of pendingOpenPaths.splice(0)) {
@@ -818,6 +855,12 @@ function initSessionCache() {
     activeSessions,
     getMainWindow: () => mainWindow,
     log,
+    // Group directories are folded into one "Grouped sessions" entry rather
+    // than listed one per group, and the manager chat's own home is not listed
+    // at all — see session-groups.js.
+    getGroupsRoot: () => activeGroupsRoot(),
+    groupHostPath: (p) => accountHostPath(account, p),
+    getInternalPaths: () => [activeChatDir()],
     db: {
       deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession,
       deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
@@ -1957,6 +2000,556 @@ ipcMain.handle('unwatch-file', (_event, filePath) => {
     fileWatchers.delete(resolved);
   }
   return { ok: true };
+});
+
+// --- Group sessions ---
+// A group is a directory under the account's Claude home that holds one task
+// spanning several projects — see session-groups.js. These handlers only manage
+// the directory; the session inside it is started the ordinary way, through
+// open-terminal, which recognises the path and mounts the projects.
+
+/**
+ * Create the group's folder and register it the way add-project registers a
+ * project: a folder under `projects/` and its folder meta, so the first session
+ * started in it resolves to the right path before it has written anything.
+ */
+function createSessionGroup({ projects, name } = {}) {
+  const canonical = (projects || []).map(p => canonicalProjectPath(String(p || '').trim())).filter(Boolean);
+  const missing = canonical.filter(p => !fs.existsSync(hostPath(p)));
+  if (missing.length) return { ok: false, error: `Not found: ${missing.join(', ')}` };
+
+  const result = sessionGroups.createGroup(activeGroupsRoot(), { projects: canonical, name }, hostPath);
+  if (!result.ok) return result;
+
+  const folder = encodeProjectPath(result.group.dir);
+  try { fs.mkdirSync(path.join(activeProjectsDir(), folder), { recursive: true }); } catch {}
+  setFolderMeta(folder, result.group.dir, 0);
+  log.info(`[groups] created ${result.group.id} projects=${canonical.length}`);
+  return result;
+}
+
+ipcMain.handle('list-session-groups', () => sessionGroups.listGroups(activeGroupsRoot(), hostPath));
+
+ipcMain.handle('get-session-group', (_event, groupId) =>
+  sessionGroups.readGroup(activeGroupsRoot(), groupId, hostPath));
+
+ipcMain.handle('create-session-group', (_event, options) => createSessionGroup(options));
+
+ipcMain.handle('set-group-projects', (_event, groupId, projects) => {
+  const result = sessionGroups.setProjects(activeGroupsRoot(), groupId, projects, hostPath);
+  if (result.ok) notifyRendererProjectsChanged();
+  return result;
+});
+
+// --- Manager chat ---
+// The Chat tab's assistant reaches the workspace through wooton-mcp.js, which
+// only formats. Everything it can actually do is below: thin wrappers over
+// the same cache, status tracker and session map the IPC handlers use, so the
+// assistant and the UI can never disagree about what exists.
+
+const sessionTitle = (s) => s?.name || s?.aiTitle || s?.summary || s?.firstPrompt || null;
+const projectName = (p) => String(p || '').split('/').filter(Boolean).pop() || p;
+
+/** Sessions with a live process — Claude ones only, not scratch shells. */
+function liveSessionIds() {
+  const ids = new Set();
+  for (const [id, s] of activeSessions) {
+    if (!s.exited && !s.isEphemeral && !s.isPlainTerminal) ids.add(id);
+  }
+  for (const id of sdkSession.activeSdkSessions()) ids.add(id);
+  return ids;
+}
+
+/**
+ * One word per session, in the board's vocabulary: `waiting` is blocked on the
+ * user, `running` is mid-turn, `idle` is up with nothing to do. A session with
+ * no process has no status — null, not "idle", which would read as running.
+ */
+function managerStatus(sessionId, live, statuses) {
+  if (!live.has(sessionId)) return null;
+  const state = statuses.get(sessionId)?.state;
+  if (state === 'requires_action') return 'waiting';
+  if (state === 'running') return 'running';
+  return 'idle';
+}
+
+/** Every session in the tree, flattened, with what the assistant needs of it. */
+function managerSessions() {
+  const { all } = buildProjectSets();
+  const live = liveSessionIds();
+  const statuses = new Map(sessionStatus.all().map(s => [s.sessionId, s]));
+  const out = [];
+  for (const project of all) {
+    for (const s of project.sessions) {
+      if (s.type === 'terminal') continue;
+      const group = s.group ? { id: s.group.id, name: s.group.name, projects: s.group.projects } : null;
+      out.push({
+        sessionId: s.sessionId,
+        title: sessionTitle(s),
+        projectPath: s.projectPath,
+        projectName: group ? group.name : projectName(s.projectPath),
+        modified: s.modified,
+        created: s.created,
+        messageCount: s.messageCount || 0,
+        running: live.has(s.sessionId),
+        status: managerStatus(s.sessionId, live, statuses),
+        archived: s.archived ? 1 : 0,
+        starred: s.starred ? 1 : 0,
+        group,
+      });
+    }
+  }
+  out.sort((a, b) => String(b.modified || '').localeCompare(String(a.modified || '')));
+  return out;
+}
+
+/** The plain text of one transcript record, or null if it is not a message. */
+function recordText(entry) {
+  if (!entry || (entry.type !== 'user' && entry.type !== 'assistant') || entry.isMeta) return null;
+  const content = entry.message?.content;
+  if (typeof content === 'string') return content.trim() || null;
+  if (!Array.isArray(content)) return null;
+  // Tool results ride in user records; they are plumbing, not what was said.
+  const text = content.filter(b => b?.type === 'text' && b.text).map(b => b.text).join('\n').trim();
+  return text || null;
+}
+
+/**
+ * The last `limit` real messages of a transcript, oldest first.
+ *
+ * Reads a window several times larger than asked for, because most records in
+ * an active session are tool calls and their results — a window of 20 records
+ * can easily hold two messages worth reading.
+ */
+function transcriptTail(sessionId, limit = 20) {
+  const folder = getCachedFolder(sessionId);
+  if (!folder) return [];
+  const jsonlPath = path.join(activeProjectsDir(), folder, sessionId + '.jsonl');
+  let window;
+  try { window = readTranscriptWindow(jsonlPath, { limit: Math.max(limit * 8, 60) }); } catch { return []; }
+  const messages = [];
+  for (const entry of window.entries || []) {
+    const text = recordText(entry);
+    if (text) messages.push({ role: entry.type, text, ts: entry.timestamp || null });
+  }
+  return messages.slice(-limit);
+}
+
+/** The project's effective settings, as a new session from the UI would get them. */
+function effectiveSettingsFor(projectPath) {
+  const global = getSetting('global') || {};
+  const project = projectPath ? (getSetting('project:' + projectPath) || {}) : {};
+  const effective = { ...SETTING_DEFAULTS };
+  for (const key of Object.keys(SETTING_DEFAULTS)) {
+    if (global[key] !== undefined && global[key] !== null) effective[key] = global[key];
+    if (project[key] !== undefined && project[key] !== null) effective[key] = project[key];
+  }
+  return effective;
+}
+
+/**
+ * Start a session on the assistant's behalf and queue its first prompt.
+ *
+ * Always an SDK session: a prompt is only something this process can hand to
+ * a session that takes structured input. The renderer is told afterwards so it
+ * can put the row in the sidebar — it is not switched to it, because the user
+ * is in the middle of a conversation with the assistant that started it.
+ */
+async function startManagedSession(projectPath, { prompt, name } = {}) {
+  const sessionId = require('crypto').randomUUID();
+  const effective = effectiveSettingsFor(projectPath);
+  const options = {
+    mode: 'sdk',
+    permissionMode: effective.dangerouslySkipPermissions ? undefined : (effective.permissionMode || undefined),
+    dangerouslySkipPermissions: !!effective.dangerouslySkipPermissions,
+    model: effective.model || undefined,
+    effort: effective.effort || undefined,
+  };
+  const groupId = sessionGroups.groupIdFromPath(activeGroupsRoot(), projectPath);
+  const group = groupId ? sessionGroups.readGroup(activeGroupsRoot(), groupId, hostPath) : null;
+  if (group) {
+    options.additionalDirectories = group.projects.filter(p => fs.existsSync(hostPath(p)));
+  }
+
+  const result = await startSdkSessionFor(sessionId, projectPath, true, options);
+  if (!result.ok) return result;
+  if (name) setName(sessionId, name);
+  if (prompt && String(prompt).trim()) sdkSession.sendSdkInput(sessionId, String(prompt));
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('external-session-started', {
+      sessionId, projectPath, name: name || null, prompt: prompt || '', mode: 'sdk',
+      // A group session's row belongs under the one "Grouped sessions" entry,
+      // and draws its avatars from the manifest — see foldGroups.
+      group, groupsRoot: group ? activeGroupsRoot() : null,
+    });
+  }
+  log.info(`[chat] started session ${sessionId} in ${projectPath}`);
+  return { ok: true, sessionId };
+}
+
+/**
+ * The canonical root of a project the assistant may look inside: one listed
+ * in the sidebar, or a group's own folder (its CLAUDE.md and MEMORY.md are what
+ * a group is). Anything else — a path the model made up, a home directory, the
+ * assistant's own folder — is refused.
+ */
+function knownProjectRoot(projectPath) {
+  const wanted = canonicalProjectPath(String(projectPath || '').trim()).replace(/\/+$/, '');
+  if (!wanted) return null;
+  const { all } = buildProjectSets();
+  for (const p of all) {
+    if (!p.isGroupContainer && p.projectPath === wanted) return wanted;
+  }
+  for (const g of sessionGroups.listGroups(activeGroupsRoot(), hostPath)) {
+    if (g.dir === wanted) return wanted;
+  }
+  return null;
+}
+
+/**
+ * The last reading of the account's plan meters. The CLI only reports them in
+ * the middle of a turn (see rate-limits.js), so this is whatever the renderer
+ * last stored — possibly hours old, which the tool says.
+ */
+function managerLimits() {
+  const stored = getSetting(`rateLimits:${getActiveAccount().id}`);
+  const windows = stored?.windows;
+  if (!windows) return null;
+  const pick = (w) => (w ? { percent: w.utilization, resetsAt: w.resetsAt || null } : null);
+  return {
+    fiveHour: pick(windows.five_hour),
+    sevenDay: pick(windows.seven_day),
+    updatedAt: stored.updatedAt || null,
+  };
+}
+
+wootonMcp.configure({
+  log,
+
+  // Projects the user works in. The Grouped sessions entry is not one — it is
+  // the app's own folder of group folders, and offering it as a project is how
+  // the assistant came to list "groups" beside real repositories. Group
+  // sessions are reachable through list_sessions (scope "groups") and
+  // list_groups instead.
+  listProjects: () => {
+    const { visible } = buildProjectSets();
+    return visible
+      .filter(p => !p.isGroupContainer)
+      .map(p => ({
+        projectPath: p.projectPath,
+        name: projectName(p.projectPath),
+        sessionCount: p.sessions.length,
+        lastActivity: p.sessions[0]?.modified || null,
+        unpushedCount: p.unpushedCount || 0,
+        changedCount: p.changedCount || 0,
+        isGroup: false,
+      }));
+  },
+
+  listSessions: ({ projectPath, limit, activeOnly, sinceMs, includeArchived, archivedOnly, groupsOnly } = {}) => {
+    const root = activeGroupsRoot();
+    let sessions = managerSessions();
+    if (projectPath) sessions = sessions.filter(s => s.projectPath === projectPath
+      || (s.group?.projects || []).includes(projectPath));
+    if (archivedOnly) sessions = sessions.filter(s => s.archived);
+    else if (!includeArchived) sessions = sessions.filter(s => !s.archived);
+    if (activeOnly) sessions = sessions.filter(s => s.running);
+    if (groupsOnly) sessions = sessions.filter(s => sessionGroups.isGroupPath(root, s.projectPath));
+    if (sinceMs) sessions = sessions.filter(s => new Date(s.modified).getTime() >= sinceMs);
+    return sessions.slice(0, limit || 20);
+  },
+
+  readSessionMessages: async (sessionId, { limit } = {}) => transcriptTail(sessionId, limit || 20),
+
+  activeSessionsTail: async ({ limit } = {}) => managerSessions()
+    .filter(s => s.running)
+    .map(s => ({ ...s, messages: transcriptTail(s.sessionId, limit || 3) })),
+
+  searchSessions: async (query, { titleOnly } = {}) => {
+    const byId = new Map(managerSessions().map(s => [s.sessionId, s]));
+    return searchByType('session', String(query || ''), 30, titleOnly !== false)
+      .map(hit => {
+        const s = byId.get(hit.id);
+        if (!s) return null;
+        return {
+          sessionId: s.sessionId, title: s.title, projectPath: s.projectPath, modified: s.modified,
+          snippet: titleOnly === false ? String(hit.snippet || '').replace(/<\/?mark>/g, '') : '',
+        };
+      })
+      .filter(Boolean);
+  },
+
+  createSession: async ({ projectPath, prompt, name }) => {
+    const canonical = canonicalProjectPath(String(projectPath || '').trim());
+    if (!canonical || !fs.existsSync(hostPath(canonical))) return { ok: false, error: `No such project: ${projectPath}` };
+    return startManagedSession(canonical, { prompt, name });
+  },
+
+  createGroupSession: async ({ projects, prompt, name }) => {
+    const created = createSessionGroup({ projects, name });
+    if (!created.ok) return created;
+    const started = await startManagedSession(created.group.dir, { prompt, name: created.group.name });
+    if (!started.ok) return started;
+    return {
+      ok: true, sessionId: started.sessionId, groupId: created.group.id,
+      groupDir: created.group.dir, projects: created.group.projects,
+    };
+  },
+
+  stopSession: async (sessionId) => {
+    if (sdkSession.isSdkSession(sessionId)) {
+      denyPending(sessionId, 'The session was stopped');
+      sessionStatus.remove(sessionId);
+      return sdkSession.stopSdkSession(sessionId);
+    }
+    const session = activeSessions.get(sessionId);
+    if (!session || session.exited) return { ok: false, error: 'That session is not running' };
+    try { session.pty.kill(); } catch (err) { return { ok: false, error: err.message }; }
+    return { ok: true };
+  },
+
+  archiveSession: (sessionId, archived) => {
+    if (!getCachedFolder(sessionId)) return { ok: false, error: `No such session: ${sessionId}` };
+    setArchived(sessionId, archived ? 1 : 0);
+    notifyRendererProjectsChanged();
+    return { ok: true };
+  },
+
+  // Refuses a running session rather than killing it first, as the UI does:
+  // the assistant deleting something that is mid-turn is never what was meant.
+  deleteSession: async (sessionId) => {
+    if (liveSessionIds().has(sessionId)) return { ok: false, error: 'That session is running — stop it first' };
+    const folder = getCachedFolder(sessionId);
+    if (!folder) return { ok: false, error: `No such session: ${sessionId}` };
+    const jsonlPath = path.join(activeProjectsDir(), folder, sessionId + '.jsonl');
+    try { fs.unlinkSync(jsonlPath); } catch (err) { if (err.code !== 'ENOENT') return { ok: false, error: err.message }; }
+    forgetTranscript(jsonlPath);
+    deleteCachedSession(sessionId);
+    deleteSearchSession(sessionId);
+    deleteSessionMeta(sessionId);
+    notifyRendererProjectsChanged();
+    return { ok: true };
+  },
+
+  sendToSession: async (sessionId, text) => {
+    if (sdkSession.isSdkSession(sessionId)) return sdkSession.sendSdkInput(sessionId, String(text || ''));
+    const session = activeSessions.get(sessionId);
+    if (!session || session.exited || session.isPlainTerminal) {
+      return { ok: false, error: 'That session is not running — start it from the sidebar first' };
+    }
+    // A terminal session takes keystrokes. The CR is what submits the prompt.
+    session.pty.write(String(text || '') + '\r');
+    return { ok: true };
+  },
+
+  listGroups: () => sessionGroups.listGroups(activeGroupsRoot(), hostPath),
+
+  setGroupProjects: (groupId, projects) => {
+    const result = sessionGroups.setProjects(activeGroupsRoot(), groupId, projects, hostPath);
+    if (result.ok) notifyRendererProjectsChanged();
+    return result;
+  },
+
+  projectGitStatus: (projectPath) => {
+    if (!projectPath || !fs.existsSync(hostPath(projectPath))) return { error: `No such project: ${projectPath}` };
+    try {
+      const branch = projectGit(projectPath, ['rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 5000 }).trim();
+      const porcelain = projectGit(projectPath, ['status', '--porcelain=v1', '--branch'], { timeout: 5000 });
+      const lines = porcelain.split('\n').filter(Boolean);
+      const header = lines[0]?.startsWith('##') ? lines.shift() : '';
+      const ahead = Number(/ahead (\d+)/.exec(header)?.[1] || 0);
+      const behind = Number(/behind (\d+)/.exec(header)?.[1] || 0);
+      const files = lines.map(l => ({ status: l.slice(0, 2).trim() || '?', path: l.slice(3) }));
+      return { branch, changedCount: files.length, unpushedCount: ahead, ahead, behind, files };
+    } catch (err) {
+      return { error: /not a git repository/i.test(String(err.stderr || err.message)) ? 'Not a git repository' : (err.message || 'git failed') };
+    }
+  },
+
+  // From the cache the project page keeps, not a fresh `git` per project: it
+  // is refreshed by the project poller, and a fan-out over every repository
+  // the user has ever opened would stall the main process.
+  projectsWithUnpushed: () => {
+    const { visible } = buildProjectSets();
+    return visible
+      .filter(p => !p.isGroupContainer && ((p.unpushedCount || 0) > 0 || (p.changedCount || 0) > 0))
+      .map(p => ({
+        projectPath: p.projectPath,
+        name: projectName(p.projectPath),
+        branch: getProjectGitCache(p.projectPath)?.branch || null,
+        unpushedCount: p.unpushedCount || 0,
+        changedCount: p.changedCount || 0,
+      }));
+  },
+
+  accountLimits: async () => managerLimits(),
+
+  // One directory or one file of a project the app knows — a real project or
+  // a group folder, nothing else on disk. See project-files.js for the guards.
+  listProjectFiles: (projectPath, dir) => {
+    const root = knownProjectRoot(projectPath);
+    if (!root) return { ok: false, error: `Not a known project: ${projectPath}` };
+    return projectFiles.listDir(root, dir, hostPath);
+  },
+
+  readProjectFile: (projectPath, relPath) => {
+    const root = knownProjectRoot(projectPath);
+    if (!root) return { ok: false, error: `Not a known project: ${projectPath}` };
+    return projectFiles.readFile(root, relPath, hostPath);
+  },
+
+  listTodos: () => accountNotes.listNotes(activeNotesDir()).map(n => ({
+    filename: n.filename,
+    title: n.title,
+    projects: n.projects || [],
+    todos: (n.todos || []).map((t, index) => ({ text: t.text, done: !!t.done, index: t.index ?? index })),
+    modified: n.modified || null,
+  })),
+
+  createTodo: ({ title, body, projects }) => {
+    // A reminder asked for in one sentence is one checkbox, not an empty note
+    // with a blank item under its heading.
+    const text = body != null && String(body).trim() ? body : `- [ ] ${String(title || '').trim()}`;
+    const result = accountNotes.createNote(activeNotesDir(), { title, body: text, projects });
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('notes-changed');
+    return result?.ok === false ? result : { ok: true, filename: result?.filename };
+  },
+
+  toggleTodo: (filename, index) => {
+    const result = accountNotes.toggleTodo(activeNotesDir(), filename, index);
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('notes-changed');
+    return result?.ok === false ? result : { ok: true };
+  },
+});
+
+chatAgent.configure({
+  log,
+  chatDir: () => activeChatDir(),
+  projectsDir: () => activeProjectsDir(),
+  accountId: () => getActiveAccount().id,
+  getSetting,
+  setSetting,
+  encodeProjectPath,
+  hostPath,
+});
+
+/**
+ * Bring the manager chat up, or report the one already running.
+ *
+ * Its own tools are pre-approved; everything else — including delete_session,
+ * which is left out of `allowedTools` on purpose — goes through the ordinary
+ * permission dialog, the same one every SDK session uses.
+ */
+// The assistant's own tools run without asking, except these — see the
+// allowedTools below. One list, so the dev panel in Settings says the same.
+const MANAGER_ASK_FIRST = new Set(['delete_session']);
+// Manual, fixed — the composer shows it without a picker, and
+// sdk-set-permission-mode refuses anything else for this session.
+const MANAGER_PERMISSION_MODE = 'default';
+const MANAGER_DEFAULT_MODEL = 'haiku';
+
+async function ensureManagerChat() {
+  const chat = chatAgent.current();
+  if (sdkSession.isSdkSession(chat.sessionId)) return { ok: true, ...chat, running: true };
+
+  // The composer reads the folder's effective settings to show what the session
+  // runs on, and for this folder those would be the global ones. Pinned as a
+  // project setting so the composer tells the truth:
+  //
+  //   - permission mode: always Manual ('default'). Its own tools are
+  //     pre-approved and everything else must ask — auto-accepting or bypass
+  //     would let delete_session through unasked. Not the user's to change
+  //     here; see MANAGER_PERMISSION_MODE.
+  //   - model: Haiku unless someone picked another. Managing sessions is list,
+  //     summarise and brief — fast and cheap is the right default.
+  const projectKey = 'project:' + chat.projectPath;
+  const projectSettings = getSetting(projectKey) || {};
+  const model = projectSettings.model || MANAGER_DEFAULT_MODEL;
+  if (projectSettings.permissionMode !== MANAGER_PERMISSION_MODE || !projectSettings.model) {
+    setSetting(projectKey, {
+      ...projectSettings,
+      permissionMode: MANAGER_PERMISSION_MODE,
+      dangerouslySkipPermissions: false,
+      model,
+    });
+  }
+
+  const allowed = wootonMcp.TOOL_NAMES
+    .filter(name => !MANAGER_ASK_FIRST.has(name))
+    .map(name => `mcp__wooton__${name}`);
+
+  // The user may rewrite the role and the response style (Settings →
+  // Assistant); an empty setting is "use the default", so an improved default
+  // reaches everyone who never edited it.
+  const global = getSetting('global') || {};
+  const prompt = chatAgent.composeSystemPrompt(global.managerChatPrompt, global.managerChatStyle);
+
+  const result = await startSdkSessionFor(chat.sessionId, chat.projectPath, chat.isNew, {
+    mode: 'sdk',
+    permissionMode: MANAGER_PERMISSION_MODE,
+    model,
+    mcpServers: { wooton: await wootonMcp.wootonMcpServer() },
+    allowedTools: allowed,
+    // What the prompt asks, the toolset guarantees: the assistant manages work
+    // and does none of it, so it has nothing to edit a file or run a command
+    // with. Kept out of the editable prompt on purpose — rewriting the text in
+    // Settings must not be a way to turn the manager into a coder.
+    disallowedTools: chatAgent.FORBIDDEN_TOOLS,
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: prompt },
+  });
+  if (!result.ok) return result;
+  return { ok: true, ...chat, running: true };
+}
+
+ipcMain.handle('manager-chat-ensure', () => ensureManagerChat().catch(err => ({ ok: false, error: err.message })));
+
+// --- Dev: the assistant's toolset, inspectable ---
+// Settings → Assistant lists every wooton tool in a development build, and can
+// run the read-only ones against the live app — so "what can it do" and "what
+// does this tool actually return" have answers without spending a turn.
+ipcMain.handle('wooton-mcp-tools', () => ({
+  dev: !app.isPackaged,
+  tools: wootonMcp.describeTools().map(t => ({ ...t, approval: MANAGER_ASK_FIRST.has(t.name) ? 'asks' : 'auto' })),
+  forbidden: chatAgent.FORBIDDEN_TOOLS,
+  instructions: wootonMcp.INSTRUCTIONS,
+}));
+
+ipcMain.handle('wooton-mcp-run', async (_event, name, args) => {
+  if (app.isPackaged) return { ok: false, error: 'Only available in development builds' };
+  // Anything that writes stays with the assistant, where it has a transcript
+  // and a permission flow; a debugging form is not the place to start sessions.
+  if (!wootonMcp.READ_ONLY_TOOLS.has(name)) return { ok: false, error: 'Only read-only tools can be run from here' };
+  return wootonMcp.runTool(name, args);
+});
+
+ipcMain.handle('manager-chat-default-prompt', () => chatAgent.systemPromptAppend().trim());
+ipcMain.handle('manager-chat-default-style', () => chatAgent.responseStyle().trim());
+
+/** Stop the assistant's process, if any, without forgetting the conversation. */
+function stopManagerChat(reason) {
+  const chat = chatAgent.current();
+  if (!sdkSession.isSdkSession(chat.sessionId)) return;
+  denyPending(chat.sessionId, reason);
+  sessionStatus.remove(chat.sessionId);
+  sdkSession.stopSdkSession(chat.sessionId);
+}
+
+// Same conversation, new instructions: a system prompt is fixed for the life of
+// the process, so an edited one only lands on a restart. The transcript is
+// resumed — nothing the user said to the assistant is lost.
+ipcMain.handle('manager-chat-restart', async () => {
+  stopManagerChat('The assistant was restarted');
+  // The stream's own teardown runs on the next tick; starting again under the
+  // same id before it has finished would be refused as already running.
+  await new Promise(r => setTimeout(r, 300));
+  return ensureManagerChat().catch(err => ({ ok: false, error: err.message }));
+});
+
+ipcMain.handle('manager-chat-reset', async () => {
+  stopManagerChat('The conversation was reset');
+  chatAgent.reset();
+  return ensureManagerChat().catch(err => ({ ok: false, error: err.message }));
 });
 
 // Both views of the tree in one answer. The renderer needs the archive-filtered
@@ -3374,6 +3967,28 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     return { ok: true, mode: 'sdk', reattached: true };
   }
 
+  // A group session is always a chat and always carries its projects with it.
+  // Decided here rather than in the renderer: the membership lives in the
+  // group's manifest, and a resumed session has to pick up whatever it says
+  // *now* — including projects added since the session was started.
+  //
+  // Claude sessions only. A shell opened in the group's folder — the side
+  // panel's scratch terminal, a plain terminal from the + — is still a shell:
+  // forced onto the SDK it is handed to the CLI as a session whose id is not a
+  // UUID, and the CLI refuses it.
+  const isShell = sessionOptions?.type === 'terminal' || !!sessionOptions?.ephemeral;
+  const groupId = isShell ? null : sessionGroups.groupIdFromPath(activeGroupsRoot(), projectPath);
+  if (groupId) {
+    const group = sessionGroups.readGroup(activeGroupsRoot(), groupId, hostPath);
+    const options = {
+      ...sessionOptions,
+      mode: 'sdk',
+      additionalDirectories: (group?.projects || []).filter(p => fs.existsSync(hostPath(p))),
+    };
+    const result = await startSdkSessionFor(sessionId, projectPath, isNew, options);
+    return result.ok ? { ok: true, mode: 'sdk', group } : result;
+  }
+
   if (sessionOptions?.mode === 'sdk' && !sessionOptions?.isPlainTerminal) {
     const result = await startSdkSessionFor(sessionId, projectPath, isNew, sessionOptions);
     return result.ok ? { ok: true, mode: 'sdk' } : result;
@@ -3410,14 +4025,17 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   }
 
   const isPlainTerminal = sessionOptions?.type === 'terminal';
-  // The session side panel's scratch shell: created when the panel opens,
-  // killed when it closes. Exactly one may exist, so a renderer reload — which
-  // never gets to run the panel's own teardown — cannot leak a PTY: the next
-  // panel to open reaps whatever the previous document left behind.
+  // A pane's scratch shell: created when the pane opens, killed when it closes.
+  // Exactly one may exist per slot, so re-opening a pane reaps whatever it left
+  // behind. Slot-scoped on purpose — the session side panel and the project
+  // page's Terminal tab each own one and can be open at the same time, so a
+  // blanket reap would have the newer pane kill the other one's live shell.
+  // A renderer reload is covered separately, by the sweep on did-finish-load.
   const isEphemeral = !!sessionOptions?.ephemeral;
+  const ephemeralSlot = isEphemeral ? (sessionOptions.ephemeralSlot || 'panel') : null;
   if (isEphemeral) {
     for (const [, s] of activeSessions) {
-      if (s.isEphemeral && !s.exited) {
+      if (s.isEphemeral && s.ephemeralSlot === ephemeralSlot && !s.exited) {
         try { s.pty.kill(); } catch {}
       }
     }
@@ -3673,7 +4291,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     outputBuffer: [], outputBufferSize: 0, altScreen: false,
     projectPath, firstResize: true,
     projectFolder, knownJsonlFiles, sessionSlug,
-    isPlainTerminal, isEphemeral, forkFrom: sessionOptions?.forkFrom || null,
+    isPlainTerminal, isEphemeral, ephemeralSlot, forkFrom: sessionOptions?.forkFrom || null,
     mcpServer, _openedAt: Date.now(),
   };
   activeSessions.set(sessionId, session);
@@ -3848,6 +4466,11 @@ ipcMain.handle('sdk-interrupt', async (_event, sessionId) => {
 
 // --- IPC: sdk-set-permission-mode ---
 ipcMain.handle('sdk-set-permission-mode', async (_event, sessionId, mode) => {
+  // The Chat tab's assistant stays on Manual whatever the composer sends —
+  // see ensureManagerChat. The picker is hidden there; this is the other half.
+  if (sessionId === chatAgent.current().sessionId && mode !== MANAGER_PERMISSION_MODE) {
+    return { ok: false, error: "The assistant's permission mode is fixed to Manual" };
+  }
   return sdkSession.setSdkPermissionMode(sessionId, mode);
 });
 

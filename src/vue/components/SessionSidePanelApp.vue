@@ -124,9 +124,13 @@
         <span v-if="tab === 'changes' && detail?.totalAdded" class="pv-added">+{{ detail.totalAdded }}</span>
         <span v-if="tab === 'changes' && detail?.totalDeleted" class="pv-deleted">&minus;{{ detail.totalDeleted }}</span>
         <span class="sbx-sidepanel__spacer"></span>
-        <SbIcon name="git-branch" :size="12" tone="muted" />
-        <span class="sbx-sidepanel__branch" :title="detail?.branch || ''">{{ detail?.branch || '—' }}</span>
-        <span class="sbx-sidepanel__path" :title="projectPath">{{ shortPath }}</span>
+        <!-- Branch and folder of whichever project the pane is looking at: a
+             group session's is the one picked below, not the group's folder. -->
+        <template v-if="scope !== 'chat' && tab !== 'group'">
+          <SbIcon name="git-branch" :size="12" tone="muted" />
+          <span class="sbx-sidepanel__branch" :title="detail?.branch || ''">{{ detail?.branch || '—' }}</span>
+          <span class="sbx-sidepanel__path" :title="projectPath">{{ shortPath }}</span>
+        </template>
         <button
           v-if="tab !== 'shell'"
           type="button"
@@ -148,6 +152,31 @@
           <SbIcon name="x" :size="13" />
         </button>
       </header>
+
+      <!-- ── Which project of the group ──────────────────────────────────
+           A group session works in several repositories at once, and a
+           working tree, a compose file and a shell each belong to exactly
+           one of them. So those panes pick one here rather than pretending
+           the group has a tree of its own. -->
+      <div
+        v-if="isGroup && PROJECT_SCOPED.has(tab) && !viewedFile && !activeDiff && !editingDoc"
+        class="sbx-sidepanel__subtabs sbx-sidepanel__projtabs"
+      >
+        <button
+          v-for="gp in groupProjects"
+          :key="gp"
+          type="button"
+          class="sbx-sidepanel__subtab sbx-sidepanel__projtab"
+          :class="{ 'is-active': gp === projectPath }"
+          :title="gp"
+          @click="scopeTo(gp)"
+        >
+          <ProjectAvatar class="sbx-sidepanel__projavatar" :project-path="gp" />
+          {{ baseOf(gp) }}
+          <span v-if="groupCounts[gp]?.changedCount" class="sbx-sidepanel__subcount">{{ groupCounts[gp].changedCount }}</span>
+          <span v-if="groupCounts[gp]?.unpushedCount" class="sbx-sidepanel__subcount is-unpushed">{{ groupCounts[gp].unpushedCount }}↑</span>
+        </button>
+      </div>
 
       <!-- ── File overlay ────────────────────────────────────────────── -->
       <div v-if="viewedFile" class="sbx-sidepanel__pane sbx-sidepanel__pane--diff">
@@ -172,6 +201,53 @@
           <span class="sbx-doc__hint">{{ docError || (docDirty ? 'Unsaved — ⌘S' : docSavedNote) }}</span>
           <button type="button" class="sbx-sidepanel__linkbtn" @click="expandDoc">Open full view</button>
         </div>
+      </div>
+
+      <!-- ── Group: the projects and the task's own files ──────────────
+           What the session spans, and the two files that describe the task:
+           CLAUDE.md (generated from the group's manifest) and MEMORY.md (kept
+           by the session itself). Both open read-only over this pane. -->
+      <div v-else-if="tab === 'group'" class="sbx-sidepanel__pane sbx-grouppane">
+        <div class="sbx-sidepanel__seclabel">Projects</div>
+        <div
+          v-for="gp in groupProjects"
+          :key="gp"
+          class="sbx-grouppane__row"
+          :title="gp"
+        >
+          <ProjectAvatar class="sbx-grouppane__avatar" :project-path="gp" />
+          <span class="sbx-grouppane__name" @click="openProject(gp)">{{ baseOf(gp) }}</span>
+          <span class="sbx-grouppane__path">{{ shortOf(gp) }}</span>
+          <span class="sbx-sidepanel__spacer"></span>
+          <span v-if="groupCounts[gp]?.changedCount" class="sbx-sidepanel__subcount">{{ groupCounts[gp].changedCount }}</span>
+          <span v-if="groupCounts[gp]?.unpushedCount" class="sbx-sidepanel__subcount is-unpushed">{{ groupCounts[gp].unpushedCount }}↑</span>
+          <button type="button" class="sbx-todo__act" data-tooltip="Uncommitted changes" aria-label="Uncommitted changes" @click="scopeTo(gp, 'changes')">
+            <SbIcon name="file-diff" :size="12" tone="muted" />
+          </button>
+          <button type="button" class="sbx-todo__act" data-tooltip="Open a shell here" aria-label="Open a shell here" @click="scopeTo(gp, 'shell')">
+            <SbIcon name="terminal" :size="12" tone="muted" />
+          </button>
+          <button type="button" class="sbx-todo__act" data-tooltip="Open project" aria-label="Open project" @click="openProject(gp)">
+            <SbIcon name="square-arrow-out-up-right" :size="12" tone="muted" />
+          </button>
+        </div>
+
+        <div class="sbx-sidepanel__seclabel">Task files</div>
+        <button
+          v-for="doc in groupDocs"
+          :key="doc.name"
+          type="button"
+          class="sbx-grouppane__file"
+          :class="{ 'is-missing': !doc.exists }"
+          :disabled="!doc.exists"
+          @click="openGroupDoc(doc)"
+        >
+          <SbIcon :name="doc.icon" :size="13" tone="muted" />
+          <span class="sbx-grouppane__filename">{{ doc.name }}</span>
+          <span class="sbx-grouppane__filemeta">{{ doc.exists ? `${doc.lines} lines` : 'not written yet' }}</span>
+          <span class="sbx-grouppane__filehint">{{ doc.hint }}</span>
+        </button>
+        <div class="sbx-grouppane__dir" :title="groupDir">{{ groupDir }}</div>
       </div>
 
       <!-- ── Changes: working tree / commits ─────────────────────────── -->
@@ -499,7 +575,17 @@ import SbIcon from './SbIcon.vue';
 import PushLinkNotice from './PushLinkNotice.vue';
 import ChangeTree from './ChangeTree.vue';
 import { withoutNoise, countNoise } from '../git-noise.js';
-import { TABS, setSidePanelTab } from '../side-panel-tabs.js';
+import { tabsFor, panelTab, setSidePanelTab } from '../side-panel-tabs.js';
+import ProjectAvatar from './ProjectAvatar.vue';
+
+// Two instances exist: beside the open session, and beside the Chat tab's
+// assistant. Each takes its subject and its own open pane — see
+// side-panel-tabs.js. The assistant's scope has no working tree, so nothing
+// here that runs git, docker or a shell runs for it.
+const props = defineProps({
+  session: { type: Object, default: null },
+  scope: { type: String, default: 'session' },   // 'session' | 'chat'
+});
 import { pushTarget } from '../git-push-target.js';
 
 const WIDTH_KEY = 'sessionSidePanelWidth';
@@ -531,14 +617,87 @@ const gitUser = ref({ name: '', email: '' });
 let diffView = null;
 let gitMsgTimer = 0;
 
-const tab = computed(() => store.sidePanelTab);
-const activeTab = computed(() => TABS.find(t => t.id === tab.value) || null);
+const subject = computed(() => props.session || store.headerSession);
+const isChat = computed(() => props.scope === 'chat');
+const tab = computed(() => panelTab(props.scope));
+const activeTab = computed(() => tabsFor(subject.value, props.scope).find(t => t.id === tab.value) || null);
+
+// ── Group sessions ────────────────────────────────────────────────
+// A group session's own folder holds its instructions and nothing else; the
+// work happens in the projects it spans. Panes that are about one working
+// tree — changes, containers, the shell, a project's notes — are scoped to one
+// of those, picked in the row under the header. See session-groups.js.
+const PROJECT_SCOPED = new Set(['changes', 'containers', 'shell', 'todos']);
+const groupProjects = computed(() => subject.value?.groupProjects || []);
+const isGroup = computed(() => groupProjects.value.length > 0);
+const groupDir = computed(() => (isGroup.value ? subject.value?.projectPath || '' : ''));
+
+// Remembered per session for as long as the app runs: stepping away to another
+// session and back should land on the project you were looking at.
+const scopedBySession = new Map();
+const scopedProject = ref('');
+watch(() => subject.value?.sessionId, (id) => {
+  scopedProject.value = (id && scopedBySession.get(id)) || '';
+}, { immediate: true });
+
+function scopeTo(gp, paneId) {
+  scopedProject.value = gp;
+  if (subject.value?.sessionId) scopedBySession.set(subject.value.sessionId, gp);
+  if (paneId) setSidePanelTab(paneId, props.scope);
+}
 
 // Everything in this panel is scoped to the OPEN SESSION's own project path,
 // not to whatever the Projects tab happens to be showing — the session may be
-// running in a worktree with its own branch and its own working tree.
-const projectPath = computed(() => store.headerSession?.projectPath || '');
-const sessionId = computed(() => store.headerSession?.sessionId || '');
+// running in a worktree with its own branch and its own working tree. For a
+// group, it is the project picked for it.
+const projectPath = computed(() => {
+  if (!isGroup.value) return subject.value?.projectPath || '';
+  return groupProjects.value.includes(scopedProject.value) ? scopedProject.value : groupProjects.value[0];
+});
+const sessionId = computed(() => subject.value?.sessionId || '');
+
+// Cached git counts for every project in the group, for the switcher's badges
+// and the group pane — the same SQLite row the Projects tab reads.
+const groupCounts = ref({});
+async function loadGroupCounts() {
+  if (!isGroup.value) { groupCounts.value = {}; return; }
+  const paths = [...groupProjects.value];
+  const rows = await Promise.all(paths.map(gp => window.api.getProjectGitCache(gp).catch(() => null)));
+  const next = {};
+  paths.forEach((gp, i) => { next[gp] = { changedCount: rows[i]?.changedCount || 0, unpushedCount: rows[i]?.unpushedCount || 0 }; });
+  groupCounts.value = next;
+}
+
+const groupDocs = ref([]);
+const DOCS = [
+  { name: 'MEMORY.md', icon: 'notebook-pen', hint: 'what the session has learned about the task' },
+  { name: 'CLAUDE.md', icon: 'book-open', hint: 'the task and its projects, as the session was told' },
+];
+async function loadGroupDocs() {
+  const dir = groupDir.value;
+  if (!dir) { groupDocs.value = []; return; }
+  const read = await Promise.all(DOCS.map(d => window.api.readFileForPanel(`${dir}/${d.name}`).catch(() => null)));
+  if (groupDir.value !== dir) return;
+  groupDocs.value = DOCS.map((d, i) => ({
+    ...d,
+    path: `${dir}/${d.name}`,
+    exists: !!read[i]?.ok,
+    lines: read[i]?.ok ? read[i].content.split('\n').length : 0,
+  }));
+}
+
+function openGroupDoc(doc) {
+  if (doc.exists) store.sidePanelFile = doc.path;
+}
+
+function openProject(gp) { window.__sb?.openProjectByPath?.(gp); }
+const shortOf = (p) => String(p || '').split('/').filter(Boolean).slice(-2).join('/');
+
+watch([groupDir, tab], ([dir, t]) => {
+  if (!dir) return;
+  loadGroupCounts();
+  if (t === 'group') loadGroupDocs();
+}, { immediate: true });
 
 const shortPath = computed(() =>
   projectPath.value.split('/').filter(Boolean).slice(-2).join('/')
@@ -589,12 +748,14 @@ function fileStatusChar(f) {
 // services. No extra plumbing needed.
 function publish(det) {
   detail.value = det;
-  store.sidePanelDetail = det;
+  // The rail beside the open session badges its buttons from this. The
+  // assistant's panel has no detail to share, and must not clobber that one's.
+  if (!isChat.value) store.sidePanelDetail = det;
 }
 
 async function load() {
   const p = projectPath.value;
-  if (!p || loading.value) return;
+  if (!p || loading.value || isChat.value) return;
   loading.value = true;
   try {
     const det = await window.api.getProjectDetail(p);
@@ -609,7 +770,7 @@ async function load() {
 async function reset(p) {
   publish(null);
   gitUser.value = { name: '', email: '' };
-  if (!p) return;
+  if (!p || isChat.value) return;
   // Paint the cached git state first so opening the panel is not a blank flash.
   const cached = await window.api.getProjectGitCache(p).catch(() => null);
   if (cached && projectPath.value === p) publish(cached);
@@ -642,7 +803,7 @@ let changesTimer = null;
 /** The working tree only, folded into whatever the full read last produced. */
 async function pollChanges() {
   const p = projectPath.value;
-  if (!p || loading.value) return;
+  if (!p || loading.value || isChat.value) return;
   const changes = await window.api.getProjectChanges?.(p).catch(() => null);
   if (!changes || projectPath.value !== p || !detail.value) return;
   publish({ ...detail.value, ...changes });
@@ -677,6 +838,10 @@ watch(projectPath, (p) => {
 // terminal-manager.js owns the xterm/PTY details; main.js reaps a stray
 // ephemeral PTY if a renderer reload skipped our teardown.
 function startShell() {
+  // One scratch shell exists app-wide (terminal-manager.js), and it belongs to
+  // the session panel. The assistant's panel has no shell pane and must not
+  // tear that one down by mounting.
+  if (isChat.value) return;
   shellReady.value = false;
   window.destroyPanelTerminal?.();
   return ensureShell();
@@ -688,7 +853,7 @@ function startShell() {
 // wait until the shell one is selected.
 async function ensureShell() {
   const p = projectPath.value;
-  if (!p || shellReady.value || tab.value !== 'shell') return;
+  if (!p || shellReady.value || tab.value !== 'shell' || isChat.value) return;
   await nextTick();
   const host = shellHostRef.value;
   if (!host || !host.offsetParent) return;
@@ -907,7 +1072,7 @@ async function doPush() {
 }
 
 // An armed Push must not survive the thing it was armed for.
-watch([projectPath, changesView, () => store.sidePanelTab], () => { confirmPush.value = false; });
+watch([projectPath, changesView, tab], () => { confirmPush.value = false; });
 
 // Selecting a pane changes what is on screen but not the panel's width, so the
 // session terminal does not move. The scratch shell does need a fit, since it
@@ -927,11 +1092,13 @@ const notes = ref([]);
 const plans = ref([]);
 const allPlans = ref(false);
 
-const projectNotes = computed(() =>
-  notes.value.filter(n => (n.projects || []).includes(projectPath.value))
-);
+// The assistant's list is the whole account's — it is the one place that looks
+// across every project, which is what it is asked about.
+const projectNotes = computed(() => (isChat.value
+  ? notes.value
+  : notes.value.filter(n => (n.projects || []).includes(projectPath.value))));
 
-const visiblePlans = computed(() => (allPlans.value
+const visiblePlans = computed(() => ((allPlans.value || isChat.value)
   ? plans.value
   : plans.value.filter(p => (p.projects || []).includes(projectPath.value))));
 
@@ -959,7 +1126,7 @@ async function toggleNewNote() {
 async function createNote() {
   const title = newNoteTitle.value.trim();
   if (!title) return;
-  const res = await window.api.createNote({ title, projects: [projectPath.value] });
+  const res = await window.api.createNote({ title, projects: isChat.value ? [] : [projectPath.value] });
   creatingNote.value = false;
   newNoteTitle.value = '';
   await loadDocs();
@@ -1207,7 +1374,7 @@ onBeforeUnmount(() => {
   destroyDocView();
 });
 
-function close() { setSidePanelTab(null); }
+function close() { setSidePanelTab(null, props.scope); }
 
 // ── Resize ────────────────────────────────────────────────────────
 let fitRaf = 0;
@@ -1267,8 +1434,10 @@ onBeforeUnmount(() => {
     diffView = null;
   }
   destroyFileView();
-  window.destroyPanelTerminal?.();
-  store.sidePanelDetail = null;
+  if (!isChat.value) {
+    window.destroyPanelTerminal?.();
+    store.sidePanelDetail = null;
+  }
   store.sidePanelFile = null;
 });
 </script>

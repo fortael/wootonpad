@@ -417,6 +417,136 @@
           </div>
         </template>
 
+        <!-- ══ Assistant (global only) ════════════════════════════
+             The Chat tab's assistant — see chat-agent.js. Its prompt is
+             layered on top of the CLI's own; what it may *not* do (edit files,
+             run commands) is enforced by the tools it is given, not by this
+             text, so editing the prompt cannot turn it into a coder. -->
+        <template v-if="tab === 'assistant' && !isProject">
+          <div class="settings-section">
+            <div class="settings-section-title">Chat assistant</div>
+            <div class="settings-field settings-field--column">
+              <div class="settings-field-info">
+                <span class="settings-label">System prompt</span>
+                <div class="settings-description">
+                  Added to Claude Code's own system prompt for the Chat tab's assistant. It already
+                  cannot edit files or run shell commands — it has no tool for either — so this is
+                  about how it manages: how it words the sessions it starts, when it asks, how it
+                  reports back. Takes effect when the assistant next starts, or on Restart below.
+                </div>
+              </div>
+              <div class="settings-field-control settings-field-control--full">
+                <textarea
+                  class="settings-textarea settings-textarea--tall"
+                  v-model="form.managerChatPrompt"
+                  rows="18"
+                  spellcheck="false"
+                ></textarea>
+                <div class="settings-inline-actions">
+                  <button class="settings-reset-btn" @click="form.managerChatPrompt = managerChatDefault" v-if="form.managerChatPrompt !== managerChatDefault">Reset to default</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- How it writes, apart from what it does: reworking the role
+                 should not mean re-typing the formatting rules. -->
+            <div class="settings-field settings-field--column">
+              <div class="settings-field-info">
+                <span class="settings-label">Response style</span>
+                <div class="settings-description">
+                  How the assistant writes its answers — length, lists, what goes first. Sent after
+                  the system prompt above, as its own block.
+                </div>
+              </div>
+              <div class="settings-field-control settings-field-control--full">
+                <textarea
+                  class="settings-textarea settings-textarea--tall"
+                  v-model="form.managerChatStyle"
+                  rows="12"
+                  spellcheck="false"
+                ></textarea>
+                <div class="settings-inline-actions">
+                  <button class="settings-reset-btn" @click="form.managerChatStyle = managerStyleDefault" v-if="form.managerChatStyle !== managerStyleDefault">Reset to default</button>
+                  <button class="settings-reset-btn" :disabled="assistantRestarting" @click="restartAssistant">
+                    {{ assistantRestarting ? 'Restarting…' : 'Save and restart the assistant' }}
+                  </button>
+                  <span v-if="assistantNotice" class="settings-description">{{ assistantNotice }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+
+          <!-- ── The assistant's toolset (development builds only) ──
+               Everything the in-process `wooton` MCP server offers, as the
+               model sees it, with the read-only tools runnable against the
+               live app. For knowing what the assistant can do and debugging
+               what a tool returns — see wooton-mcp.js. -->
+          <div v-if="tab === 'assistant' && !isProject && mcpInfo?.dev" class="settings-section">
+            <div class="settings-section-title">
+              MCP tools <span class="sbx-mcptools__dev">dev</span>
+            </div>
+            <div class="settings-section-note">
+              {{ mcpInfo.tools.length }} tools on the <code>wooton</code> server ·
+              {{ mcpInfo.tools.filter(t => t.approval === 'auto').length }} run without asking ·
+              {{ mcpInfo.tools.filter(t => t.approval === 'asks').length }} ask first.
+              Never given: <code v-for="(name, i) in mcpInfo.forbidden" :key="name">{{ name }}{{ i < mcpInfo.forbidden.length - 1 ? ', ' : '' }}</code>.
+              Read-only tools can be run here against the live app.
+            </div>
+
+            <div
+              v-for="tool in mcpInfo.tools"
+              :key="tool.name"
+              class="sbx-mcptool"
+              :class="{ 'is-open': openTool === tool.name }"
+            >
+              <button type="button" class="sbx-mcptool__head" @click="openTool = openTool === tool.name ? '' : tool.name">
+                <span class="sbx-mcptool__chev">{{ openTool === tool.name ? '▾' : '▸' }}</span>
+                <code class="sbx-mcptool__name">{{ tool.name }}</code>
+                <span class="sbx-mcptool__badge" :class="tool.readOnly ? 'is-read' : 'is-write'">{{ tool.readOnly ? 'read' : 'write' }}</span>
+                <span class="sbx-mcptool__badge" :class="tool.approval === 'asks' ? 'is-asks' : 'is-auto'">{{ tool.approval === 'asks' ? 'asks first' : 'auto' }}</span>
+                <span class="sbx-mcptool__count">{{ tool.params.length }} param{{ tool.params.length === 1 ? '' : 's' }}</span>
+              </button>
+              <div class="sbx-mcptool__desc">{{ tool.description }}</div>
+
+              <div v-if="openTool === tool.name" class="sbx-mcptool__body">
+                <div class="sbx-mcptool__full"><code>{{ tool.fullName }}</code></div>
+                <table v-if="tool.params.length" class="sbx-mcptool__params">
+                  <tr v-for="p in tool.params" :key="p.name">
+                    <td><code>{{ p.name }}</code><span v-if="p.required" class="sbx-mcptool__req">*</span></td>
+                    <td class="sbx-mcptool__type">{{ p.type }}</td>
+                    <td>{{ p.description }}</td>
+                  </tr>
+                </table>
+                <div v-else class="settings-description">No parameters.</div>
+
+                <div v-if="tool.readOnly" class="sbx-mcptool__try">
+                  <textarea
+                    v-model="toolArgs[tool.name]"
+                    class="settings-textarea sbx-mcptool__args"
+                    rows="3"
+                    spellcheck="false"
+                    :placeholder="argsPlaceholder(tool)"
+                    @keydown.meta.enter.prevent="runMcpTool(tool)"
+                    @keydown.ctrl.enter.prevent="runMcpTool(tool)"
+                  ></textarea>
+                  <div class="settings-inline-actions">
+                    <button class="settings-reset-btn" :disabled="toolRunning === tool.name" @click="runMcpTool(tool)">
+                      {{ toolRunning === tool.name ? 'Running…' : 'Run  ⌘↵' }}
+                    </button>
+                    <span v-if="toolOut[tool.name]?.meta" class="settings-description">{{ toolOut[tool.name].meta }}</span>
+                  </div>
+                  <pre
+                    v-if="toolOut[tool.name]"
+                    class="sbx-mcptool__out"
+                    :class="{ 'is-error': toolOut[tool.name].error }"
+                  >{{ toolOut[tool.name].text }}</pre>
+                </div>
+                <div v-else class="settings-description">Changes something — run it through the assistant, not from here.</div>
+              </div>
+            </div>
+          </div>
+
         <!-- ══ Git (global only) ══════════════════════════════════ -->
         <template v-if="tab === 'git' && !isProject">
           <div class="settings-section">
@@ -522,6 +652,7 @@ const scopeLabel = computed(() => (isProject.value
 const TABS = [
   { id: 'agent', label: 'Agent', globalOnly: false },
   { id: 'git', label: 'Git', globalOnly: true },
+  { id: 'assistant', label: 'Assistant', globalOnly: true },
   { id: 'appearance', label: 'Appearance', globalOnly: true },
 ];
 const tabs = computed(() => TABS.filter(t => !t.globalOnly || !isProject.value));
@@ -607,7 +738,57 @@ const form = reactive({
   commitMessagePrompt: '',
   gitlabToken: '',
   summaryLanguage: '',
+  managerChatPrompt: '',
+  managerChatStyle: '',
 });
+
+// The assistant's built-in prompt, fetched from main — the one place it lives
+// (chat-agent.js). An edit equal to it is stored as "use the default", so a
+// later improvement to the default reaches everyone who never changed it.
+const managerChatDefault = ref('');
+const managerStyleDefault = ref('');
+const assistantRestarting = ref(false);
+
+// ── MCP tools (development builds only) ──
+const mcpInfo = ref(null);
+const openTool = ref('');
+const toolArgs = reactive({});
+const toolOut = reactive({});
+const toolRunning = ref('');
+
+// A starting point for the arguments box: every parameter, required ones first.
+function argsPlaceholder(tool) {
+  if (!tool.params.length) return '{}';
+  const sample = {};
+  for (const p of [...tool.params].sort((a, b) => Number(b.required) - Number(a.required))) {
+    sample[p.name] = p.type.includes('integer') || p.type.includes('number') ? 0
+      : p.type === 'boolean' ? false
+      : p.type.endsWith('[]') ? []
+      : '';
+  }
+  return JSON.stringify(sample);
+}
+
+async function runMcpTool(tool) {
+  let args = {};
+  const raw = (toolArgs[tool.name] || '').trim();
+  if (raw) {
+    try { args = JSON.parse(raw); } catch (err) {
+      toolOut[tool.name] = { text: `Arguments are not JSON: ${err.message}`, error: true };
+      return;
+    }
+  }
+  toolRunning.value = tool.name;
+  try {
+    const res = await window.api.wootonMcpRun(tool.name, args);
+    toolOut[tool.name] = res?.ok
+      ? { text: res.text || '(empty)', error: res.isError, meta: `${res.ms} ms · ${res.text.split('\n').length} lines${res.isError ? ' · tool error' : ''}` }
+      : { text: res?.error || 'Failed', error: true };
+  } finally {
+    toolRunning.value = '';
+  }
+}
+const assistantNotice = ref('');
 
 const permissionModeDesc = computed(() =>
   PERMISSION_MODE_DESCS[form.permissionMode] || PERMISSION_MODE_DESCS['']);
@@ -678,6 +859,11 @@ async function loadSettings() {
     form.commitMessagePrompt = current.commitMessagePrompt || COMMIT_MSG_PROMPT_DEFAULT;
     form.gitlabToken = current.gitlabToken || '';
     form.summaryLanguage = current.summaryLanguage || '';
+    managerChatDefault.value = (await window.api.managerChatDefaultPrompt?.().catch(() => '')) || '';
+    form.managerChatPrompt = current.managerChatPrompt || managerChatDefault.value;
+    managerStyleDefault.value = (await window.api.managerChatDefaultStyle?.().catch(() => '')) || '';
+    mcpInfo.value = (await window.api.wootonMcpTools?.().catch(() => null)) || null;
+    form.managerChatStyle = current.managerChatStyle || managerStyleDefault.value;
     originalMcpEmulation = form.mcpEmulation;
 
     try { shellProfiles.value = await window.api.getShellProfiles(); } catch { shellProfiles.value = []; }
@@ -737,6 +923,8 @@ async function save() {
       commitMessagePrompt: form.commitMessagePrompt === COMMIT_MSG_PROMPT_DEFAULT ? '' : (form.commitMessagePrompt || ''),
       gitlabToken: form.gitlabToken || '',
       summaryLanguage: form.summaryLanguage || '',
+      managerChatPrompt: storedManagerPrompt(),
+      managerChatStyle: storedManagerStyle(),
     };
   }
 
@@ -763,6 +951,36 @@ async function save() {
 
   saveState.value = 'saved';
   setTimeout(() => close(), 600);
+}
+
+function storedManagerPrompt() {
+  const text = (form.managerChatPrompt || '').trim();
+  return !text || text === managerChatDefault.value.trim() ? '' : form.managerChatPrompt;
+}
+
+function storedManagerStyle() {
+  const text = (form.managerChatStyle || '').trim();
+  return !text || text === managerStyleDefault.value.trim() ? '' : form.managerChatStyle;
+}
+
+// A running session keeps the prompt it started with, so a new one only lands
+// on a restart. Same conversation — the transcript is resumed, only the
+// instructions change.
+async function restartAssistant() {
+  assistantRestarting.value = true;
+  assistantNotice.value = '';
+  try {
+    const existing = (await window.api.getSetting('global')) || {};
+    await window.api.setSetting('global', {
+      ...existing,
+      managerChatPrompt: storedManagerPrompt(),
+      managerChatStyle: storedManagerStyle(),
+    });
+    const res = await window.api.managerChatRestart?.();
+    assistantNotice.value = res?.ok ? 'Restarted with the new prompt.' : `Could not restart: ${res?.error || 'unknown error'}`;
+  } finally {
+    assistantRestarting.value = false;
+  }
 }
 
 // ── Close ─────────────────────────────────────────────────────────

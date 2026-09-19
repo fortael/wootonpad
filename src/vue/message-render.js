@@ -14,6 +14,9 @@ import {
   truncateCommand, previewLine, findMentions, relativeTime, localCommandEnvelope,
 } from './chat-text.js';
 import { parseQuestions, questionTitle, NOTES_ONLY } from './ask-question.js';
+import {
+  isWootonTool, describeWootonCall, summarizeWootonResult, wootonResultText,
+} from './wooton-tools.js';
 import { LUCIDE } from './lucide-icons.js';
 
 // ── Helpers ───────────────────────────────────────────────────────
@@ -149,6 +152,37 @@ function onRendererClick(event) {
   if (copy) {
     copyCodeBlock(copy);
     return;
+  }
+
+  // A WootonPad tool card's two controls — see renderWootonCard.
+  const wtoolToggle = target.closest('.sbx-wtool__toggle');
+  if (wtoolToggle) {
+    toggleWootonResult(wtoolToggle);
+    return;
+  }
+  const wtoolMore = target.closest('.sbx-wtool__more');
+  if (wtoolMore) {
+    expandWootonSubjects(wtoolMore);
+    return;
+  }
+
+  // A session and a project are the app's own objects: unlike `@path`, which
+  // only means something relative to the session it was written in, these name
+  // the same thing from anywhere, so they are opened here rather than by the
+  // view. Called through the renderer bridge and defensively — a transcript can
+  // be painted in a window that has no router wired up yet.
+  const mention = target.closest('.jsonl-mention');
+  if (mention) {
+    const session = mention.dataset.mentionSession;
+    if (session) {
+      window.__sb?.openSessionById?.(session);
+      return;
+    }
+    const project = mention.dataset.mentionProject;
+    if (project) {
+      window.__sb?.openProjectByPath?.(project);
+      return;
+    }
   }
 
   // makeCollapsible's own header: the body is its next sibling.
@@ -468,6 +502,52 @@ function askIsAnswered(input) {
 /** Inside these, a `/` or an `@` was quoted on purpose. */
 const MENTION_SKIP = new Set(['CODE', 'PRE', 'A', 'SCRIPT', 'STYLE', 'BUTTON']);
 
+/**
+ * The kinds an answer is decorated for, as opposed to a question.
+ *
+ * `@path` and `/command` in Claude's prose are not references — the path is
+ * already a tool call two rows down, and the sentence is not the way to it. A
+ * session id and a project path are: they name something absolute, they are
+ * the only way to reach it from here, and an answer that says which session it
+ * took this from is saying exactly the thing worth clicking.
+ */
+const ABSOLUTE_KINDS = new Set(['session', 'project']);
+
+/**
+ * The avatar a session wears in the sidebar, as DOM: its project's picture or
+ * monogram, or — for a group session — the members' monograms tiled, the same
+ * fingerprint GroupAvatar.vue draws.
+ */
+function makeSessionMark(info) {
+  const mark = document.createElement('span');
+  mark.setAttribute('aria-hidden', 'true');
+  const paths = (info.groupProjects || []).slice(0, 4);
+  if (paths.length) {
+    mark.className = `jsonl-mention__mark jsonl-mention__mark--group is-${paths.length}`;
+    for (const path of paths) mark.appendChild(monogram(path));
+    return mark;
+  }
+  mark.className = 'jsonl-mention__mark';
+  if (info.avatarUrl) {
+    const img = document.createElement('img');
+    img.src = info.avatarUrl;
+    img.alt = '';
+    mark.appendChild(img);
+    return mark;
+  }
+  mark.appendChild(monogram(info.projectPath));
+  return mark;
+}
+
+function monogram(path) {
+  const avatar = window.getProjectAvatar?.(path) || { initials: '?', color: 'var(--gray-500)' };
+  const tile = document.createElement('span');
+  tile.className = 'jsonl-mention__tile';
+  tile.textContent = avatar.initials;
+  tile.style.background = avatar.color;
+  return tile;
+}
+
 function makeMentionChip(mention, raw) {
   const el = document.createElement('button');
   el.type = 'button';
@@ -476,6 +556,35 @@ function makeMentionChip(mention, raw) {
   if (mention.kind === 'file') {
     el.dataset.mentionFile = mention.value;
     el.title = mention.value;
+  } else if (mention.kind === 'session') {
+    el.dataset.mentionSession = mention.value;
+    el.title = `Session ${mention.value}`;
+    // A bare UUID mid-sentence is 36 characters of noise that nobody reads and
+    // nobody recognises. A session the app knows is drawn the way the sidebar
+    // draws it — its avatar and its title — with the short id after it in
+    // brackets, so the chip still says exactly which one. One it does not know
+    // (deleted, or another account's) falls back to the short id alone.
+    const short = mention.value.slice(0, 8);
+    const info = window.sbSessionInfo?.(mention.value);
+    if (info?.title) {
+      const title = document.createElement('span');
+      title.className = 'jsonl-mention__title';
+      title.textContent = info.title;
+      const id = document.createElement('span');
+      id.className = 'jsonl-mention__id';
+      id.textContent = `(${short})`;
+      el.replaceChildren(makeSessionMark(info), title, id);
+      el.classList.add('jsonl-mention--named');
+      el.title = `${info.title}\nSession ${mention.value}`;
+    } else {
+      el.textContent = short;
+    }
+  } else if (mention.kind === 'project') {
+    el.dataset.mentionProject = mention.value;
+    el.title = mention.value;
+    // Same reasoning as the file chip's, taken one step further: the folder is
+    // what names a project, and the path above it is the same for all of them.
+    el.textContent = mention.value.split('/').filter(Boolean).pop() || mention.value;
   } else {
     el.dataset.mentionCommand = mention.value;
     el.title = `/${mention.value}`;
@@ -488,12 +597,18 @@ function makeMentionChip(mention, raw) {
  *
  * Walks the text nodes of the already-rendered markdown rather than the source:
  * rewriting the HTML string would match inside tags and attributes, and a path
- * inside a code span is quoted deliberately. The click is not handled here —
- * the chips carry `data-mention-file` / `data-mention-command` and the view
- * that owns a session listens for them, because only it knows which project a
- * relative path is relative to.
+ * inside a code span is quoted deliberately. The click on the first two is not
+ * handled here — the chips carry `data-mention-file` / `data-mention-command`
+ * and the view that owns a session listens for them, because only it knows
+ * which project a relative path is relative to. `data-mention-session` and
+ * `data-mention-project` name something absolute, so onRendererClick above
+ * opens those itself.
+ *
+ * @param {ParentNode|null} root
+ * @param {Set<string>} [only] the kinds to decorate, when not all of them —
+ *        see ABSOLUTE_KINDS for the one caller that narrows it.
  */
-function decorateMentions(root) {
+function decorateMentions(root, only) {
   if (!root) return root;
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
@@ -508,7 +623,9 @@ function decorateMentions(root) {
 
   for (const node of targets) {
     const text = node.nodeValue;
-    const mentions = findMentions(text);
+    const mentions = only
+      ? findMentions(text).filter((m) => only.has(m.kind))
+      : findMentions(text);
     if (!mentions.length) continue;
     const frag = document.createDocumentFragment();
     let at = 0;
@@ -522,6 +639,331 @@ function decorateMentions(root) {
     node.parentNode.replaceChild(frag, node);
   }
   return root;
+}
+
+// ── WootonPad's own tools, as cards ───────────────────────────────
+//
+// The Chat tab's assistant manages the workspace through `mcp__wooton__*` calls
+// (wooton-mcp.js). Drawn as tool rows they were a name and a JSON blob, and
+// what a reader wants from one is not its arguments but its subject: which
+// projects and which sessions, and what was done to them. So each call is a
+// card of its own, the way the AskUserQuestion record is — it breaks out of the
+// run of calls, names the act, and puts the projects and sessions it touched on
+// the card as the same chips the prose uses.
+//
+// What came back is merged in when it lands. A list call names nothing in its
+// input; it is the `@session:` / `@project:` refs in its answer that say what it
+// looked at — see summarizeWootonResult.
+//
+// The card is never folded (`keepOpen`), and its two controls are delegated —
+// see onRendererClick — like everything else inside a tool block.
+
+/** Chips shown before the rest go behind "+ N more". */
+const WTOOL_CHIP_CAP = 6;
+/** A result with more rows than this is folded behind a toggle. */
+const WTOOL_FOLD_LINES = 6;
+/** Fewer subjects than this are their own tally — the chips already say it. */
+const WTOOL_TALLY_FROM = 3;
+/** The header's right-hand run, in order. */
+const WTOOL_TAIL = ['sbx-wtool__tally', 'sbx-wtool__took', 'sbx-wtool__status'];
+
+function wtoolPart(tag, className, text) {
+  const el = document.createElement(tag);
+  el.className = className;
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+function wtoolHead(card) {
+  return card.querySelector(':scope > .sbx-wtool__head');
+}
+
+/** One of the header's right-hand spans, created in its place on first use. */
+function wtoolSlot(card, cls) {
+  const head = wtoolHead(card);
+  if (!head) return null;
+  const found = head.querySelector(`:scope > .${cls}`);
+  if (found) return found;
+  const el = wtoolPart('span', cls);
+  const next = WTOOL_TAIL.slice(WTOOL_TAIL.indexOf(cls) + 1)
+    .map(c => head.querySelector(`:scope > .${c}`))
+    .find(Boolean);
+  head.insertBefore(el, next || null);
+  return el;
+}
+
+/** A mention chip with a mark in front — the label is split out so it alone is cut short. */
+function wtoolChip(chip, mark) {
+  const label = wtoolPart('span', 'sbx-wtool__chip-label', chip.textContent);
+  chip.replaceChildren(mark, label);
+  chip.classList.add('sbx-wtool__chip');
+  return chip;
+}
+
+/** A project, with the monogram it wears everywhere else in the app. */
+function makeProjectSubject(path) {
+  const chip = makeMentionChip({ kind: 'project', value: path }, path);
+  const avatar = window.getProjectAvatar?.(path) || { initials: '?', color: 'var(--gray-500)' };
+  const mark = wtoolPart('span', 'sbx-wtool__avatar', avatar.initials);
+  mark.style.background = avatar.color;
+  mark.setAttribute('aria-hidden', 'true');
+  return wtoolChip(chip, mark);
+}
+
+/** A session, by its short id — and by its title in the tooltip, when a row quoted one. */
+function makeSessionSubject(id, title) {
+  const chip = makeMentionChip({ kind: 'session', value: id }, `@session:${id}`);
+  // A session the app knows already carries its avatar and title; the card
+  // only needs to mark it as one of its chips.
+  if (chip.classList.contains('jsonl-mention--named')) {
+    chip.classList.add('sbx-wtool__chip');
+    return chip;
+  }
+  if (title) chip.title = `${title} — session ${id}`;
+  const mark = makeIcon('message-square', 11);
+  mark.classList.add('sbx-wtool__glyph');
+  return wtoolChip(chip, mark);
+}
+
+function subjectKey(chip) {
+  return chip.dataset.mentionProject
+    ? `p:${chip.dataset.mentionProject}`
+    : `s:${String(chip.dataset.mentionSession || '').toLowerCase()}`;
+}
+
+const plural = (n, word) => (n ? `${n} ${word}${n === 1 ? '' : 's'}` : '');
+
+/**
+ * Cap the chips, and say how many there are in the header once that is more
+ * than the chips themselves make obvious.
+ *
+ * One past the cap is shown rather than hidden: a "+ 1 more" button takes the
+ * room the chip would have.
+ */
+function layoutWootonSubjects(card, row) {
+  const chips = Array.from(row.querySelectorAll(':scope > .sbx-wtool__chip'));
+  const open = row.classList.contains('is-expanded') || chips.length <= WTOOL_CHIP_CAP + 1;
+  chips.forEach((chip, i) => { chip.hidden = !open && i >= WTOOL_CHIP_CAP; });
+
+  let more = row.querySelector(':scope > .sbx-wtool__more');
+  if (open) {
+    more?.remove();
+  } else {
+    if (!more) {
+      more = wtoolPart('button', 'sbx-wtool__more');
+      more.type = 'button';
+    }
+    more.textContent = `+ ${chips.length - WTOOL_CHIP_CAP} more`;
+    row.appendChild(more);
+  }
+
+  if (chips.length < WTOOL_TALLY_FROM) {
+    wtoolHead(card)?.querySelector(':scope > .sbx-wtool__tally')?.remove();
+    return;
+  }
+  const projects = chips.filter(chip => chip.dataset.mentionProject).length;
+  const tally = wtoolSlot(card, 'sbx-wtool__tally');
+  if (tally) {
+    tally.textContent = [plural(projects, 'project'), plural(chips.length - projects, 'session')]
+      .filter(Boolean).join(' · ');
+  }
+}
+
+/**
+ * Add projects and sessions to the card's subject row, each once.
+ *
+ * Projects before sessions, whichever arrived first: a result that names the
+ * project a session was started in is still read project-then-session.
+ */
+function addWootonSubjects(card, projects = [], sessions = [], titles = {}) {
+  let row = card.querySelector(':scope > .sbx-wtool__subjects');
+  if (!row) {
+    if (!projects.length && !sessions.length) return;
+    row = wtoolPart('div', 'sbx-wtool__subjects');
+    wtoolHead(card)?.after(row);
+  }
+
+  const have = new Map(
+    Array.from(row.querySelectorAll(':scope > .sbx-wtool__chip')).map(chip => [subjectKey(chip), chip]),
+  );
+  const more = row.querySelector(':scope > .sbx-wtool__more');
+  const firstSession = row.querySelector(':scope > .jsonl-mention--session');
+
+  for (const path of projects) {
+    if (have.has(`p:${path}`)) continue;
+    const chip = makeProjectSubject(path);
+    row.insertBefore(chip, firstSession || more);
+    have.set(`p:${path}`, chip);
+  }
+  for (const id of sessions) {
+    const key = `s:${id.toLowerCase()}`;
+    const known = have.get(key);
+    if (known) {
+      // The input named it by id; the answer may be the first to say its title.
+      if (titles[id] && !known.disabled) known.title = `${titles[id]} — session ${id}`;
+      continue;
+    }
+    const chip = makeSessionSubject(id, titles[id]);
+    row.insertBefore(chip, more);
+    have.set(key, chip);
+  }
+
+  layoutWootonSubjects(card, row);
+}
+
+function expandWootonSubjects(button) {
+  const row = button.closest('.sbx-wtool__subjects');
+  const card = button.closest('.sbx-wtool');
+  if (!row || !card) return;
+  row.classList.add('is-expanded');
+  layoutWootonSubjects(card, row);
+}
+
+/** A deleted session's chip opens nothing any more, so it stops being a button. */
+function markSessionsGone(card) {
+  for (const chip of card.querySelectorAll(':scope > .sbx-wtool__subjects > .jsonl-mention--session')) {
+    chip.classList.add('is-gone');
+    chip.disabled = true;
+    chip.title = `Deleted — session ${chip.dataset.mentionSession}`;
+  }
+}
+
+/** Running, done or failed — a pip at the right edge of the header. */
+function setWootonStatus(card, state, reason) {
+  const status = wtoolSlot(card, 'sbx-wtool__status');
+  if (!status) return;
+  card.classList.toggle('is-running', state === 'running');
+  card.classList.toggle('is-done', state === 'done');
+  card.classList.toggle('is-error', state === 'error');
+  status.replaceChildren();
+  if (state === 'running') {
+    status.appendChild(wtoolPart('span', 'sbx-wtool__pip'));
+    status.title = 'Running';
+  } else if (state === 'done') {
+    status.appendChild(makeIcon('check', 12));
+    status.title = 'Done';
+  } else {
+    status.append(makeIcon('circle-x', 12), wtoolPart('span', 'sbx-wtool__failed', 'failed'));
+    status.title = reason ? `Failed — ${reason}` : 'Failed';
+  }
+  status.setAttribute('role', 'img');
+  status.setAttribute('aria-label', status.title);
+}
+
+/**
+ * What came back, one row per line, with its refs made into chips.
+ *
+ * Not markdown: the server writes plain lines — `[x]` checklists, indented
+ * message tails, `  M src/app.js` — and marked would turn half of them into
+ * something else. Longer than a glance is folded behind a toggle; a failure
+ * never is, because the reason is the whole point of it.
+ */
+function renderWootonResult(card, text, summary) {
+  card.querySelector(':scope > .sbx-wtool__result')?.remove();
+  const body = String(text || '').replace(/^\s*\n/, '').replace(/\s+$/, '');
+  if (!body) return;
+
+  const section = wtoolPart('div', 'sbx-wtool__result');
+  const lines = wtoolPart('div', 'sbx-wtool__lines');
+  for (const row of body.split('\n')) {
+    lines.appendChild(wtoolPart('div', row.trim() ? 'sbx-wtool__line' : 'sbx-wtool__line is-blank', row));
+  }
+  decorateMentions(lines, ABSOLUTE_KINDS);
+
+  if (!summary.isError && summary.lines > WTOOL_FOLD_LINES) {
+    const toggle = wtoolPart('button', 'sbx-wtool__toggle');
+    toggle.type = 'button';
+    toggle.dataset.lines = String(summary.lines);
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.append(
+      makeIcon('chevron-down', 12),
+      wtoolPart('span', 'sbx-wtool__toggle-label', `Show result (${summary.lines} lines)`),
+    );
+    lines.hidden = true;
+    section.appendChild(toggle);
+  }
+  section.appendChild(lines);
+  card.appendChild(section);
+}
+
+function toggleWootonResult(button) {
+  const lines = button.parentElement?.querySelector(':scope > .sbx-wtool__lines');
+  if (!lines) return;
+  const opening = lines.hidden;
+  lines.hidden = !opening;
+  button.classList.toggle('is-open', opening);
+  button.setAttribute('aria-expanded', String(opening));
+  const label = button.querySelector('.sbx-wtool__toggle-label');
+  if (label) label.textContent = opening ? 'Hide result' : `Show result (${button.dataset.lines} lines)`;
+}
+
+/**
+ * A call to one of WootonPad's own tools, as its card.
+ *
+ * Carries `jsonl-tool-block` as well as its own classes: the chat view finds a
+ * call's block by that class when a result lands after its turn closed, and
+ * adoptOrphanResults matches on it too. `keepOpen` keeps collapseToolBlock off
+ * it, and applyToolResult / markToolDuration dispatch on `data-wtool`.
+ *
+ * @param {{ name: string, input?: object, id?: string }} block
+ * @param {{ orphan?: boolean }} [opts] an answer drawn without its call
+ */
+function renderWootonCard(block, opts = {}) {
+  const call = describeWootonCall(block.name, block.input);
+  const el = document.createElement('div');
+  el.className = `sbx-wtool sbx-wtool--${call.kind} jsonl-tool-block`;
+  el.dataset.wtool = call.tool || 'unknown';
+  el.dataset.keepOpen = '1';
+  if (block.id) el.dataset.toolUseId = block.id;
+
+  const head = wtoolPart('div', 'sbx-wtool__head');
+  const badge = wtoolPart('span', 'sbx-wtool__icon');
+  badge.appendChild(makeIcon(call.icon, 13));
+  const verb = wtoolPart('span', 'sbx-wtool__verb', call.verb);
+  verb.title = call.tool;
+  head.append(badge, verb);
+  const detail = opts.orphan ? 'answer to a call above' : call.detail;
+  if (detail) {
+    const detailEl = wtoolPart('span', 'sbx-wtool__detail', detail);
+    detailEl.title = detail;
+    head.appendChild(detailEl);
+  }
+  el.appendChild(head);
+
+  setWootonStatus(el, 'running');
+  addWootonSubjects(el, call.projects, call.sessions);
+  return el;
+}
+
+/**
+ * A card's answer, drawn in: its refs join the subjects, its text goes under
+ * them, and the pip says how it went. Safe to run twice — the body is replaced
+ * and the subjects are deduplicated.
+ *
+ * @returns {boolean} whether the call failed, as applyToolResult does
+ */
+function applyWootonResult(card, data) {
+  const { content, isError } = unwrapResult(data);
+  const text = wootonResultText(content);
+  const summary = summarizeWootonResult(text, isError);
+  addWootonSubjects(card, summary.projects, summary.sessions, summary.titles);
+  if (card.dataset.wtool === 'delete_session' && !summary.isError) markSessionsGone(card);
+  renderWootonResult(card, text, summary);
+  setWootonStatus(card, summary.isError ? 'error' : 'done', summary.headline);
+  return summary.isError;
+}
+
+function markWootonDuration(card, ms) {
+  if (!Number.isFinite(ms) || ms < 0) return;
+  const took = wtoolSlot(card, 'sbx-wtool__took');
+  if (took) took.textContent = formatDuration(ms);
+}
+
+/** A card as its own transcript entry, marked so a run of them can sit closer. */
+function wootonEntry(card) {
+  const el = asEntry(card);
+  el.classList.add('sbx-wtool-entry');
+  return el;
 }
 
 // ── Timestamps ────────────────────────────────────────────────────
@@ -747,6 +1189,10 @@ function refreshStamps(container) {
  * the difference is usually the thing being looked for.
  */
 function markToolDuration(toolEl, ms) {
+  if (toolEl?.dataset?.wtool) {
+    markWootonDuration(toolEl, ms);
+    return;
+  }
   const header = toolEl?.querySelector?.('.jsonl-tool-header');
   if (!header || !Number.isFinite(ms) || ms < 0) return;
   let took = header.querySelector('.jsonl-tool-took');
@@ -1250,6 +1696,11 @@ const EXIT_CODE = /^\s*Exit code (\d+)\b/;
  * inline, per tool, and a stylesheet rule would have to out-shout them.
  */
 function markToolFailed(toolEl, content) {
+  // A card says so with its own pip — see setWootonStatus.
+  if (toolEl?.dataset?.wtool) {
+    if (!toolEl.classList.contains('is-error')) setWootonStatus(toolEl, 'error');
+    return;
+  }
   if (!toolEl || toolEl.classList.contains('jsonl-tool-block--failed')) return;
   toolEl.classList.add('jsonl-tool-block--failed');
   const bullet = toolEl.querySelector('.jsonl-tool-bullet');
@@ -1332,6 +1783,8 @@ function markToolWeight(toolEl, content) {
 
 /** The tool's answer, into the call it belongs to, marked if it failed. */
 function applyToolResult(toolEl, data) {
+  // A WootonPad tool card draws its answer itself — subjects, rows and pip.
+  if (toolEl?.dataset?.wtool) return applyWootonResult(toolEl, data);
   const { content, isError } = unwrapResult(data);
   withToolContent(toolEl, (body) => renderToolResult(content, body));
   if (isError) markToolFailed(toolEl, content);
@@ -1433,6 +1886,20 @@ function renderOrphanResult(content, opts = {}) {
   const name = opts.toolName
     || toolFromResult(raw)
     || (EXIT_CODE.test(typeof content === 'string' ? content : '') ? 'Bash' : null);
+
+  // An answer to one of WootonPad's own tools is still its card: what the
+  // answer names becomes the subjects, and the call's input is what is missing.
+  if (isWootonTool(name)) {
+    const card = renderWootonCard({ name, input: {} }, { orphan: true });
+    card.classList.add('is-orphan');
+    const payload = { content, isError: !!opts.isError };
+    applyWootonResult(card, payload);
+    if (opts.toolUseId) card.dataset.orphanFor = opts.toolUseId;
+    if (opts.isError) card.dataset.orphanError = '1';
+    orphanPayloads.set(card, payload);
+    return card;
+  }
+
   const cost = resultCost(raw);
 
   // The reason it is here at all: the call is real and it is in the part of the
@@ -1462,8 +1929,14 @@ function renderOrphanResult(content, opts = {}) {
     el.dataset.orphanError = '1';
     markToolFailed(el, content);
   }
+  // The answer as it arrived, for a card that adopts it — a card redraws the
+  // text itself rather than taking this block's folded rendering of it.
+  orphanPayloads.set(el, { content, isError: !!opts.isError });
   return collapseToolBlock(el);
 }
+
+/** @type {WeakMap<HTMLElement, { content: unknown, isError: boolean }>} */
+const orphanPayloads = new WeakMap();
 
 /**
  * Give every loose result back to its call, once the call is on screen.
@@ -1483,6 +1956,16 @@ function adoptOrphanResults(container) {
     const id = orphan.dataset.orphanFor;
     const call = container.querySelector(`[data-tool-use-id="${CSS.escape(id)}"]`);
     if (!call || !call.classList.contains('jsonl-tool-block')) continue;
+
+    if (call.dataset.wtool) {
+      // A WootonPad card draws the answer itself, from the answer as it came.
+      applyWootonResult(call, orphanPayloads.get(orphan)
+        || { content: orphan.textContent || '', isError: !!orphan.dataset.orphanError });
+      const entry = orphan.parentElement;
+      orphan.remove();
+      if (entry?.classList.contains('jsonl-entry') && !entry.children.length) entry.remove();
+      continue;
+    }
 
     // The call may already be folded, in which case its body is a string and
     // the move goes through a scratch node — see withToolContent.
@@ -1712,9 +2195,9 @@ function renderViewItems(items, toolResults, opts) {
         const text = document.createElement('div');
         text.className = 'jsonl-text';
         setRichText(text, item.text.trim());
-        // Only what the user wrote: a path Claude mentions in prose is already
-        // a tool call two rows down, and the sentence is not the way to it.
-        if (item.role === 'user') decorateMentions(text);
+        // A path or a command only becomes a chip in what the user wrote — see
+        // ABSOLUTE_KINDS for why an answer still gets the other two.
+        decorateMentions(text, item.role === 'user' ? undefined : ABSOLUTE_KINDS);
         el.appendChild(text);
         appendWhen(el, at);
         frag.appendChild(el);
@@ -1745,6 +2228,17 @@ function renderViewItems(items, toolResults, opts) {
           frag.appendChild(el);
           break;
         }
+        // The workspace assistant acting on the app. Also its own entry rather
+        // than a row in the run — see renderWootonCard.
+        if (isWootonTool(item.name)) {
+          const card = renderWootonCard({ name: item.name, input: item.input, id: item.id });
+          if (item.id && toolResults?.has(item.id)) {
+            applyToolResult(card, toolResults.get(item.id));
+            toolResults.delete(item.id);
+          }
+          frag.appendChild(wootonEntry(card));
+          break;
+        }
         const toolEl = renderToolUse({ name: item.name, input: item.input, id: item.id });
         if (item.id) toolEl.dataset.toolUseId = item.id;
         if (item.id && toolResults && toolResults.has(item.id)) {
@@ -1762,11 +2256,13 @@ function renderViewItems(items, toolResults, opts) {
         if (item.toolUseId && toolResults && !toolResults.has(item.toolUseId)) break;
         const el = document.createElement('div');
         el.className = 'jsonl-entry jsonl-assistant';
-        el.appendChild(renderOrphanResult(item.content, {
+        const orphan = renderOrphanResult(item.content, {
           toolUseId: item.toolUseId,
           toolName: opts?.toolNames?.get(item.toolUseId) || null,
           isError: item.isError,
-        }));
+        });
+        el.appendChild(orphan);
+        if (orphan.dataset.wtool) el.classList.add('sbx-wtool-entry');
         frag.appendChild(el);
         break;
       }
@@ -1965,7 +2461,7 @@ function renderJsonlEntry(entry, toolResultMap, opts) {
       const textEl = document.createElement('div');
       textEl.className = 'jsonl-text';
       setRichText(textEl, block.text.trim());
-      if (visualRole === 'user') decorateMentions(textEl);
+      decorateMentions(textEl, visualRole === 'user' ? undefined : ABSOLUTE_KINDS);
       div.appendChild(textEl);
     } else if (block.type === 'tool_use') {
       // A question is drawn as the dialog it was, not as a call — see
@@ -1984,6 +2480,21 @@ function renderJsonlEntry(entry, toolResultMap, opts) {
           if (!answered) renderToolResult(result, toolContent(ask));
         }
         div.appendChild(ask);
+        continue;
+      }
+      // One of WootonPad's own tools: a card, out of the run like the question
+      // above — see renderWootonCard.
+      if (isWootonTool(block.name)) {
+        group = null;
+        const card = renderWootonCard(block);
+        if (block.id && toolResultMap?.has(block.id)) {
+          const resultData = toolResultMap.get(block.id);
+          toolResultMap.delete(block.id);
+          applyToolResult(card, resultData);
+        }
+        const ended = block.id && opts?.toolTimes ? opts.toolTimes.get(block.id) : null;
+        if (ended && ts) markToolDuration(card, new Date(ended).getTime() - new Date(ts).getTime());
+        div.appendChild(card);
         continue;
       }
       const toolEl = renderToolUse(block);
@@ -2018,6 +2529,10 @@ function renderJsonlEntry(entry, toolResultMap, opts) {
   }
 
   if (!div.children.length) return null;
+  // An entry that is only WootonPad cards is spaced as one — see wootonEntry.
+  if (Array.from(div.children).every(child => child.classList.contains('sbx-wtool'))) {
+    div.classList.add('sbx-wtool-entry');
+  }
   if (opts?.timestamps && ts) {
     const ms = new Date(ts).getTime();
     // Every entry records when it was, for the day separators; only prose shows

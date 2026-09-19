@@ -93,11 +93,35 @@ test('the sessions list still shows terminals', () => {
 
 test('the panel rail hides its tabs over a terminal but keeps stop and close', () => {
   const rail = sfc('SessionPanelRail.vue');
-  assert.match(rail, /isPlainTerminal\(store\.headerSession\)\s*\?\s*\[\]\s*:\s*TABS/, 'the tabs are no longer gated');
+  assert.match(rail, /visibleTabs = computed\(\(\) => tabsFor\(/, 'the tabs are no longer gated by tabsFor');
   assert.match(rail, /v-for="tab in visibleTabs"/, 'the list still renders every tab');
   // The two controls that must survive, whatever the session is.
   assert.match(rail, /aria-label="Stop session"/);
   assert.match(rail, /aria-label="Close session view"/);
+});
+
+// ── Which panes a subject gets ────────────────────────────────────
+//
+// One answer for the rail and the panel — see side-panel-tabs.js.
+
+test('a terminal gets no panes, a session gets them all but the group one', () => {
+  const { tabsFor } = require('../src/vue/side-panel-tabs.js');
+  assert.deepEqual(tabsFor(term()), []);
+  const ids = tabsFor(chat()).map(t => t.id);
+  assert.ok(ids.includes('changes') && ids.includes('shell'));
+  assert.equal(ids.includes('group'), false);
+});
+
+test('a group session gets the group pane first', () => {
+  const { tabsFor } = require('../src/vue/side-panel-tabs.js');
+  const ids = tabsFor(chat({ groupProjects: ['/a', '/b'] })).map(t => t.id);
+  assert.equal(ids[0], 'group');
+  assert.ok(ids.includes('changes'));
+});
+
+test('the assistant\'s panel offers only TODOs and sub-agents', () => {
+  const { tabsFor } = require('../src/vue/side-panel-tabs.js');
+  assert.deepEqual(tabsFor(chat(), 'chat').map(t => t.id), ['todos', 'tasks']);
 });
 
 test('the side panel never opens over a terminal', () => {
