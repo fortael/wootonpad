@@ -139,7 +139,7 @@ test('project paths come from projectPath and projects[], once each', () => {
 // A chip opens a project by path, and half a path opens nothing.
 test('a relative or non-string project is not a subject', () => {
   const call = describeWootonCall('mcp__wooton__create_group_session', {
-    projects: ['switchboard', '', 42, null, 'C:\\work\\app', '/abs/path'],
+    projects: ['wootonpad', '', 42, null, 'C:\\work\\app', '/abs/path'],
   });
   assert.deepEqual(call.projects, ['C:\\work\\app', '/abs/path']);
 });

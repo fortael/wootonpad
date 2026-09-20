@@ -198,6 +198,9 @@ contextBridge.exposeInMainWorld('api', {
   // the way back in when one is clicked, or picked from the menu-bar list.
   reportVisibleSession: (sessionId) => ipcRenderer.send('visible-session', sessionId || null),
   // Settings → Notifications → Try it: a real one, and which way it went.
+  onOpenTerminalIn: (callback) => subscribe('open-terminal-in', callback),
+  notificationPermission: () => ipcRenderer.invoke('notification-permission'),
+  openNotificationSettings: () => ipcRenderer.invoke('open-notification-settings'),
   testNotification: (opts) => ipcRenderer.invoke('test-notification', opts),
   onOpenSessionFromOutside: (callback) => subscribe('open-session-from-outside', callback),
   // A whole prompt for an SDK session. `content` is a string, or the Messages

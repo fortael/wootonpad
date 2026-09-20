@@ -61,6 +61,7 @@
           @mousedown.prevent="pick(item)"
         >
           <span class="sbx-sdk__command-head">
+            <ProjectAvatar v-if="item.avatar" class="sbx-sdk__command-avatar" :project-path="item.avatar" />
             <span class="sbx-sdk__command-name">{{ item.label }}</span>
             <span v-if="item.hint" class="sbx-sdk__command-hint">{{ item.hint }}</span>
             <span v-if="item.tag" class="sbx-sdk__command-tag">{{ item.tag }}</span>
@@ -136,6 +137,23 @@
           <SbIcon name="square" :size="12" />
         </button>
         <span v-else class="sbx-sdk__enter" aria-hidden="true">&#8629;</span>
+      </div>
+
+      <!-- Buddy's quick questions, under the field rather than over the
+           conversation: at the top they sat in the band where the transcript
+           dissolves under the floating rail, half faded. They are there on
+           every turn, not only on the empty screen of a new conversation.
+           Clicking one types it into the composer and stops — most are the
+           first half of something longer, and all are worth a second look
+           before Buddy runs off with them. Settings → Buddy rewrites them. -->
+      <div v-if="isManagerChat" class="sbx-buddyprompts">
+        <button
+          v-for="(q, i) in quickQuestions"
+          :key="i"
+          type="button"
+          class="sbx-buddyprompts__btn"
+          @click="askQuick(q)"
+        >{{ q }}</button>
       </div>
 
       <!-- Everything that changes how the next turn runs, on one line under
@@ -222,6 +240,7 @@ import UsageRing from './UsageRing.vue';
 import ContextBreakdown from './ContextBreakdown.vue';
 import { placePopover } from '../context-breakdown.js';
 import RequestDialog from './RequestDialog.vue';
+import ProjectAvatar from './ProjectAvatar.vue';
 import { normalize } from '../message-normalizer.ts';
 import { modelLabels, defaultModelValue } from '../model-name.js';
 import { controlsFromTranscript } from '../session-controls.js';
@@ -239,6 +258,8 @@ import {
 import { prepareImage } from '../composer-image.js';
 import { railBand, viewSpanOf, isPainted } from '../transcript-rail.js';
 import { isExternalPathToken, relativeTime } from '../chat-text.js';
+import { matchProjects, projectMention } from '../project-mentions.js';
+import { promptButtons } from '../buddy-suggestions.js';
 import { openSidePanelFile } from '../side-panel-tabs.js';
 
 const bodyRef = ref(null);
@@ -341,6 +362,25 @@ const props = defineProps({
 const subject = computed(() => props.session || store.headerSession);
 
 const sessionId = computed(() => subject.value?.sessionId || '');
+
+/** Buddy rather than an ordinary session — see ChatApp.vue. */
+const isManagerChat = computed(() => !!subject.value?.isManagerChat);
+
+const quickQuestions = computed(() => promptButtons(store.buddyPrompts));
+
+// Into the composer, at the end of whatever is already there, and the caret
+// after it: a question clicked over a half-written sentence should not throw
+// the sentence away.
+function askQuick(text) {
+  draft.value = draft.value.trim() ? `${draft.value.replace(/\s+$/, '')} ${text}` : text;
+  nextTick(() => {
+    autoGrow();
+    const input = inputRef.value;
+    if (!input) return;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  });
+}
 
 // Tool results arrive as their own message, after the call that produced them.
 // Holding them here lets renderViewItems fold a result into the call it belongs
@@ -1347,10 +1387,22 @@ onBeforeUnmount(() => {
 // Read after a turn ends rather than on a timer: the number only moves when
 // the conversation does, and this is a control request the session has to
 // answer.
+// Switching to another session — or the same one starting over — leaves
+// nothing of the last one's context behind, here or in the store the mascot
+// and Buddy's header read.
+watch(sessionId, (now, before) => {
+  context.value = null;
+  if (before) store.contextUsage.delete(before);
+  if (now) store.contextUsage.delete(now);
+});
+
 async function refreshContext() {
-  if (!sessionId.value) return;
-  const res = await window.api.sdkContextUsage(sessionId.value);
-  if (res?.ok && res.value) context.value = res.value;
+  const id = sessionId.value;
+  if (!id) return;
+  const res = await window.api.sdkContextUsage(id);
+  if (!res?.ok || !res.value) return;
+  context.value = res.value;
+  store.contextUsage.set(id, { totalTokens: res.value.totalTokens, maxTokens: res.value.maxTokens });
 }
 
 async function loadModels() {
@@ -1559,9 +1611,30 @@ const fileMatches = computed(() => {
   }));
 });
 
-// One strip, one keyboard: a slash command being typed wins, otherwise a file.
-const menuItems = computed(() =>
-  commandMatches.value.length ? commandMatches.value : fileMatches.value);
+// Buddy has no working tree to point at, so `@` there names a project —
+// the mention it reads, written out for you (project-mentions.js).
+const projectMatches = computed(() => {
+  if (!isManagerChat.value) return [];
+  const found = fileToken.value;
+  if (!found) return [];
+  const all = store.allProjects?.length ? store.allProjects : store.projects;
+  return matchProjects(all, found.token).map(p => ({
+    key: `project:${p.projectPath}`,
+    kind: 'project',
+    value: p.projectPath,
+    label: p.name,
+    hint: p.folder,
+    description: p.projectPath,
+    avatar: p.projectPath,
+  }));
+});
+
+// One strip, one keyboard: a slash command being typed wins, otherwise what
+// `@` means here — a project for Buddy, a file everywhere else.
+const menuItems = computed(() => {
+  if (commandMatches.value.length) return commandMatches.value;
+  return isManagerChat.value ? projectMatches.value : fileMatches.value;
+});
 
 watch(menuItems, () => { commandIndex.value = 0; });
 
@@ -1575,6 +1648,10 @@ function pick(item) {
   if (!item) return;
   if (item.kind === 'command') {
     draft.value = `/${item.value} `;
+  } else if (item.kind === 'project') {
+    const found = fileToken.value;
+    if (!found) return;
+    draft.value = draft.value.slice(0, found.at) + projectMention(item.value);
   } else {
     const found = fileToken.value;
     if (!found) return;

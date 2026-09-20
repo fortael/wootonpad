@@ -32,7 +32,7 @@ const MAX_BODY_BYTES = 256 * 1024;
 // Wire name, not a stale one. It is written into the settings file every
 // running session was spawned with, so renaming it would silently stop
 // every already-running CLI from being able to report its state.
-const HEADER_TOKEN = 'x-switchboard-hook-token';
+const HEADER_TOKEN = 'x-wootonpad-hook-token';
 const HOOK_PATH = '/hook';
 
 // ── Helpers ──

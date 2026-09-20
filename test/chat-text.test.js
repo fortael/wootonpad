@@ -106,12 +106,12 @@ test('a malformed session mention is not a session', () => {
 });
 
 test('a project mention carries its absolute path', () => {
-  const found = findMentions('the fix landed in @project:/Users/x/switchboard today');
+  const found = findMentions('the fix landed in @project:/Users/x/wootonpad today');
   assert.deepEqual(found, [{
     index: 'the fix landed in '.length,
-    length: '@project:/Users/x/switchboard'.length,
+    length: '@project:/Users/x/wootonpad'.length,
     kind: 'project',
-    value: '/Users/x/switchboard',
+    value: '/Users/x/wootonpad',
   }]);
 });
 
@@ -137,7 +137,7 @@ test('a plain file mention still works beside the new kinds', () => {
 // A relative path is not a project: the chip opens a project by path, and half
 // a path opens nothing.
 test('a project mention has to be absolute', () => {
-  assert.deepEqual(findMentions('@project:switchboard').map(m => m.kind), ['file']);
+  assert.deepEqual(findMentions('@project:wootonpad').map(m => m.kind), ['file']);
 });
 
 // ── Path tokens ───────────────────────────────────────────────────

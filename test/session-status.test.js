@@ -186,7 +186,7 @@ test('the settings blob subscribes every event to the authenticated endpoint', (
   const entry = settings.hooks.Stop[0].hooks[0];
   assert.equal(entry.type, 'http');
   assert.equal(entry.url, 'http://127.0.0.1:1234/hook');
-  assert.equal(entry.headers['x-switchboard-hook-token'], 'tok');
+  assert.equal(entry.headers['x-wootonpad-hook-token'], 'tok');
   assert.ok(entry.timeout > 0 && entry.timeout <= 10, 'timeout is short enough that a dead app does not stall a turn');
   // Round-trips as JSON — it is written to a file and read back by the CLI.
   assert.deepEqual(JSON.parse(JSON.stringify(settings)), settings);

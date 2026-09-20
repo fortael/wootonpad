@@ -18,6 +18,14 @@ try {
   }
 }
 
+// macOS: the Electron in node_modules needs a real ad-hoc signature before
+// the notification centre will talk to it — see the script for why.
+try {
+  execSync('node ' + JSON.stringify(path.join(__dirname, 'sign-dev-electron.js')), { stdio: 'inherit' });
+} catch (err) {
+  console.error('sign-dev-electron failed:', err.message);
+}
+
 // macOS/Linux: ad-hoc codesign native modules & fix node-pty permissions
 if (process.platform !== 'win32') {
   // Ad-hoc codesign all .node files so macOS doesn't block them

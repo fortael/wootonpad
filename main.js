@@ -46,25 +46,13 @@ const subagentTasks = require('./subagent-tasks');
 const sessionGroups = require('./session-groups');
 const wootonMcp = require('./wooton-mcp');
 const chatAgent = require('./chat-agent');
+const { toolPolicy, sdkToolRules } = require('./tool-policy');
 const projectFiles = require('./project-files');
 const dockerStatus = require('./docker-status');
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
-try { require('electron-reloader')(module, { watchRenderer: false }); } catch {};
-try {
-  const chokidar = require('chokidar');
-  let _reloadTimer;
-  chokidar.watch(['public/vue-bundle.js', 'public/style.css'], { ignoreInitial: true })
-    .on('change', () => {
-      clearTimeout(_reloadTimer);
-      _reloadTimer = setTimeout(() => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.reloadIgnoringCache();
-        }
-      }, 400);
-    });
-} catch {}
+require('./dev-reload').watchForDevReload({ app, root: __dirname, getWindow: () => mainWindow });
 
 // Clean env for child processes — strip Electron internals that cause nested
 // Electron apps (or node-pty inside them) to malfunction, and a parent Claude
@@ -337,7 +325,19 @@ const liveNotifications = new Set();
 // 'failed'; from then on this run goes straight to AppleScript, which the
 // system does let through (under Script Editor's name, and a click on it
 // cannot come back here).
+// What this build calls itself to macOS. The packaged app is the appId from
+// package.json; running from source it is that plus .dev, which is what
+// scripts/sign-dev-electron.js writes into the bundle.
+const BUNDLE_ID = 'ai.doctly.wootonpad';
+const selfBundleId = () => (app.isPackaged ? BUNDLE_ID : `${BUNDLE_ID}.dev`);
+
 let nativeNotificationsRefused = false;
+// What the system has done with our notifications so far: 'unknown' until one
+// is sent, then 'allowed' once macOS says it showed one, or 'refused' when it
+// says it will not — or takes one and shows nothing, which is what "Allow
+// notifications" being off looks like from in here. Settings reads this,
+// because macOS gives no way to ask outright.
+let notificationState = 'unknown';
 
 /** The alert sound, played by the app — heard whatever the banner does. */
 function playAlertSound() {
@@ -381,10 +381,11 @@ function showNotification({ title, body, sessionId = null, sound = false }) {
     const n = new Notification({ title, body, silent: true });
     liveNotifications.add(n);
     const drop = () => liveNotifications.delete(n);
-    n.on('show', () => settle({ ok: true, via: 'native' }));
+    n.on('show', () => { notificationState = 'allowed'; settle({ ok: true, via: 'native' }); });
     n.on('failed', (_event, error) => {
       drop();
       nativeNotificationsRefused = true;
+      notificationState = 'refused';
       log.warn(`[alerts] native notification refused: ${error}`);
       // Shown either way — even if the wait below already answered "sent".
       appleScriptNotification(title, body).then((shown) => settle(shown
@@ -394,10 +395,41 @@ function showNotification({ title, body, sessionId = null, sound = false }) {
     n.on('click', () => { drop(); showSessionFromOutside(sessionId); });
     n.on('close', drop);
     n.show();
-    // Neither shown nor failed yet: the system took it and has not said more.
-    setTimeout(() => settle({ ok: true, via: 'native' }), 2000);
+    // macOS answers 'show' within a few milliseconds when it puts the banner
+    // up. Silence means it took the notification and dropped it — which used
+    // to be reported as sent, so the sound played over nothing at all. Say
+    // what happened and put it up the other way.
+    setTimeout(() => {
+      if (settled) return;
+      log.warn('[alerts] native notification never shown — falling back');
+      notificationState = 'refused';
+      fallback('macOS took it and showed nothing');
+    }, 2500);
   });
 }
+
+/**
+ * Whether macOS is letting our notifications through, as far as we can tell.
+ *
+ * There is no API to ask: UNUserNotificationCenter reports its authorisation
+ * status to the app that owns it, and Electron does not pass that on. So this
+ * is what our own sends have shown — nothing until one goes out, which is why
+ * Settings says "send one and find out" rather than guessing.
+ */
+ipcMain.handle('notification-permission', () => ({
+  state: notificationState,
+  bundleId: selfBundleId(),
+}));
+
+/** The row for this app in System Settings → Notifications, opened directly. */
+ipcMain.handle('open-notification-settings', async () => {
+  try {
+    await shell.openExternal(`x-apple.systempreferences:com.apple.preference.notifications?id=${selfBundleId()}`);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
 
 ipcMain.handle('test-notification', (_event, opts) => showNotification({
   title: 'Test — a session is waiting for you',
@@ -2522,6 +2554,114 @@ wootonMcp.configure({
     return startManagedSession(canonical, { prompt, name });
   },
 
+  /**
+   * Stop a project's containers, at one of three depths.
+   *
+   * Every mode runs `docker compose` in the project, so it only ever touches
+   * what that project's compose file declares. The deeper two are destructive
+   * — `down` throws away containers and their network, `purge` throws away
+   * volumes, which is data — so the tool asks first by default and the mode
+   * is named in the dialog the user sees.
+   */
+  stopContainers: async ({ projectPath, mode = 'stop' }) => {
+    const canonical = canonicalProjectPath(String(projectPath || '').trim());
+    if (!canonical || !fs.existsSync(hostPath(canonical))) return { ok: false, error: `No such project: ${projectPath}` };
+    const ARGV = {
+      stop: ['docker', 'compose', 'stop'],
+      down: ['docker', 'compose', 'down', '--remove-orphans'],
+      purge: ['docker', 'compose', 'down', '--remove-orphans', '--volumes', '--rmi', 'all'],
+    };
+    const argv = ARGV[mode];
+    if (!argv) return { ok: false, error: `Unknown mode: ${mode}` };
+
+    const { execFile } = require('child_process');
+    const [file, args, options] = projectExecFile(argv, canonical, {
+      encoding: 'utf8', timeout: 120000, env: { ...process.env, PATH: DOCKER_PATH }, maxBuffer: 4 * 1024 * 1024,
+    });
+    return new Promise((resolve) => {
+      execFile(file, args, options, (err, stdout, stderr) => {
+        // compose writes its progress to stderr, so that is the interesting
+        // stream whether or not it worked.
+        const said = String(stderr || stdout || '').trim();
+        if (err) {
+          if (err.code === 'ENOENT') return resolve({ ok: false, error: 'docker is not installed (or not on PATH)' });
+          return resolve({ ok: false, error: said || err.message });
+        }
+        resolve({ ok: true, ran: `Ran ${argv.join(' ')} in ${canonical}`, output: said });
+      });
+    });
+  },
+
+  // ── The user's desktop ──
+  //
+  // Each of these hands something to another program. They ask before running
+  // (tool-policy.js), so by the time one gets here the user has said yes to
+  // this call; what is left is to refuse what should never run at all.
+
+  openUrl: async (url) => {
+    const target = String(url || '').trim();
+    let parsed;
+    try { parsed = new URL(target); } catch { return { ok: false, error: `Not a URL: ${url}` }; }
+    // http(s) only: file: would open anything on the disk in the browser, and
+    // the rest of the schemes are other applications' front doors.
+    if (!/^https?:$/.test(parsed.protocol)) {
+      return { ok: false, error: `Only http and https links open: ${parsed.protocol}// is not one` };
+    }
+    try {
+      await shell.openExternal(parsed.toString());
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  },
+
+  openInApp: async ({ path: target, app: appName, line }) => {
+    const full = hostPath(String(target || '').trim());
+    if (!full || !fs.existsSync(full)) return { ok: false, error: `No such file or folder: ${target}` };
+    if (!appName) {
+      const error = await shell.openPath(full);
+      return error ? { ok: false, error } : { ok: true };
+    }
+    const resolved = APP_NAMES[String(appName).trim().toLowerCase()] || String(appName).trim();
+    if (process.platform !== 'darwin') {
+      const error = await shell.openPath(full);
+      return error ? { ok: false, error } : { ok: true, app: null };
+    }
+    // `open -a` names an application; the line number, where an editor takes
+    // one, is its own argument after --args and is editor-specific, so only
+    // the ones known to accept it get it.
+    const args = ['-a', resolved, full];
+    if (line && LINE_ARG[resolved]) args.push('--args', ...LINE_ARG[resolved](full, line));
+    return new Promise((resolve) => {
+      require('child_process').execFile('open', args, (err) => {
+        if (!err) return resolve({ ok: true, app: resolved });
+        resolve({ ok: false, error: `${resolved} did not open it — is it installed? (${err.message.trim()})` });
+      });
+    });
+  },
+
+  openFolder: async (target) => {
+    const full = hostPath(String(target || '').trim());
+    if (!full || !fs.existsSync(full)) return { ok: false, error: `No such path: ${target}` };
+    // A file is shown inside its folder, selected; a folder is opened.
+    if (fs.statSync(full).isDirectory()) {
+      const error = await shell.openPath(full);
+      return error ? { ok: false, error } : { ok: true, opened: full };
+    }
+    shell.showItemInFolder(full);
+    return { ok: true, opened: path.dirname(full) };
+  },
+
+  openTerminal: async ({ path: target, name }) => {
+    const canonical = canonicalProjectPath(String(target || '').trim());
+    if (!canonical || !fs.existsSync(hostPath(canonical))) return { ok: false, error: `No such folder: ${target}` };
+    if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'The window is not open' };
+    // The renderer owns session rows and the terminal grid, so it starts the
+    // shell — the same call the new-session popover's Terminal option makes.
+    mainWindow.webContents.send('open-terminal-in', { projectPath: canonical, name: name || null });
+    return { ok: true };
+  },
+
   createGroupSession: async ({ projects, prompt, name }) => {
     const created = createSessionGroup({ projects, name });
     if (!created.ok) return created;
@@ -2797,7 +2937,53 @@ ipcMain.handle('buddy-spend', () => managerSpend(chatAgent.current().sessionId))
 // allowedTools below. One list, so the dev panel in Settings says the same.
 // create_todo is here for testing the approval flow end to end — Buddy's
 // reaction, the dialog — with something harmless. Take it out once done.
-const MANAGER_ASK_FIRST = new Set(['delete_session', 'create_todo']);
+// What a person calls an editor, and what macOS calls it. Anything not listed
+// is passed to `open -a` as typed, which is right for an app we have not heard
+// of and wrong for nothing.
+const APP_NAMES = {
+  zed: 'Zed',
+  phpstorm: 'PhpStorm',
+  webstorm: 'WebStorm',
+  pycharm: 'PyCharm',
+  intellij: 'IntelliJ IDEA',
+  'intellij idea': 'IntelliJ IDEA',
+  goland: 'GoLand',
+  rubymine: 'RubyMine',
+  code: 'Visual Studio Code',
+  vscode: 'Visual Studio Code',
+  'vs code': 'Visual Studio Code',
+  cursor: 'Cursor',
+  windsurf: 'Windsurf',
+  sublime: 'Sublime Text',
+  'sublime text': 'Sublime Text',
+  nova: 'Nova',
+  xcode: 'Xcode',
+  finder: 'Finder',
+  preview: 'Preview',
+  safari: 'Safari',
+  chrome: 'Google Chrome',
+  firefox: 'Firefox',
+};
+
+// Editors whose command line takes a line number, and how they take it.
+const LINE_ARG = {
+  Zed: (file, line) => [`${file}:${line}`],
+  'Visual Studio Code': (file, line) => ['--goto', `${file}:${line}`],
+  Cursor: (file, line) => ['--goto', `${file}:${line}`],
+  PhpStorm: (file, line) => ['--line', String(line), file],
+  WebStorm: (file, line) => ['--line', String(line), file],
+  PyCharm: (file, line) => ['--line', String(line), file],
+  GoLand: (file, line) => ['--line', String(line), file],
+  'IntelliJ IDEA': (file, line) => ['--line', String(line), file],
+  'Sublime Text': (file, line) => [`${file}:${line}`],
+};
+
+// Which of the assistant's own tools run, ask first, or are not given at all.
+// The defaults live in tool-policy.js; Settings → Assistant overrides them per
+// tool, stored as `mcpTools`.
+function managerToolPolicy() {
+  return toolPolicy(wootonMcp.TOOL_NAMES, (getSetting('global') || {}).mcpTools);
+}
 // Manual, fixed — the composer shows it without a picker, and
 // sdk-set-permission-mode refuses anything else for this session.
 const MANAGER_PERMISSION_MODE = 'default';
@@ -2832,9 +3018,10 @@ async function ensureManagerChat() {
   // This process's running total starts at zero; bank the last one's first.
   bankManagerSpend(chat.sessionId);
 
-  const allowed = wootonMcp.TOOL_NAMES
-    .filter(name => !MANAGER_ASK_FIRST.has(name))
-    .map(name => `mcp__wooton__${name}`);
+  // Pre-approved, asked about, or withheld — see tool-policy.js. A tool that
+  // asks is simply not pre-approved: the ordinary permission dialog does the
+  // rest.
+  const rules = sdkToolRules(managerToolPolicy());
 
   // The user may rewrite the role and the response style (Settings →
   // Assistant); an empty setting is "use the default", so an improved default
@@ -2849,12 +3036,12 @@ async function ensureManagerChat() {
     permissionMode: MANAGER_PERMISSION_MODE,
     model,
     mcpServers: { wooton: await wootonMcp.wootonMcpServer() },
-    allowedTools: allowed,
+    allowedTools: rules.allowed,
     // What the prompt asks, the toolset guarantees: the assistant manages work
     // and does none of it, so it has nothing to edit a file or run a command
     // with. Kept out of the editable prompt on purpose — rewriting the text in
     // Settings must not be a way to turn the manager into a coder.
-    disallowedTools: chatAgent.FORBIDDEN_TOOLS,
+    disallowedTools: [...chatAgent.FORBIDDEN_TOOLS, ...rules.disallowed],
     systemPrompt: { type: 'preset', preset: 'claude_code', append: prompt },
     // The CLI's auto-memory is written with Write and Edit; those work in its
     // memory folder and nowhere else. Decided in the PreToolUse hook because
@@ -2903,12 +3090,20 @@ ipcMain.handle('buddy-memory', () => {
 // Settings → Assistant lists every wooton tool in a development build, and can
 // run the read-only ones against the live app — so "what can it do" and "what
 // does this tool actually return" have answers without spending a turn.
-ipcMain.handle('wooton-mcp-tools', () => ({
-  dev: !app.isPackaged,
-  tools: wootonMcp.describeTools().map(t => ({ ...t, approval: MANAGER_ASK_FIRST.has(t.name) ? 'asks' : 'auto' })),
-  forbidden: chatAgent.FORBIDDEN_TOOLS,
-  instructions: wootonMcp.INSTRUCTIONS,
-}));
+ipcMain.handle('wooton-mcp-tools', () => {
+  const policy = managerToolPolicy();
+  const defaults = toolPolicy(wootonMcp.TOOL_NAMES);
+  return {
+    dev: !app.isPackaged,
+    tools: wootonMcp.describeTools().map(t => ({
+      ...t,
+      state: policy[t.name],
+      defaultState: defaults[t.name],
+    })),
+    forbidden: chatAgent.FORBIDDEN_TOOLS,
+    instructions: wootonMcp.INSTRUCTIONS,
+  };
+});
 
 ipcMain.handle('wooton-mcp-run', async (_event, name, args) => {
   if (app.isPackaged) return { ok: false, error: 'Only available in development builds' };
@@ -3419,9 +3614,18 @@ ipcMain.handle('get-setting', (_event, key) => {
 });
 
 ipcMain.handle('set-setting', (_event, key, value) => {
+  const before = key === 'global' ? JSON.stringify((getSetting('global') || {}).mcpTools || {}) : null;
   setSetting(key, value);
-  // The menu-bar light follows its setting at once, not at the next launch.
-  if (key === 'global') { applyTraySetting(); trayMenuKey = ''; scheduleTrayUpdate(); }
+  if (key === 'global') {
+    // The menu-bar light follows its setting at once, not at the next launch.
+    applyTraySetting(); trayMenuKey = ''; scheduleTrayUpdate();
+    // Which tools the assistant has is fixed when its session starts, so a
+    // change to that only means anything after a restart. Stopping it here is
+    // enough: the Chat tab brings it back on the next message.
+    if (JSON.stringify(value?.mcpTools || {}) !== before) {
+      stopManagerChat('Tool permissions changed — the assistant restarts with them');
+    }
+  }
   return { ok: true };
 });
 
@@ -4011,6 +4215,14 @@ const SETTING_DEFAULTS = {
   // Unread counters on session rows, Buddy and the tabs. Off unless asked for:
   // a number on every row is a lot of new ink for someone who did not want it.
   unreadCounters: false,
+  // Five strings, or fewer: the buttons over Buddy's chat. A blank one is the
+  // default (src/vue/buddy-suggestions.js).
+  buddyPrompts: [],
+  // Which robot the mascot is — src/vue/buddy-designs.js.
+  buddyDesign: 'classic',
+  // Per-tool overrides for Buddy's own tools: name → 'auto' | 'ask' | 'off'.
+  // Only what differs from tool-policy.js's defaults is stored.
+  mcpTools: {},
   // System notifications — see session-alerts.js. A finished turn notifies
   // only past notifyMinWorkSeconds; a session waiting on you always does, with
   // a sound unless notifySound is off.
@@ -4673,7 +4885,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         // Write to a temp file and use shell substitution to avoid quoting issues.
         // The `cat` runs inside the distribution for a WSL session, so it needs
         // the /mnt/<drive>/… view of the Windows temp file.
-        const tmpPrompt = path.join(os.tmpdir(), `switchboard-prompt-${sessionId}.md`);
+        const tmpPrompt = path.join(os.tmpdir(), `wootonpad-prompt-${sessionId}.md`);
         fs.writeFileSync(tmpPrompt, sessionOptions.appendSystemPrompt);
         const promptPathForShell = isWsl ? windowsToWslPath(tmpPrompt) : tmpPrompt;
         claudeCmd += ` --append-system-prompt "$(cat '${promptPathForShell}')"`;
@@ -4688,7 +4900,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         const hooks = await hookServer();
         const hookUrl = hooks.urlFor(isWsl);
         if (hookUrl) {
-          const tmpSettings = path.join(os.tmpdir(), `switchboard-hooks-${sessionId}.json`);
+          const tmpSettings = path.join(os.tmpdir(), `wootonpad-hooks-${sessionId}.json`);
           fs.writeFileSync(tmpSettings, JSON.stringify(buildHookSettings({ url: hookUrl, token: hooks.token })));
           const settingsPathForShell = isWsl ? windowsToWslPath(tmpSettings) : tmpSettings;
           claudeCmd += ` --settings '${settingsPathForShell}'`;
@@ -4899,7 +5111,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     // spinner indefinitely.
     sessionStatus.remove(realId);
     if (realId !== sessionId) sessionStatus.remove(sessionId);
-    try { fs.unlinkSync(path.join(os.tmpdir(), `switchboard-hooks-${sessionId}.json`)); } catch {}
+    try { fs.unlinkSync(path.join(os.tmpdir(), `wootonpad-hooks-${sessionId}.json`)); } catch {}
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('process-exited', realId, exitCode);
       // If a fork/plan-accept transition re-keyed this session under realId

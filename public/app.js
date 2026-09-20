@@ -894,19 +894,52 @@ async function launchGroupSession({ projects, name, prompt }) {
   return { ok: true, group };
 }
 
-function showNewGroupDialog() {
-  // Real projects only: the group container is not something a group can
-  // contain, and a worktree is reached through its parent.
-  const projects = cachedAllProjects
+// Real projects only: the group container is not something a group can
+// contain, and a worktree is reached through its parent.
+function pickableProjects() {
+  return cachedAllProjects
     .filter(p => !p.isGroupContainer && !/\/\.claude\/worktrees\//.test(p.projectPath))
     .map(p => ({ projectPath: p.projectPath, lastActivity: p.sessions[0]?.modified || null }));
-  window.vueDialogs?.openNewGroup(projects, (answers) => launchGroupSession(answers));
+}
+
+function showNewGroupDialog() {
+  window.vueDialogs?.openNewGroup(pickableProjects(), (answers) => launchGroupSession(answers), { min: 2 });
+}
+
+/**
+ * The command bar's +: which project, and a session in it.
+ *
+ * The same picker the group header opens, asking for one project instead of
+ * two — pick one and it is an ordinary session, pick several and it is a group
+ * session spanning them. One list answers both, so the + does not have to ask
+ * which kind of session you meant before it knows what it is for.
+ */
+function showNewSessionPicker() {
+  window.vueDialogs?.openNewGroup(pickableProjects(), async ({ projects, name, prompt }) => {
+    if (projects.length > 1) return launchGroupSession({ projects, name, prompt });
+    const project = cachedAllProjects.find(p => p.projectPath === projects[0]) || { projectPath: projects[0] };
+    window.vueApp?.setTab?.('sessions');
+    await launchNewSession(project, await resolveDefaultSessionOptions(project), {
+      name: name || null,
+      prompt,
+    });
+    return { ok: true };
+  }, { min: 1 });
 }
 
 // A session the Chat tab's assistant started. main.js has already launched it
 // and queued its prompt; this only gives it a row, marks it as a chat and lets
 // the running dot catch up. The view stays where it is — the user is in the
 // middle of talking to the assistant.
+// Buddy asked for a shell in a folder (wooton-mcp open_terminal). The renderer
+// owns session rows and the terminal grid, so it starts it — the same call the
+// new-session popover's Terminal option makes.
+window.api.onOpenTerminalIn?.(({ projectPath, name }) => {
+  if (!projectPath) return;
+  window.vueApp?.setTab?.('sessions');
+  launchNewSession({ projectPath }, { type: 'terminal' }, name ? { name } : {});
+});
+
 window.api.onExternalSessionStarted?.((info) => {
   if (!info?.sessionId || sessionMap.has(info.sessionId)) return;
   const now = new Date().toISOString();
@@ -1155,8 +1188,10 @@ setTimeout(() => {
     if (global.sessionMaxAgeDays) {
       sessionMaxAgeDays = global.sessionMaxAgeDays;
     }
-    if (global.terminalTheme && TERMINAL_THEMES[global.terminalTheme]) {
-      currentThemeName = global.terminalTheme;
+    // A setting written before a theme was renamed still names the old key.
+    const themeName = window.resolveTerminalTheme?.(global.terminalTheme) || global.terminalTheme;
+    if (themeName && TERMINAL_THEMES[themeName]) {
+      currentThemeName = themeName;
       TERMINAL_THEME = getTerminalTheme();
     }
     if (global.monoFont && window.TERMINAL_FONTS?.[global.monoFont]) {
@@ -1167,14 +1202,16 @@ setTimeout(() => {
     // terminal and leaves whatever the CLI already painted mis-wrapped until
     // its next redraw.
     window._applyUiMetrics?.(global);
-    if (global.uiFont && global.uiFont !== 'default' && window.TERMINAL_FONTS?.[global.uiFont]) {
-      document.documentElement.style.setProperty('--font-ui', window.TERMINAL_FONTS[global.uiFont].family);
-    }
+    // The same path the settings panel takes when the choice changes, so boot
+    // and a later change cannot disagree about what the font applies to.
+    window._applyUiFont?.(global.uiFont || 'default');
     if (global.showAvatars === false) {
       document.body.classList.add('hide-avatars');
     }
     window._setReduceMotion?.(global.reduceMotion === true);
     window._setUnreadCounters?.(global.unreadCounters === true);
+    window._setBuddyPrompts?.(global.buddyPrompts);
+    window._setBuddyDesign?.(global.buddyDesign);
   }
 })();
 
@@ -1192,12 +1229,39 @@ window._setUnreadCounters = (val) => {
   if (window.vueStore) window.vueStore.unreadCounters = val === true;
 };
 
+window._setBuddyDesign = (id) => {
+  // Picked in the sidebar before it moved into Settings; the old choice is
+  // still someone's choice, so it is the fallback until they make a new one.
+  const stored = id || (() => { try { return localStorage.getItem('buddyDesign'); } catch { return null; } })();
+  if (window.vueStore) window.vueStore.buddyDesign = stored || 'classic';
+};
+
+window._setBuddyPrompts = (list) => {
+  if (window.vueStore) window.vueStore.buddyPrompts = Array.isArray(list) ? list : [];
+};
+
 window._applyUiFont = (fontKey) => {
-  if (fontKey === 'default' || !window.TERMINAL_FONTS?.[fontKey]) {
-    document.documentElement.style.removeProperty('--font-ui');
-  } else {
-    document.documentElement.style.setProperty('--font-ui', window.TERMINAL_FONTS[fontKey].family);
+  const root = document.documentElement;
+  const font = window.TERMINAL_FONTS?.[fontKey];
+  if (fontKey === 'default' || !font) {
+    root.style.removeProperty('--font-ui');
+    root.style.removeProperty('--font-mono');
+    return;
   }
+  // Both, because the app's chrome is split between them: dialogs and labels
+  // inherit --font-ui, while most panels ask for --font-mono by name. Setting
+  // only the first left the choice showing in patches — one dialog in the
+  // chosen face, the sidebar beside it in another. The setting says "the
+  // application interface", so it is the interface's font.
+  //
+  // The app's own mono stays at the end of the stack: a font a machine turns
+  // out not to have falls back to the one that ships with the app rather than
+  // to whatever `monospace` means there.
+  const named = font.family.split(',').map(s => s.trim())
+    .filter(s => s && !/^(monospace|sans-serif|serif|ui-monospace|system-ui)$/i.test(s));
+  const stack = [...named, "'JetBrains Mono'", 'monospace'].join(', ');
+  root.style.setProperty('--font-ui', stack);
+  root.style.setProperty('--font-mono', stack);
 };
 
 // Called by SettingsPanelApp (and window.closeSettingsViewer) after settings closes.
@@ -1693,6 +1757,7 @@ window.__sb = {
   // The + on the Grouped sessions header. Picks the projects, then starts the
   // session through the same path as any other — see launchGroupSession.
   newGroupSession: () => showNewGroupDialog(),
+  newSessionPicker: () => showNewSessionPicker(),
 
   // Puts the session view away without touching the session. The PTY keeps
   // running and the row stays in the sidebar — this is "stop looking at it",

@@ -70,11 +70,11 @@ test('everything that is not Claude’s is left alone', () => {
 test('deliberate configuration survives the strip', () => {
   const out = stripInheritedClaudeEnv({
     ...NESTED,
-    CLAUDE_CONFIG_DIR: '/Users/zakhar/.switchboard/accounts/acc-1',
+    CLAUDE_CONFIG_DIR: '/Users/zakhar/.wootonpad/accounts/acc-1',
     CLAUDE_CODE_USE_BEDROCK: '1',
     CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8192',
   });
-  assert.equal(out.CLAUDE_CONFIG_DIR, '/Users/zakhar/.switchboard/accounts/acc-1');
+  assert.equal(out.CLAUDE_CONFIG_DIR, '/Users/zakhar/.wootonpad/accounts/acc-1');
   assert.equal(out.CLAUDE_CODE_USE_BEDROCK, '1');
   assert.equal(out.CLAUDE_CODE_MAX_OUTPUT_TOKENS, '8192');
 });

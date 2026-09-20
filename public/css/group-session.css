@@ -678,13 +678,18 @@
 
 .sbx-buddy__stage {
   position: relative;
-  width: 80px;
-  height: 80px;
+  width: min(100%, 240px);
 }
 
+/* A portrait design has no bubble to leave room for. */
+.sbx-buddy:not(.art-classic) .sbx-buddy__speech { min-height: 22px; }
+
+/* The scene is 40×20 units (buddy-scene.js): six screen pixels each at full
+   width, so a detailed design's half-unit pixel lands on three whole ones. */
 .sbx-buddy__art {
-  width: 80px;
-  height: 80px;
+  display: block;
+  width: 100%;
+  aspect-ratio: 2 / 1;
   image-rendering: pixelated;
   overflow: visible;
 }
@@ -698,6 +703,85 @@
 .px-a { fill: var(--px-a); }
 .px-e { fill: var(--px-e); }
 .px-w { fill: var(--px-w); }
+/* Each of these leans on another colour when nothing names it — but a
+   design's palette must win, or it is drawn half in the theme's colours and
+   half in its own (Amber's scanlines came out white on the light theme). */
+.px-g { fill: var(--px-g, var(--px-e)); animation: sbx-buddy-glow 0.6s steps(2, end) infinite; }
+.px-r { fill: var(--px-r, var(--px-k)); opacity: 0.55; }
+.px-l { fill: var(--px-l, var(--px-e)); }
+.px-p { fill: var(--brain-fill); }
+.px-o { fill: var(--px-o, color-mix(in srgb, var(--text-primary) 12%, transparent)); }
+.px-f { fill: var(--px-f, var(--px-k)); opacity: 0.45; }
+/* Only a design's own palette sets these (buddy-designs.js). */
+.px-x { fill: var(--px-x, var(--px-t)); }
+.px-i { fill: var(--px-i, var(--px-s)); }
+
+/* ─── The scene round the robot ─── */
+
+/* How full the brain is — the mascot's and the one in Buddy's header. */
+.sbx-buddy,
+.sbx-chatview {
+  --brain-low: #2fb8a6;
+  --brain-mid: #ffd166;
+  --brain-high: #ffb347;
+  --brain-full: #ff6b6b;
+}
+
+.sbx-buddy__brain { --brain-fill: var(--brain-low); cursor: help; }
+.sbx-buddy__brain.is-mid { --brain-fill: var(--brain-mid); }
+.sbx-buddy__brain.is-high { --brain-fill: var(--brain-high); }
+.sbx-buddy__brain.is-full { --brain-fill: var(--brain-full); }
+/* Nearly full: it throbs. */
+.sbx-buddy__brain.is-full .px-p { animation: sbx-buddy-glow 1.1s ease-in-out infinite; }
+.sbx-buddy__brain.is-unknown { opacity: 0.5; }
+
+.sbx-buddy__caption {
+  fill: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: 2.2px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─── Which robot ─── */
+
+/* Above the stage: the designs to choose between. Small enough to ignore. */
+.sbx-buddy__picker {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 3px;
+}
+
+.sbx-buddy__pick {
+  padding: 1px 6px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: none;
+  color: var(--text-tertiary);
+  font-size: 10px;
+  line-height: 1.5;
+  cursor: pointer;
+}
+
+.sbx-buddy__pick:hover { color: var(--text-secondary); background: var(--surface-hover); }
+
+.sbx-buddy__pick.is-on {
+  border-color: color-mix(in srgb, var(--chat-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--chat-accent) 14%, transparent);
+  color: var(--text-primary);
+}
+
+.sbx-buddy__drone { cursor: pointer; }
+.sbx-buddy__drone .px-b { fill: var(--px-b); }
+
+/* A drone's light says what its session is doing: steady and dim idle,
+   blinking green at work, fast amber when it waits on you. */
+.sbx-buddy__dronelight { fill: #7df9ff; opacity: 0.6; }
+.sbx-buddy__dronelight.is-running { fill: #6ee7a0; opacity: 1; animation: sbx-buddy-glow 0.9s steps(2, end) infinite; }
+.sbx-buddy__dronelight.is-waiting { fill: #ffb347; opacity: 1; animation: sbx-buddy-glow 0.4s steps(2, end) infinite; }
+.sbx-buddy__dronelight.is-done { fill: #7da7ff; opacity: 1; }
+
+.sbx-buddy__mark { animation: sbx-buddy-glow 0.3s steps(2, end) infinite; }
 
 /* A pixel creature moves in whole steps, so every loop steps. */
 .sbx-buddy__bob {
@@ -944,11 +1028,11 @@
   margin-right: 6px;
 }
 
-/* Buddy's header: what the conversation has cost, in place of a status badge
-   that only ever said "Active". */
+/* Buddy's header: how full its context is and what the conversation has
+   cost, in place of a status badge that only ever said "Active". */
 .sbx-chatview__spend {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   gap: 6px;
   padding: 2px 10px;
   border: 1px solid color-mix(in srgb, var(--chat-accent) 28%, var(--border-subtle));
@@ -960,9 +1044,20 @@
 }
 
 .sbx-chatview__tokens {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: var(--text-secondary);
   font-size: var(--text-2xs);
 }
+
+/* The brain takes the colour the mascot's brain fills with. */
+.sbx-chatview__tokens .sb-icon { color: var(--brain-low); }
+.sbx-chatview__tokens.is-mid .sb-icon { color: var(--brain-mid); }
+.sbx-chatview__tokens.is-high .sb-icon { color: var(--brain-high); }
+.sbx-chatview__tokens.is-full .sb-icon { color: var(--brain-full); }
+
+.sbx-chatview__cap { color: var(--text-tertiary); }
 
 /* Same size as the tokens, after them, quieter: an estimate, not a count. */
 .sbx-chatview__cost {
@@ -1066,3 +1161,162 @@
 /* Settings → Notifications: what the test send reported. */
 .settings-notify-result { margin-top: 4px; color: var(--status-running); }
 .settings-notify-result.is-warn { color: var(--status-warning); }
+
+/* ─── A group's older sessions, on its header ───────────────────── */
+
+/* The list already ends in a "+ N older" line, but on a long group that line
+   is a scroll away from the header you just opened. Same toggle, in reach —
+   drawn like the Archived toggle in the TODO panel, since it says the same
+   kind of thing about the same kind of list. Only when there is something
+   behind it. */
+.project-older-btn {
+  flex: none;
+  margin-left: var(--space-2);
+  padding: 1px var(--space-2);
+  border: none;
+  border-radius: var(--radius-full, 999px);
+  background: none;
+  color: var(--text-tertiary);
+  font-family: inherit;
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.project-older-btn:hover { background: var(--surface-card-hover); color: var(--text-secondary); }
+.project-older-btn.is-on { color: var(--text-secondary); }
+
+/* ─── Buddy: the questions over the conversation ────────────────── */
+
+/* A line of them under the header, before the transcript: one click types
+   one into the composer. They wrap on a narrow window rather than scroll,
+   since a question half off the edge is not a question you can read. */
+/* Under the field, over the line of controls: the composer is the one part of
+   the chat nothing scrolls under or fades out. */
+.sbx-buddyprompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.sbx-buddyprompts__btn {
+  padding: 3px 10px;
+  border: 1px solid color-mix(in srgb, var(--chat-accent) 25%, var(--border-subtle));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chat-accent) 7%, transparent);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+
+.sbx-buddyprompts__btn:hover {
+  border-color: color-mix(in srgb, var(--chat-accent) 55%, transparent);
+  color: var(--text-primary);
+}
+
+/* Settings → Buddy: the five boxes behind those buttons. */
+.sbx-promptbox { display: block; width: 100%; }
+.sbx-promptbox + .sbx-promptbox { margin-top: var(--space-2); }
+
+/* A project in the composer's `@` strip reads as a project, not a path. */
+.sbx-sdk__command-avatar {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-xs);
+  font-size: 8px;
+  flex: none;
+}
+
+/* ─── Settings → Assistant: what Buddy can do ───────────────────── */
+
+/* The head is a row now, not one button: the name opens the details, the two
+   boxes on the right decide whether the tool is given and whether it stops to
+   ask. */
+.sbx-mcptool__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.sbx-mcptool__title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sbx-mcptool__opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+
+.sbx-mcptool__opt.is-disabled { opacity: 0.4; }
+
+/* Thirty rows of switches: the full-size one is a control for a settings row,
+   not for a list item. Same switch, two thirds of it. */
+.sb-switch--sm { width: 28px; height: 16px; }
+.sb-switch--sm .sb-switch-thumb { width: 12px; height: 12px; top: 2px; left: 2px; }
+.sb-switch--sm.sb-switch--on .sb-switch-thumb { transform: translateX(12px); }
+
+/* ─── Settings → Buddy: which robot the mascot is ───────────────── */
+
+.sbx-mascot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.sbx-mascot__picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  flex: 1 1 220px;
+  align-content: flex-start;
+}
+
+.sbx-mascot__pick {
+  padding: 2px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+
+.sbx-mascot__pick:hover { color: var(--text-primary); background: var(--surface-hover); }
+
+.sbx-mascot__pick.is-on {
+  border-color: color-mix(in srgb, var(--chat-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--chat-accent) 16%, transparent);
+  color: var(--text-primary);
+}
+
+/* The preview is the live component, so it keeps the mascot's own stage
+   sizing; here it only needs a lane of its own beside the names. */
+.sbx-mascot__preview {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  width: 200px;
+  text-align: center;
+}

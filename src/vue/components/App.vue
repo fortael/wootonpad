@@ -38,9 +38,9 @@
     <CommandBar
       :model-value="store.searchQuery"
       :placeholder="searchPlaceholder"
-      :add-title="`Quick open (${modLabel}K)`"
+      add-title="New session — pick a project, or several for one session across them"
       @update:model-value="onSearchValue"
-      @add="openSpotlight"
+      @add="newSessionPicker"
       @spotlight="openSpotlight"
     >
       <template #field-actions>
@@ -566,6 +566,10 @@ function doClearSearch() {
 // crosses all of them — see SpotlightApp.vue.
 const modLabel = /Mac|iPhone|iPad/.test(navigator.platform) ? '\u2318' : 'Ctrl+';
 function openSpotlight() { store.spotlightOpen = true; }
+
+// The + starts a session; ⌘K (the chip beside it, and the shortcut) is still
+// how the palette opens.
+function newSessionPicker() { window.__sb?.newSessionPicker?.(); }
 
 // ── Theme ────────────────────────────────────────────────────────
 // Mirrored onto <html data-theme> — public/css/theme-light.css keys off it.

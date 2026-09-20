@@ -470,14 +470,25 @@
             <div class="settings-field">
               <div class="settings-field-info">
                 <span class="settings-label">Try it</span>
-                <div class="settings-description">Send a test notification and play the sound.</div>
+                <div class="settings-description">
+                  Sends in five seconds, so you can click another window first: macOS holds back
+                  banners from the app you are looking at, and this app is the one you are looking at
+                  while you press the button.
+                </div>
                 <div v-if="notifyTest" class="settings-description settings-notify-result" :class="{ 'is-warn': notifyTest.warn }">
                   {{ notifyTest.text }}
+                </div>
+                <div v-if="notifyDenied" class="settings-description settings-notify-result is-warn">
+                  macOS is not showing them. In System Settings → Notifications → WootonPad,
+                  <strong>Allow notifications</strong> has to be on — everything else here has no say over that.
                 </div>
               </div>
               <div class="settings-field-control">
                 <button type="button" class="settings-reset-btn" :disabled="notifyTesting" @click="testNotification">
-                  {{ notifyTesting ? 'Sending…' : 'Send test' }}
+                  {{ notifyCountdown ? `Sending in ${notifyCountdown}…` : notifyTesting ? 'Sending…' : 'Send test' }}
+                </button>
+                <button v-if="isMac" type="button" class="settings-reset-btn" @click="openNotificationSettings">
+                  System Settings
                 </button>
               </div>
             </div>
@@ -528,6 +539,60 @@
               </div>
             </div>
 
+            <!-- Which robot the mascot is. The preview is the real thing,
+                 drawn from the same component the sidebar uses — with its
+                 brain, drones and speech left off, since none of that is what
+                 is being picked. -->
+            <div class="settings-field settings-field--column">
+              <div class="settings-field-info">
+                <span class="settings-label">Mascot</span>
+                <div class="settings-description">
+                  The robot at the foot of Buddy's sidebar. Classic is the one that acts out what
+                  Buddy is doing; the rest are the same states in another body.
+                </div>
+              </div>
+              <div class="settings-field-control settings-field-control--full sbx-mascot">
+                <div class="sbx-mascot__picks">
+                  <button
+                    v-for="d in DESIGNS"
+                    :key="d.id"
+                    type="button"
+                    class="sbx-mascot__pick"
+                    :class="{ 'is-on': d.id === form.buddyDesign }"
+                    :title="d.about"
+                    @click="form.buddyDesign = d.id"
+                  >{{ d.label }}</button>
+                </div>
+                <div class="sbx-mascot__preview">
+                  <PixelBuddy :design="form.buddyDesign" bare state="idle" />
+                  <span class="settings-description">{{ mascotAbout }}</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- The buttons over its chat. Five boxes, each showing the
+                 default it replaces: empty is "keep that one". -->
+            <div class="settings-field settings-field--column">
+              <div class="settings-field-info">
+                <span class="settings-label">Quick questions</span>
+                <div class="settings-description">
+                  The buttons over Buddy's chat. Clicking one types it into the composer without sending.
+                  Leave a box empty to keep the question it shows.
+                </div>
+              </div>
+              <div class="settings-field-control settings-field-control--full">
+                <input
+                  v-for="(fallback, i) in BUDDY_PROMPT_DEFAULTS"
+                  :key="i"
+                  v-model="form.buddyPrompts[i]"
+                  type="text"
+                  class="settings-input sbx-promptbox"
+                  :placeholder="fallback"
+                  spellcheck="false"
+                >
+              </div>
+            </div>
+
             <!-- How it writes, apart from what it does: reworking the role
                  should not mean re-typing the formatting rules. -->
             <div class="settings-field settings-field--column">
@@ -562,16 +627,17 @@
                model sees it, with the read-only tools runnable against the
                live app. For knowing what the assistant can do and debugging
                what a tool returns — see wooton-mcp.js. -->
-          <div v-if="tab === 'assistant' && !isProject && mcpInfo?.dev" class="settings-section">
+          <div v-if="tab === 'assistant' && !isProject && mcpInfo" class="settings-section">
             <div class="settings-section-title">
-              MCP tools <span class="sbx-mcptools__dev">dev</span>
+              What Buddy can do <span v-if="mcpInfo.dev" class="sbx-mcptools__dev">dev</span>
             </div>
             <div class="settings-section-note">
-              {{ mcpInfo.tools.length }} tools on the <code>wooton</code> server ·
-              {{ mcpInfo.tools.filter(t => t.approval === 'auto').length }} run without asking ·
-              {{ mcpInfo.tools.filter(t => t.approval === 'asks').length }} ask first.
+              {{ mcpInfo.tools.length }} tools ·
+              {{ toolCount('auto') }} run when it asks for them ·
+              {{ toolCount('ask') }} ask you first ·
+              {{ toolCount('off') }} switched off.
               Never given: <code v-for="(name, i) in mcpInfo.forbidden" :key="name">{{ name }}{{ i < mcpInfo.forbidden.length - 1 ? ', ' : '' }}</code>.
-              Read-only tools can be run here against the live app.
+              A change takes effect on Buddy's next message: it restarts with the tools it is given.
             </div>
 
             <div
@@ -580,13 +646,34 @@
               class="sbx-mcptool"
               :class="{ 'is-open': openTool === tool.name }"
             >
-              <button type="button" class="sbx-mcptool__head" @click="openTool = openTool === tool.name ? '' : tool.name">
-                <span class="sbx-mcptool__chev">{{ openTool === tool.name ? '▾' : '▸' }}</span>
-                <code class="sbx-mcptool__name">{{ tool.name }}</code>
-                <span class="sbx-mcptool__badge" :class="tool.readOnly ? 'is-read' : 'is-write'">{{ tool.readOnly ? 'read' : 'write' }}</span>
-                <span class="sbx-mcptool__badge" :class="tool.approval === 'asks' ? 'is-asks' : 'is-auto'">{{ tool.approval === 'asks' ? 'asks first' : 'auto' }}</span>
-                <span class="sbx-mcptool__count">{{ tool.params.length }} param{{ tool.params.length === 1 ? '' : 's' }}</span>
-              </button>
+              <div class="sbx-mcptool__head">
+                <button type="button" class="sbx-mcptool__title" @click="openTool = openTool === tool.name ? '' : tool.name">
+                  <span class="sbx-mcptool__chev">{{ openTool === tool.name ? '▾' : '▸' }}</span>
+                  <code class="sbx-mcptool__name">{{ tool.name }}</code>
+                  <span class="sbx-mcptool__badge" :class="tool.readOnly ? 'is-read' : 'is-write'">{{ tool.readOnly ? 'read' : 'write' }}</span>
+                </button>
+                <!-- Two decisions, not three states in a picker: is it given at
+                     all, and does it stop to ask. Off wins — a tool it does not
+                     have cannot ask. The same switches as everywhere else in
+                     Settings, at the size a list of thirty of them can take. -->
+                <span class="sbx-mcptool__opt">
+                  <SbSwitch
+                    class="sb-switch--sm"
+                    :model-value="toolState(tool) !== 'off'"
+                    @update:model-value="on => setToolState(tool, on ? (tool.defaultState === 'off' ? 'auto' : tool.defaultState) : 'off')"
+                  />
+                  <span>On</span>
+                </span>
+                <span class="sbx-mcptool__opt" :class="{ 'is-disabled': toolState(tool) === 'off' }">
+                  <SbSwitch
+                    class="sb-switch--sm"
+                    :model-value="toolState(tool) === 'ask'"
+                    :disabled="toolState(tool) === 'off'"
+                    @update:model-value="ask => setToolState(tool, ask ? 'ask' : 'auto')"
+                  />
+                  <span>Ask first</span>
+                </span>
+              </div>
               <div class="sbx-mcptool__desc">{{ tool.description }}</div>
 
               <div v-if="openTool === tool.name" class="sbx-mcptool__body">
@@ -600,7 +687,7 @@
                 </table>
                 <div v-else class="settings-description">No parameters.</div>
 
-                <div v-if="tool.readOnly" class="sbx-mcptool__try">
+                <div v-if="tool.readOnly && mcpInfo.dev" class="sbx-mcptool__try">
                   <textarea
                     v-model="toolArgs[tool.name]"
                     class="settings-textarea sbx-mcptool__args"
@@ -707,6 +794,9 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue';
 import { store } from '../store.js';
+import { DEFAULT_PROMPTS as BUDDY_PROMPT_DEFAULTS } from '../buddy-suggestions.js';
+import { DESIGNS, designById } from '../buddy-designs.js';
+import PixelBuddy from './PixelBuddy.vue';
 import SbSwitch from './SbSwitch.vue';
 import SbButton from './SbButton.vue';
 import FilterTabs from './FilterTabs.vue';
@@ -723,22 +813,39 @@ const isMac = /Mac/.test(navigator.platform);
 // build is refused without a word).
 const notifyTesting = ref(false);
 const notifyTest = ref(null);
+const notifyCountdown = ref(0);
+// What the system has done with the notifications sent so far — main.js can
+// only know this by having sent one, so it stays 'unknown' until then.
+const notifyState = ref('unknown');
+const notifyDenied = computed(() => notifyState.value === 'refused');
 
+function openNotificationSettings() {
+  window.api.openNotificationSettings?.();
+}
+
+// Five seconds of countdown before it goes: a banner is suppressed while its
+// own app is in front, which is exactly where you are when you press this.
+// Clicking away during the count is the point of the wait.
 async function testNotification() {
   notifyTesting.value = true;
   notifyTest.value = null;
   try {
+    for (notifyCountdown.value = 5; notifyCountdown.value > 0; notifyCountdown.value--) {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
     const res = await window.api.testNotification?.({ sound: form.notifySound !== false });
     if (!res) notifyTest.value = { text: 'This build cannot send notifications.', warn: true };
     else if (res.via === 'native') notifyTest.value = { text: 'Sent. Clicking a notification opens its session.' };
     else if (res.via === 'applescript') {
       notifyTest.value = {
-        text: `macOS refused the app's own notification${res.error ? ` (${res.error})` : ''}, so it came through AppleScript — it shows, but clicking it will not open the session. A signed build does not need this.`,
+        text: `macOS did not show the app's own notification${res.error ? ` (${res.error})` : ''}. It went out through AppleScript instead, which macOS may also be holding back — and a banner from there cannot open the session when clicked.`,
         warn: true,
       };
     } else notifyTest.value = { text: res.error || 'Nothing could be shown.', warn: true };
   } finally {
     notifyTesting.value = false;
+    notifyCountdown.value = 0;
+    notifyState.value = (await window.api.notificationPermission?.().catch(() => null))?.state || 'unknown';
   }
 }
 const projectPath = computed(() => store.settingsProjectPath);
@@ -853,7 +960,12 @@ const form = reactive({
   summaryLanguage: '',
   managerChatPrompt: '',
   managerChatStyle: '',
+  buddyPrompts: ['', '', '', '', ''],
+  mcpTools: {},
+  buddyDesign: 'classic',
 });
+
+const mascotAbout = computed(() => designById(form.buddyDesign).about);
 
 // The assistant's built-in prompt, fetched from main — the one place it lives
 // (chat-agent.js). An edit equal to it is stored as "use the default", so a
@@ -864,6 +976,18 @@ const assistantRestarting = ref(false);
 
 // ── MCP tools (development builds only) ──
 const mcpInfo = ref(null);
+
+// The state of one tool: what has been changed in this panel, else what main
+// reported. 'auto' runs, 'ask' stops for a dialog, 'off' is not given at all.
+function toolState(tool) {
+  return form.mcpTools[tool.name] || tool.state;
+}
+
+function setToolState(tool, state) {
+  form.mcpTools = { ...form.mcpTools, [tool.name]: state };
+}
+
+const toolCount = (state) => (mcpInfo.value?.tools || []).filter(t => toolState(t) === state).length;
 const openTool = ref('');
 const toolArgs = reactive({});
 const toolOut = reactive({});
@@ -957,7 +1081,7 @@ async function loadSettings() {
   if (!isProject.value) {
     form.visibleSessionCount = current.visibleSessionCount ?? 10;
     form.sessionMaxAgeDays = current.sessionMaxAgeDays ?? 3;
-    form.terminalTheme = current.terminalTheme ?? 'wootonpadDark';
+    form.terminalTheme = window.resolveTerminalTheme?.(current.terminalTheme) ?? current.terminalTheme ?? 'wootonpadDark';
     form.mcpEmulation = current.mcpEmulation !== false;
     form.sdkMode = current.sessionMode === 'sdk';
     form.reduceMotion = current.reduceMotion === true;
@@ -981,7 +1105,11 @@ async function loadSettings() {
     form.managerChatPrompt = current.managerChatPrompt || managerChatDefault.value;
     managerStyleDefault.value = (await window.api.managerChatDefaultStyle?.().catch(() => '')) || '';
     mcpInfo.value = (await window.api.wootonMcpTools?.().catch(() => null)) || null;
+    notifyState.value = (await window.api.notificationPermission?.().catch(() => null))?.state || 'unknown';
     form.managerChatStyle = current.managerChatStyle || managerStyleDefault.value;
+    form.buddyPrompts = BUDDY_PROMPT_DEFAULTS.map((_, i) => current.buddyPrompts?.[i] || '');
+    form.mcpTools = { ...(current.mcpTools || {}) };
+    form.buddyDesign = current.buddyDesign || store.buddyDesign || 'classic';
     originalMcpEmulation = form.mcpEmulation;
 
     try { shellProfiles.value = await window.api.getShellProfiles(); } catch { shellProfiles.value = []; }
@@ -1048,6 +1176,15 @@ async function save() {
       summaryLanguage: form.summaryLanguage || '',
       managerChatPrompt: storedManagerPrompt(),
       managerChatStyle: storedManagerStyle(),
+      // A box left at its default is stored empty, so a later change to the
+      // defaults reaches anyone who never wrote their own.
+      buddyPrompts: form.buddyPrompts.map((q, i) => (q.trim() === BUDDY_PROMPT_DEFAULTS[i] ? '' : q.trim())),
+      // Only what differs from the app's defaults, so a later change to those
+      // reaches anyone who never touched a tool.
+      buddyDesign: form.buddyDesign || 'classic',
+      mcpTools: Object.fromEntries((mcpInfo.value?.tools || [])
+        .map(t => [t.name, toolState(t)])
+        .filter(([name, state]) => state !== (mcpInfo.value.tools.find(t => t.name === name)?.defaultState))),
     };
   }
 
@@ -1060,6 +1197,8 @@ async function save() {
     window._setShowAvatars?.(settings.showAvatars);
     window._setReduceMotion?.(settings.reduceMotion);
     window._setUnreadCounters?.(settings.unreadCounters);
+    window._setBuddyPrompts?.(settings.buddyPrompts);
+    window._setBuddyDesign?.(settings.buddyDesign);
     if (window.TERMINAL_FONTS?.[settings.monoFont]) {
       window._applyTerminalFont?.(window.TERMINAL_FONTS[settings.monoFont].family);
     }

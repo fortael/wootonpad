@@ -38,6 +38,11 @@ const DOING = {
   toggle_todo: 'Ticking a box',
   set_todo_due: 'Moving a deadline',
   archive_todo: 'Tidying TODOs',
+  stop_containers: 'Stopping containers',
+  open_url: 'Opening a link',
+  open_in_app: 'Opening an editor',
+  open_folder: 'Opening a folder',
+  open_terminal: 'Opening a terminal',
 };
 
 // The SDK's own tools Buddy is allowed.

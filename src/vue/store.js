@@ -17,6 +17,15 @@ export const store = reactive({
   sdkSessionIds: new Set(),
   activeSessionId: null,
   sessionBusyState: new Map(),
+  // sessionId → { totalTokens, maxTokens } — what the context holds, as the
+  // composer's ring last read it (SessionSdkApp.vue). Buddy's brain reads it
+  // too, so the two never disagree.
+  contextUsage: new Map(),
+  // Settings → Buddy: what the buttons over its chat say. Blank entries fall
+  // back to the defaults in buddy-suggestions.js.
+  buddyPrompts: [],
+  // Settings → Buddy: which robot the mascot is (src/vue/buddy-designs.js).
+  buddyDesign: 'classic',
   attentionSessions: new Set(),
   responseReadySessions: new Set(),
   // Sessions whose finished turn the user has already seen but not yet left.

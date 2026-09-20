@@ -111,7 +111,14 @@
         <span class="sbx-block__count">{{ buddyStateLabel }}</span>
       </header>
       <div v-if="!buddyCollapsed" class="sbx-chatside__foot">
-        <PixelBuddy :state="buddyState" :activity="activity" />
+        <PixelBuddy
+          :state="buddyState"
+          :activity="activity"
+          :sessions="fleet.drones"
+          :extra-drones="fleet.extra"
+          :context-tokens="contextTokens"
+          @open-session="id => openSession({ sessionId: id })"
+        />
       </div>
     </section>
   </div>
@@ -129,6 +136,9 @@ import TodoProgress from './TodoProgress.vue';
 import { useToday, overdueCount, nextDueHint } from '../todo-dates.js';
 import { assistantText, lastAnswerText, mentionsIn } from '../buddy-mentions.js';
 import { activityFor } from '../buddy-activity.js';
+import { pickDrones } from '../buddy-scene.js';
+import { activeSessions, stateFromStore } from '../session-column.js';
+import { sessionTitle } from '../session-title.js';
 
 // ── The last answer ───────────────────────────────────────────────
 //
@@ -255,6 +265,17 @@ function toggleBuddy() {
 const buddyStateLabel = computed(() => ({
   idle: 'idle', busy: 'working', waiting: 'needs you', stopped: 'asleep',
 }[buddyState.value] || ''));
+
+// Every live session is a drone round the mascot, in the Active rail's order
+// so the ones waiting on you are always among those shown.
+const fleet = computed(() => pickDrones(
+  activeSessions(store.projects, stateFromStore(store), store.activePtyIds),
+  id => store.activePtyIds.has(id) && id !== chatId.value,
+  s => sessionTitle(s),
+));
+
+// What Buddy's context holds, as the composer's ring last read it.
+const contextTokens = computed(() => store.contextUsage.get(chatId.value)?.totalTokens ?? null);
 
 // The same reading the chat header's badge makes of the assistant's session.
 const buddyState = computed(() => {

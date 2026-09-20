@@ -23,18 +23,26 @@
       </div>
 
       <div class="sbx-sesshead__controls">
-        <!-- What this conversation has cost. No Active/Stopped badge: Buddy is
-             always one message away from running, so the word says nothing;
-             the mascot in the sidebar shows what it is doing. -->
+        <!-- How full Buddy's head is, and what the conversation has cost. No
+             Active/Stopped badge: Buddy is always one message away from
+             running, so the word says nothing; the mascot in the sidebar
+             shows what it is doing. -->
         <span
-          v-if="spend.cost || spend.tokens"
+          v-if="gauge.known || spend.cost"
           class="sbx-chatview__spend"
           :data-tooltip="spendTooltip"
         >
-          <!-- Tokens first — the exact figure. The cost is an estimate at list
-               price, so it comes second, quieter, and says so with a tilde. -->
-          <span class="sbx-chatview__tokens">{{ formatTokens(spend.tokens) }} tokens</span>
-          <span class="sbx-chatview__cost">~{{ formatCost(spend.cost) }}</span>
+          <!-- The context now — the same number as the composer's ring, out of
+               the 200k the mascot's brain fills to. Not the tokens processed
+               over the conversation: every step re-reads the whole context,
+               so that sum runs into millions and says nothing about how full
+               it is. It is in the tooltip. The cost is an estimate at list
+               price, so it comes second, quieter, with a tilde. -->
+          <span v-if="gauge.known" class="sbx-chatview__tokens" :class="`is-${gauge.level}`">
+            <SbIcon name="brain" :size="12" />
+            {{ gauge.label }}<span class="sbx-chatview__cap"> / {{ CONTEXT_CAP / 1000 }}k</span>
+          </span>
+          <span v-if="spend.cost" class="sbx-chatview__cost">~{{ formatCost(spend.cost) }}</span>
         </span>
         <button
           type="button"
@@ -97,6 +105,7 @@ import SessionSdkApp from './SessionSdkApp.vue';
 import SessionPanelRail from './SessionPanelRail.vue';
 import SessionSidePanelApp from './SessionSidePanelApp.vue';
 import { SUGGESTION_GROUPS, insertIntoBuddyComposer } from '../buddy-suggestions.js';
+import { contextGauge, CONTEXT_CAP } from '../buddy-scene.js';
 
 const panelOpen = computed(() => !!store.chatSidePanelTab && !!store.chatSession);
 
@@ -125,10 +134,16 @@ const spend = computed(() => {
   return { ...s, tokens: (s.input || 0) + (s.output || 0) + (s.cacheRead || 0) + (s.cacheWrite || 0) };
 });
 
+// The context, as the composer's ring last read it — see buddy-scene.js.
+const gauge = computed(() => contextGauge(store.contextUsage.get(chatId.value)?.totalTokens));
+
 const spendTooltip = computed(() => {
   const s = spend.value;
+  const g = gauge.value;
   return [
+    g.known ? `Context now: ${fmt(g.tokens)} tokens — ${g.pct}% of ${CONTEXT_CAP / 1000}k` : 'Context: not measured yet',
     `This conversation: ~${formatCost(s.cost)} (an estimate at list price)`,
+    `Processed over the conversation: ${formatTokens(s.tokens)} tokens — every step re-reads the context, so this grows much faster than it`,
     `Input ${fmt(s.input)} · Output ${fmt(s.output)}`,
     `Cache read ${fmt(s.cacheRead)} · Cache write ${fmt(s.cacheWrite)}`,
   ].join('\n');
@@ -209,6 +224,10 @@ async function reset() {
     const res = await window.api.managerChatReset();
     if (!res?.ok) { store.chatError = `Could not start a new conversation: ${res?.error || 'unknown error'}`; return; }
     store.sdkSessionIds.add(res.sessionId);
+    // A new conversation starts with an empty head: what the old one filled
+    // is not this one's context, and a resumed id can come back the same.
+    store.contextUsage.delete(chatId.value);
+    store.contextUsage.delete(res.sessionId);
     store.chatSession = asChatSession(res);
     fresh.value = true;
     await window.__sb?.pollActive?.();

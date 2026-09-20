@@ -43,7 +43,7 @@ const SAMPLE = [
   '',
   `${E}36m∴${E}0m Updated ${E}1mterminal-themes.js${E}0m — added the design-system palette`,
   `${E}32m+  wootonpadDark: { label: 'WootonPad Dark', mode: 'dark' }${E}0m`,
-  `${E}31m−  switchboard:    { label: 'WootonPad' }${E}0m`,
+  `${E}31m−  midnight:       { label: 'WootonPad' }${E}0m`,
   '',
   `  ${E}30m███${E}31m███${E}32m███${E}33m███${E}34m███${E}35m███${E}36m███${E}37m███${E}0m  normal`,
   `  ${E}90m███${E}91m███${E}92m███${E}93m███${E}94m███${E}95m███${E}96m███${E}97m███${E}0m  bright`,

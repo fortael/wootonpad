@@ -84,17 +84,26 @@
     </div>
   </Teleport>
 
-  <!-- New Group Session Dialog
-       One session over several projects. Pick at least two; the name and the
-       first prompt are optional — the name defaults to the projects joined,
-       and without a prompt the session simply opens and waits. -->
+  <!-- New Session Dialog, by project
+       Pick one project for an ordinary session, or several for one session
+       that spans them. The name and the first prompt are optional — the name
+       defaults to the projects joined, and without a prompt the session
+       simply opens and waits. The group header's + opens the same dialog
+       asking for two, since a group of one is not a group. -->
   <Teleport to="body">
     <div v-if="groupOpen" class="new-session-overlay" @mousedown.self="closeNewGroup">
       <div class="new-session-dialog sbx-groupdlg">
-        <h3>New group session</h3>
+        <h3>{{ groupMin > 1 ? 'New group session' : 'New session' }}</h3>
         <div class="add-project-hint">
-          One session that works across several projects. It gets a folder of its
-          own with a CLAUDE.md naming every project, and keeps a MEMORY.md for the task.
+          <template v-if="groupMin > 1">
+            One session that works across several projects. It gets a folder of its
+            own with a CLAUDE.md naming every project, and keeps a MEMORY.md for the task.
+          </template>
+          <template v-else>
+            One project starts an ordinary session in it. Several start one session
+            that spans them: its own folder, a CLAUDE.md naming every project, and a
+            MEMORY.md for the task.
+          </template>
         </div>
 
         <input
@@ -121,8 +130,9 @@
         </div>
 
         <div class="sbx-groupdlg__picked">
-          <GroupAvatar v-if="groupPicked.size" :project-paths="[...groupPicked]" :size="28" />
-          <span>{{ groupPicked.size }} selected{{ groupPicked.size < 2 ? ' — pick at least two' : '' }}</span>
+          <GroupAvatar v-if="groupPicked.size > 1" :project-paths="[...groupPicked]" :size="28" />
+          <ProjectAvatar v-else-if="groupPicked.size === 1" class="sbx-groupdlg__avatar" :project-path="[...groupPicked][0]" />
+          <span>{{ groupPicked.size }} selected{{ pickHint }}</span>
         </div>
 
         <input
@@ -143,7 +153,7 @@
         <div class="add-project-error" v-show="groupError">{{ groupError }}</div>
         <div class="new-session-actions">
           <button class="new-session-cancel-btn" @click="closeNewGroup">Cancel</button>
-          <button class="btn-green" :disabled="groupPicked.size < 2 || groupBusy" @click="startNewGroup">
+          <button class="btn-green" :disabled="groupPicked.size < groupMin || groupBusy" @click="startNewGroup">
             {{ groupBusy ? 'Starting…' : 'Start' }}
           </button>
         </div>
@@ -325,6 +335,9 @@ const groupPrompt = ref('');
 const groupError = ref('');
 const groupBusy = ref(false);
 const groupFilterRef = ref(null);
+// How many projects this dialog insists on: one from the command bar's +,
+// two from the group header, which only ever starts groups.
+const groupMin = ref(1);
 let groupOnStart = null;
 
 const baseName = (p) => String(p || '').split('/').filter(Boolean).pop() || p;
@@ -341,7 +354,15 @@ const filteredGroupProjects = computed(() => {
 const groupNamePlaceholder = computed(() =>
   groupPicked.value.size ? [...groupPicked.value].map(baseName).join(' + ') : '');
 
-function openNewGroup(projects, onStart) {
+// What is still missing, or what picking more would make it.
+const pickHint = computed(() => {
+  const n = groupPicked.value.size;
+  if (n < groupMin.value) return groupMin.value > 1 ? ' — pick at least two' : ' — pick a project';
+  if (n === 1) return ' — one project, an ordinary session';
+  return ' — one session across them';
+});
+
+function openNewGroup(projects, onStart, { min = 1 } = {}) {
   groupProjects.value = projects || [];
   groupPicked.value = new Set();
   groupFilter.value = '';
@@ -349,6 +370,7 @@ function openNewGroup(projects, onStart) {
   groupPrompt.value = '';
   groupError.value = '';
   groupBusy.value = false;
+  groupMin.value = min;
   groupOnStart = onStart;
   groupOpen.value = true;
   nextTick(() => groupFilterRef.value?.focus());
@@ -366,7 +388,7 @@ function toggleGroupProject(path) {
 }
 
 async function startNewGroup() {
-  if (groupPicked.value.size < 2 || groupBusy.value || !groupOnStart) return;
+  if (groupPicked.value.size < groupMin.value || groupBusy.value || !groupOnStart) return;
   groupBusy.value = true;
   groupError.value = '';
   try {

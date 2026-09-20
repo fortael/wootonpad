@@ -85,11 +85,11 @@ const stubs = {
     searchFtsRecreated: false,
   }),
   ws: { WebSocketServer: function () { return permissive(); } },
-  // Dev hot-reload. Both watch the source tree, and the watchers they leave
-  // behind are handles nothing here can reach to close — they are what kept this
-  // process alive after the last subtest until CI cancelled the job.
+  // Dev hot-reload (dev-reload.js). It watches the source tree, and the
+  // watchers it leaves behind are handles nothing here can reach to close —
+  // they are what kept this process alive after the last subtest until CI
+  // cancelled the job.
   chokidar: { watch: () => permissive() },
-  'electron-reloader': () => {},
   // Everything the handlers shell out to. Unstubbed, the suite runs real
   // commands on whatever host it lands on — `du -sk`, `docker compose ps`, and
   // any wsl.exe that happens to be on PATH — so it passed or failed by accident

@@ -38,6 +38,12 @@ npm run build:linux   # AppImage + deb
 
 Tests use Node built-in `node:test` runner. No Jest, no Mocha.
 
+Dependency versions are exact (`.npmrc` has `save-exact=true`); the lockfile
+pins the rest. `dependencies` is what the packaged app loads at runtime — main
+process `require`s plus the xterm files `public/index.html` loads from
+`node_modules`. Anything only bundled (CodeMirror, marked, Vue) or only used by
+scripts is a devDependency. Check with `npm audit` after changing either.
+
 ## Architecture
 
 WootonPad = **Electron app**. Session manager + IDE emulator for Claude Code CLI. Standard Electron split:
@@ -49,7 +55,7 @@ WootonPad = **Electron app**. Session manager + IDE emulator for Claude Code CLI
 ### Data flow
 
 1. Claude Code stores sessions as `.jsonl` under `~/.claude/projects/<encoded-path>/`.
-2. `main.js` watches that dir, keeps **SQLite cache** (`~/.wootonpad/switchboard.db` via `db.js` — dir renamed, file not) of session metadata + full-text search index.
+2. `main.js` watches that dir, keeps **SQLite cache** (`~/.wootonpad/wootonpad.db` via `db.js`) of session metadata + full-text search index. Accounts made before the rename keep their `~/.switchboard/accounts/<id>` folders: Claude Code encodes a session's project path into the folder name it stores the transcript under, so moving one would orphan its sessions.
 3. Cache filled by **Worker thread** (`workers/scan-projects.js`) on first load, or incrementally by `session-cache.js` when watcher sees `.jsonl` changes.
 4. Renderer calls `window.api.getProjectSets()` → IPC → `buildProjectSets()` for the project/session tree. Returns `{ visible, all }` — archive-filtered and unfiltered — in one pass: sidebar and project page need both, neither derivable from the other in renderer.
 
@@ -57,7 +63,7 @@ WootonPad = **Electron app**. Session manager + IDE emulator for Claude Code CLI
 
 | File | Role |
 |------|------|
-| `db.js` | SQLite schema, migrations, all DB read/write helpers |
+| `db.js` | SQLite schema, migrations, all DB read/write helpers (`~/.wootonpad/wootonpad.db`, renamed from switchboard.db on first open) |
 | `session-cache.js` | In-memory + DB cache; incremental folder refresh |
 | `session-transitions.js` | Detects fork/plan-accept transitions in active PTY sessions by watching for new `.jsonl` files |
 | `mcp-bridge.js` | Per-session WebSocket MCP server — registers WootonPad as VS Code–compatible IDE, so Claude CLI sends diffs/file-opens here, not to a real editor |
@@ -72,6 +78,7 @@ WootonPad = **Electron app**. Session manager + IDE emulator for Claude Code CLI
 | `todo-due.js` | Due dates on TODO notes: parsing, status, labels, Buddy's agenda — shared by main and the renderer |
 | `session-alerts.js` | When a session is worth a system notification (waiting on you; finished a turn longer than the threshold) |
 | `tray-status.js` | Menu-bar status light (macOS): state from session statuses, icons drawn as bitmaps |
+| `dev-reload.js` | Running from source only: relaunch on a main-process edit, reload the window on a rebuilt bundle |
 | `project-files.js` | The assistant's only file access: one directory listing or one file (≤64 KB) inside a known project or group; refuses `..`, symlinks, secrets, binaries |
 | `public/app.js` | Renderer entry; top-level state, routing between sidebar views |
 | `public/sidebar.js` | Left sidebar: project/session list, search, starred/archived filters |
@@ -173,8 +180,18 @@ written with Write/Edit, Buddy keeps Read/Write/Edit, fenced to that folder by
 `chatAgent.fileToolVerdict` in the PreToolUse hook (`preToolUse` in
 sdk-session.js — the only gate that also sees Read, which never prompts). The
 side panel's Memory pane lists the real files (`buddy-memory` IPC, folder
-watched for `buddy-memory-changed`). It links
-sessions and projects as `@session:<uuid>` / `@project:<path>`; `chat-text.js`
+watched for `buddy-memory-changed`). The mascot at the foot of its sidebar comes in several
+designs (`src/vue/buddy-designs.js`, each with its own palette, picked above
+it and remembered): the classic 16×16 robot acts pose by pose in
+PixelBuddy.vue, and every other design is rigged instead — its sprite is cut
+into eyes, mouth and lights, which `buddy-rig.js` blinks, looks, talks and
+bounces for whatever the session is doing. Over its
+chat sit five quick questions (`buddyPrompts`, defaults in
+`src/vue/buddy-suggestions.js`, rewritten in Settings → Buddy); clicking one
+types it into the composer rather than sending it. It links
+sessions and projects as `@session:<uuid>` / `@project:<path>` — `@` in its
+composer completes the project half (`project-mentions.js`), where the same
+key completes a file in an ordinary session; `chat-text.js`
 turns those into chips in assistant text too. Sessions it starts arrive in the
 renderer as `external-session-started`.
 
@@ -201,6 +218,13 @@ puts a note away: out of lists, badges and the agenda, still on disk.
   `notifySound`); a turn ending notifies only after `notifyMinWorkSeconds`.
   Never for the session on screen in a focused window — the renderer reports
   it as `visible-session`. Clicks come back as `open-session-from-outside`.
+  Running from source, the Electron in node_modules is only linker-signed, and
+  macOS then refuses `UNUserNotificationCenter` ("UNErrorDomain error 1") — so
+  `scripts/sign-dev-electron.js` (postinstall, and `npm start`) re-signs that
+  bundle ad-hoc, which is enough to make native notifications work and be
+  clickable. It skips while that Electron is running; main.js keeps an
+  AppleScript fallback for when the native path is refused anyway, and those
+  banners cannot open the session.
 - **Menu bar** (`tray-status.js`, setting `trayIcon`, macOS): idle ring,
   spinning arc while any live session runs, orange disc while one waits; its
   menu lists them. Follows the setting on save (`set-setting` for `global`).

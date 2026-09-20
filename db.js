@@ -16,11 +16,27 @@ if (!fs.existsSync(DATA_DIR)) {
 
 // Directory renamed, file not: the name inside is nobody's business but
 // SQLite's, and renaming it would mean a third migration for no gain.
-const DB_PATH = path.join(DATA_DIR, 'switchboard.db');
+const DB_PATH = path.join(DATA_DIR, 'wootonpad.db');
+
+// The file was called switchboard.db when the app was, and renaming the
+// directory around it left that name sitting there. Moved on first open, with
+// the journal files beside it — SQLite recreates those, but leaving a -wal
+// from another database next to this one is asking for trouble.
+(() => {
+  const old = path.join(DATA_DIR, 'switchboard.db');
+  if (fs.existsSync(DB_PATH) || !fs.existsSync(old)) return;
+  for (const suffix of ['', '-wal', '-shm']) {
+    try {
+      if (fs.existsSync(old + suffix)) fs.renameSync(old + suffix, DB_PATH + suffix);
+    } catch (err) {
+      console.error('[db] could not rename', old + suffix, err.message);
+    }
+  }
+})();
 
 // Migrate from old locations if needed
 const OLD_LOCATIONS = [
-  path.join(os.homedir(), '.claude', 'browser', 'switchboard.db'),
+  path.join(os.homedir(), '.claude', 'browser', 'switchboard.db'),   // a much older home
   path.join(os.homedir(), '.claude', 'browser', 'session-browser.db'),
   path.join(os.homedir(), '.claude', 'session-browser.db'),
 ];

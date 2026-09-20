@@ -175,6 +175,18 @@ into shared tasks, track git state and TODO notes. You do not write code
 yourself — when work needs doing in a repository, start a session for it and
 watch it, because that session is the thing that edits files.
 
+Containers: list_containers shows what is running, stop_containers stops it.
+Three modes, and they are not the same thing — "stop" is reversible, "down"
+removes the containers and their network, "purge" also deletes volumes and
+images, which means data. When the user says "stop the containers" without
+saying how far, ask them which of the three they mean rather than picking.
+
+You can hand things to the rest of the machine: open_url puts a link in the
+browser, open_in_app opens a file or a project in an editor the user names,
+open_folder shows it in Finder, and open_terminal gives them a shell in a
+folder. Those four act on the user's desktop rather than inside WootonPad, so
+they ask before running unless the user has said otherwise in Settings.
+
 You can look inside a project one file at a time — list_project_files, then
 read_project_file — for quick informational questions: a README, a CLAUDE.md, a
 manifest. Anything deeper than two or three files is a research session.
@@ -646,6 +658,79 @@ const SPECS = [
       const result = ok(dep('setGroupProjects')(groupId, projects), 'set_group_projects');
       const members = (result.group?.projects || projects).map(p => `  ${projectRef(p)}`);
       return [`Group ${groupId} now holds ${members.length} projects:`, ...members].join('\n');
+    },
+  },
+
+  {
+    name: 'stop_containers',
+    description: 'Stop a project\'s Docker containers. mode: "stop" leaves everything in place and only stops them; "down" stops and removes the containers, their network and orphans; "purge" is "down" plus its volumes and images — data in those volumes is gone. Ask the user which they want before a "down" or a "purge"; "stop" is the one that costs nothing to undo.',
+    schema: {
+      projectPath: z.string().describe('Absolute path of the project whose compose file this is.'),
+      mode: z.enum(['stop', 'down', 'purge']).optional().describe('"stop" (default) · "down" removes containers and orphans · "purge" also removes volumes and images.'),
+    },
+    async handler({ projectPath, mode }) {
+      const res = await dep('stopContainers')({ projectPath, mode: mode || 'stop' });
+      if (!res?.ok) return `Could not do it: ${res?.error || 'unknown error'}`;
+      const said = res.output ? `\n${oneLine(res.output, 300)}` : '';
+      return `${res.ran}${said}`;
+    },
+  },
+
+  // ── The user's machine ──
+  //
+  // Everything here hands something to another program and returns; none of it
+  // reads anything back. They ask before running by default (tool-policy.js):
+  // a window opening unasked is startling, and a URL opening unasked is worse.
+
+  {
+    name: 'open_url',
+    description: 'Open a link in the user\'s browser. http and https only. Use it when the user asks to open a page, a pull request, a dashboard.',
+    schema: {
+      url: z.string().describe('Absolute http(s) URL.'),
+    },
+    async handler({ url }) {
+      const res = await dep('openUrl')(String(url || '').trim());
+      return res?.ok ? `Opened ${url}` : `Could not open it: ${res?.error || 'unknown error'}`;
+    },
+  },
+
+  {
+    name: 'open_in_app',
+    description: 'Open a file or folder in an editor or another application — "open src/main.js in Zed", "open this project in PhpStorm". Name the application as the user says it (Zed, PhpStorm, WebStorm, VS Code, Cursor, Sublime Text, Finder); omit it for whatever the system opens that file with.',
+    schema: {
+      path: z.string().describe('Absolute path to the file or folder.'),
+      app: z.string().optional().describe('Application name, as a person would say it. Omit for the system default.'),
+      line: z.number().int().optional().describe('Line to put the caret on, where the editor supports it.'),
+    },
+    async handler({ path: target, app: appName, line }) {
+      const res = await dep('openInApp')({ path: String(target || '').trim(), app: appName, line });
+      if (!res?.ok) return `Could not open it: ${res?.error || 'unknown error'}`;
+      return `Opened ${target}${res.app ? ` in ${res.app}` : ''}${line ? ` at line ${line}` : ''}`;
+    },
+  },
+
+  {
+    name: 'open_folder',
+    description: 'Show a folder in the file manager (Finder on macOS). Given a file, its folder is opened with the file selected.',
+    schema: {
+      path: z.string().describe('Absolute path to a folder, or to a file inside the folder to show.'),
+    },
+    async handler({ path: target }) {
+      const res = await dep('openFolder')(String(target || '').trim());
+      return res?.ok ? `Opened ${res.opened || target}` : `Could not open it: ${res?.error || 'unknown error'}`;
+    },
+  },
+
+  {
+    name: 'open_terminal',
+    description: 'Open a terminal session in WootonPad in a folder — a plain shell, not a Claude session. Use it when the user wants to run something themselves.',
+    schema: {
+      path: z.string().describe('Absolute path the shell starts in.'),
+      name: z.string().optional().describe('What to call the session in the sidebar.'),
+    },
+    async handler({ path: target, name }) {
+      const res = await dep('openTerminal')({ path: String(target || '').trim(), name });
+      return res?.ok ? `Opened a terminal in ${target}` : `Could not open it: ${res?.error || 'unknown error'}`;
     },
   },
 

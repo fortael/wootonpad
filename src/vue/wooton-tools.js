@@ -87,6 +87,9 @@ const SCOPE_LABEL = {
 
 const joinDetail = (...parts) => parts.filter(Boolean).join(' · ');
 
+/** The last segment of a path — what a person calls the file. */
+const baseName = (p) => String(p || '').split('/').filter(Boolean).pop() || '';
+
 /** A new session's name and first prompt — what it was started to do. */
 function startDetail(input) {
   return joinDetail(
@@ -174,6 +177,30 @@ const TOOLS = {
     icon: 'archive', kind: 'write',
   },
   delete_session: { verb: 'Deleted session', icon: 'trash-2', kind: 'danger' },
+  stop_containers: {
+    verb: (input) => (input.mode === 'purge' ? 'Purged containers'
+      : input.mode === 'down' ? 'Took containers down' : 'Stopped containers'),
+    icon: 'container', kind: (input) => (input.mode === 'purge' ? 'danger' : 'write'),
+    detail: (input) => baseName(input.projectPath),
+  },
+  // The four that act on the desktop rather than inside the app.
+  open_url: {
+    verb: 'Opened link', icon: 'square-arrow-out-up-right', kind: 'write',
+    detail: (input) => String(input.url || ''),
+  },
+  open_in_app: {
+    verb: (input) => (input.app ? `Opened in ${input.app}` : 'Opened file'),
+    icon: 'file', kind: 'write',
+    detail: (input) => joinDetail(baseName(input.path), input.line ? `line ${input.line}` : ''),
+  },
+  open_folder: {
+    verb: 'Opened folder', icon: 'folder-open', kind: 'write',
+    detail: (input) => baseName(input.path),
+  },
+  open_terminal: {
+    verb: 'Opened a terminal', icon: 'terminal', kind: 'write',
+    detail: (input) => baseName(input.path),
+  },
   set_group_projects: {
     verb: 'Changed group projects', icon: 'layers', kind: 'write',
     detail: (input) => (input.groupId ? `group ${input.groupId}` : ''),
@@ -239,7 +266,9 @@ export function describeWootonCall(name, input) {
     icon: spec?.icon || 'bot',
     // A tool nobody has classified is drawn neutral rather than alarming: the
     // server's own instructions are what keep the destructive ones in check.
-    kind: spec?.kind || 'read',
+    // A few tools are only dangerous in one of their modes, so this reads the
+    // arguments the same way the verb does.
+    kind: (typeof spec?.kind === 'function' ? spec.kind(args) : spec?.kind) || 'read',
     projects: projectsOf(args),
     sessions: sessionsOf(args),
     detail,

@@ -16,6 +16,14 @@
       <span class="arrow" @click.stop="toggle">&#9660;</span>
       <span class="project-header-avatar project-header-avatar--groups" @click.stop="toggle"><SbIcon name="layers" :size="13" /></span>
       <span class="project-name" @click.stop="toggle">Grouped sessions</span>
+      <button
+        v-if="olderItems.length"
+        type="button"
+        class="project-older-btn"
+        :class="{ 'is-on': showOlder }"
+        :data-tooltip="showOlder ? 'Hide the older sessions' : `Show ${olderItems.length} older session${olderItems.length === 1 ? '' : 's'}`"
+        @click.stop="showOlder = !showOlder"
+      >{{ showOlder ? 'Hide older' : `Older (${olderItems.length})` }}</button>
       <button class="project-archive-btn" data-tooltip="Archive all sessions" @click.stop="archiveAll"><SbIcon name="archive" :size="13" tone="muted" /></button>
       <button class="project-new-btn" data-tooltip="New group session" @click.stop="newGroup"><SbIcon name="plus" :size="13" tone="muted" /></button>
     </div>
@@ -25,6 +33,14 @@
       <span class="arrow" @click.stop="toggle">&#9660;</span>
       <ProjectAvatar class="project-header-avatar" :project-path="project.projectPath" @click.stop="toggle" />
       <span class="project-name" @click.stop="toggle">{{ shortName }}</span>
+      <button
+        v-if="olderItems.length"
+        type="button"
+        class="project-older-btn"
+        :class="{ 'is-on': showOlder }"
+        :data-tooltip="showOlder ? 'Hide the older sessions' : `Show ${olderItems.length} older session${olderItems.length === 1 ? '' : 's'}`"
+        @click.stop="showOlder = !showOlder"
+      >{{ showOlder ? 'Hide older' : `Older (${olderItems.length})` }}</button>
       <!-- Jumps to the project view. Lives on the group header, not on the
            session rows: the target is the same for every row in the group,
            and this is where the other project-scoped controls already are.

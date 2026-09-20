@@ -19,7 +19,7 @@ const mk = (...segments) => {
   return dir;
 };
 
-mk('Users', 'me', 'Projects', 'switchboard');
+mk('Users', 'me', 'Projects', 'wootonpad');
 mk('Users', 'me', 'Projects', 'wooton-pad');
 mk('Users', 'me', 'Projects', 'my.api');
 mk('Users', 'me', 'Projects', 'deep', 'nested', 'thing');
@@ -33,8 +33,8 @@ test.after(() => fs.rmSync(root, { recursive: true, force: true }));
 
 test('a plain path round-trips', () => {
   assert.equal(
-    decodeFolderName(relEncoded('switchboard'), root),
-    path.join(root, 'Users/me/Projects/switchboard'),
+    decodeFolderName(relEncoded('wootonpad'), root),
+    path.join(root, 'Users/me/Projects/wootonpad'),
   );
 });
 
@@ -72,12 +72,12 @@ test('deriveProjectPath falls back to the folder name when no transcript names t
   // session is opened and abandoned, and deleting the last real session leaves
   // exactly that behind. Reading cwd out of it yields nothing.
   const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wp-projects-'));
-  const folderName = encode(path.join(root, 'Users/me/Projects/switchboard'));
+  const folderName = encode(path.join(root, 'Users/me/Projects/wootonpad'));
   const folder = path.join(projectsDir, folderName);
   fs.mkdirSync(folder);
   fs.writeFileSync(path.join(folder, 'stub.jsonl'), JSON.stringify({ type: 'mode', mode: 'normal' }) + '\n');
 
-  assert.equal(deriveProjectPath(folder, folderName), path.join(root, 'Users/me/Projects/switchboard'));
+  assert.equal(deriveProjectPath(folder, folderName), path.join(root, 'Users/me/Projects/wootonpad'));
   fs.rmSync(projectsDir, { recursive: true, force: true });
 });
 

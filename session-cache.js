@@ -337,7 +337,7 @@ function buildProjectsFromCache(showArchived, snapshot = readProjectsSnapshot())
   // Group by projectPath, not on-disk folder name. Multiple ~/.claude/projects/<folder>/
   // directories can resolve to the same projectPath (Claude Code's folder-name encoding
   // scheme has changed over time, leaving legacy stragglers around), so we merge them into
-  // a single sidebar group to avoid duplicate-id collisions in the morphdom render.
+  // a single sidebar group to avoid duplicate keys in the sidebar render.
   // Only insert a project entry once we have a session that survives the archive filter —
   // otherwise folders whose sessions are all archived would appear in the sidebar as
   // undismissable phantom entries.

@@ -21,11 +21,11 @@ function configure(next) {
   ctx = { ...ctx, ...next };
 }
 
-// The command's file name is `create-switchboard-schedule.md` and stays that
-// way: it already sits in users' ~/.claude/commands, and a rename would leave
-// the old one behind for `/` to offer alongside the new one.
+// The command is `/create-wootonpad-schedule`. It was create-switchboard-*
+// until the app finished changing its name; the old file is deleted when this
+// one is written, or `/` would offer both.
 const SCHEDULE_CREATOR_TEMPLATE = `---
-name: create-switchboard-schedule
+name: create-wootonpad-schedule
 description: Create a new WootonPad scheduled task for this project
 ---
 
@@ -103,11 +103,12 @@ Default permission-mode is \`acceptEdits\`. Always include at least \`Read\` and
 function ensureScheduleCreatorCommand() {
   try {
     const commandsDir = ctx.getCommandsDir();
-    const commandPath = path.join(commandsDir, 'create-switchboard-schedule.md');
+    const commandPath = path.join(commandsDir, 'create-wootonpad-schedule.md');
     if (!fs.existsSync(commandPath)) {
       fs.mkdirSync(commandsDir, { recursive: true });
       fs.writeFileSync(commandPath, SCHEDULE_CREATOR_TEMPLATE);
     }
+    try { fs.unlinkSync(path.join(commandsDir, 'create-switchboard-schedule.md')); } catch {}
   } catch (err) {
     console.error('[schedule] Failed to create schedule command:', err);
   }

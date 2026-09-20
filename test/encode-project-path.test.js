@@ -11,7 +11,7 @@ test('keeps alphanumerics and dashes unchanged', () => {
 });
 
 test('short path returned as-is (under 200 chars)', () => {
-  const p = '/Users/zakhar/Projects/switchboard';
+  const p = '/Users/zakhar/Projects/wootonpad';
   const result = encodeProjectPath(p);
   assert.ok(result.length <= 200);
   assert.ok(!result.includes('/'));

@@ -56,6 +56,28 @@ export const SUGGESTION_GROUPS = [
 ];
 
 /**
+ * The row of buttons over the conversation: the questions asked so often that
+ * typing them again is a tax. Five, because that is what fits on one line in
+ * a narrow window, and five is enough to cover a morning: what is on, what
+ * happened, what next, who is waiting, what is unfinished.
+ *
+ * Settings → Buddy replaces any of them; a blank one falls back to the
+ * default, so clearing a box is how you get the original back.
+ */
+export const DEFAULT_PROMPTS = [
+  'What are my TODOs?',
+  'What did I work on recently?',
+  'What should I focus on now?',
+  'Which sessions are waiting for me?',
+  'What is left unpushed?',
+];
+
+/** The five to draw, the saved ones over the defaults. */
+export function promptButtons(saved) {
+  return DEFAULT_PROMPTS.map((fallback, i) => String(saved?.[i] || '').trim() || fallback);
+}
+
+/**
  * Put a suggestion into Buddy's composer — not send it: the user may want to
  * change it, and one with "…" in it is only half written. The caret goes to
  * the first "…", which is replaced, so typing fills the gap.

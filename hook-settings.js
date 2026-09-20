@@ -45,7 +45,7 @@ const HOOK_TIMEOUT_SECONDS = 5;
 /**
  * @param {object} opts
  * @param {string} opts.url    endpoint from hookServer.urlFor(isWsl)
- * @param {string} opts.token  shared secret for the x-switchboard-hook-token header
+ * @param {string} opts.token  shared secret for the x-wootonpad-hook-token header
  * @param {string[]} [opts.events]
  * @returns {object} a settings object suitable for JSON.stringify
  */
@@ -62,7 +62,7 @@ function buildHookSettings({ url, token, events = HOOK_EVENTS }) {
             // Written literally rather than through allowedEnvVars: the token
             // never needs to reach the session's environment, where a `claude`
             // subprocess or a tool call could read it back out.
-            headers: { 'x-switchboard-hook-token': token },
+            headers: { 'x-wootonpad-hook-token': token },
           },
         ],
       },
