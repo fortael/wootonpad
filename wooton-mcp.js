@@ -187,6 +187,13 @@ open_folder shows it in Finder, and open_terminal gives them a shell in a
 folder. Those four act on the user's desktop rather than inside WootonPad, so
 they ask before running unless the user has said otherwise in Settings.
 
+Any page the user asks for is fair game, whether or not it has to do with
+code, and building its URL is part of the job — the usual caution about
+making up URLs is about links you offer unasked, not ones the user asked you
+to open. "Google X" or "find X in the browser" is open_url with
+https://www.google.com/search?q=<X, URL-encoded>. You cannot read the results;
+putting them on screen is the whole task.
+
 You can look inside a project one file at a time — list_project_files, then
 read_project_file — for quick informational questions: a README, a CLAUDE.md, a
 manifest. Anything deeper than two or three files is a research session.
@@ -663,10 +670,12 @@ const SPECS = [
 
   {
     name: 'stop_containers',
-    description: 'Stop a project\'s Docker containers. mode: "stop" leaves everything in place and only stops them; "down" stops and removes the containers, their network and orphans; "purge" is "down" plus its volumes and images — data in those volumes is gone. Ask the user which they want before a "down" or a "purge"; "stop" is the one that costs nothing to undo.',
+    description: 'Stop a project\'s Docker containers. mode: "stop" leaves everything in place and only stops them; "down" stops and removes the containers, their network and orphans; "purge" is "down" plus its volumes and images — data in those volumes is gone. The mode is the user\'s to choose: unless they named one ("just stop", "down", "with rmi and volumes"), ask which of the three before calling. A yes to your own "stop it?" does not name one.',
     schema: {
       projectPath: z.string().describe('Absolute path of the project whose compose file this is.'),
-      mode: z.enum(['stop', 'down', 'purge']).optional().describe('"stop" (default) · "down" removes containers and orphans · "purge" also removes volumes and images.'),
+      // Required, so a call cannot quietly mean "stop" — the model has to have
+      // an answer, which is the prompt to go and get one.
+      mode: z.enum(['stop', 'down', 'purge']).describe('"stop" only stops · "down" removes containers and orphans · "purge" also removes volumes and images.'),
     },
     async handler({ projectPath, mode }) {
       const res = await dep('stopContainers')({ projectPath, mode: mode || 'stop' });
@@ -684,9 +693,9 @@ const SPECS = [
 
   {
     name: 'open_url',
-    description: 'Open a link in the user\'s browser. http and https only. Use it when the user asks to open a page, a pull request, a dashboard.',
+    description: 'Open a link in the user\'s browser — any page they ask for, code-related or not: a pull request, a dashboard, a site, a search. Asked to google something or find it in the browser, open https://www.google.com/search?q=<the query, URL-encoded>. Build the URL yourself; that is expected here. http and https only.',
     schema: {
-      url: z.string().describe('Absolute http(s) URL.'),
+      url: z.string().describe('Absolute http(s) URL — for a search, https://www.google.com/search?q=…'),
     },
     async handler({ url }) {
       const res = await dep('openUrl')(String(url || '').trim());
@@ -705,7 +714,7 @@ const SPECS = [
     async handler({ path: target, app: appName, line }) {
       const res = await dep('openInApp')({ path: String(target || '').trim(), app: appName, line });
       if (!res?.ok) return `Could not open it: ${res?.error || 'unknown error'}`;
-      return `Opened ${target}${res.app ? ` in ${res.app}` : ''}${line ? ` at line ${line}` : ''}`;
+      return `Opened ${target}${res.app ? ` in ${res.app}` : ''}${line && res.app ? ` at line ${line}` : ''}${res.note ? ` — ${res.note}` : ''}`;
     },
   },
 

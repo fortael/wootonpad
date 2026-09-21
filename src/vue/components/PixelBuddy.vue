@@ -49,7 +49,7 @@
       >
         <!-- Context: the brain fills from the bottom, 200k to the brim. -->
         <g
-          v-if="!bare"
+          v-if="showBrain"
           class="sbx-buddy__brain"
           :class="[`is-${gauge.level}`, { 'is-unknown': !gauge.known }]"
           :transform="`translate(${BRAIN_AT.x} ${BRAIN_AT.y}) scale(${DETAIL})`"
@@ -58,7 +58,7 @@
           <rect v-for="(px, i) in brain" :key="i" :x="px[0]" :y="px[1]" width="1" height="1" :class="`px-${px[2]}`" />
         </g>
         <text
-          v-if="!bare"
+          v-if="showBrain"
           class="sbx-buddy__caption"
           :x="BRAIN_AT.x + (BRAIN_W * DETAIL) / 2"
           :y="BRAIN_AT.y + BRAIN_H * DETAIL + 2.2"
@@ -173,7 +173,7 @@
 
         <!-- A drone per live session, each hovering in its own place. -->
         <g
-          v-for="d in (bare ? [] : drones)"
+          v-for="d in (showDrones ? drones : [])"
           :key="d.id"
           class="sbx-buddy__drone"
           :transform="`translate(${d.x} ${d.y}) scale(${DETAIL})`"
@@ -186,7 +186,7 @@
         </g>
 
         <text
-          v-if="extraDrones && !bare"
+          v-if="extraDrones && showDrones"
           class="sbx-buddy__caption sbx-buddy__extra"
           :x="STAGE.w - 0.5"
           :y="STAGE.h - 0.5"
@@ -229,6 +229,14 @@ const props = defineProps({
   bare: { type: Boolean, default: false },
 });
 const emit = defineEmits(['open-session']);
+
+// Put away for now, not removed: flip either back to true and it is drawn
+// again. With the drones off, sessions still start the launch wave — there
+// is just nothing flying off.
+const DRONES_ON = false;
+const BRAIN_ON = false;
+const showDrones = computed(() => DRONES_ON && !props.bare);
+const showBrain = computed(() => BRAIN_ON && !props.bare);
 
 // ── The drawing ───────────────────────────────────────────────────
 //
@@ -617,6 +625,7 @@ watch(() => props.sessions, (list) => {
 }, { immediate: true, deep: true });
 
 const drones = computed(() => {
+  if (!showDrones.value) return [];
   version.value;
   const t = now.value;
   const out = [];

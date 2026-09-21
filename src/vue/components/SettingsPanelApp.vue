@@ -471,24 +471,31 @@
               <div class="settings-field-info">
                 <span class="settings-label">Try it</span>
                 <div class="settings-description">
-                  Sends in five seconds, so you can click another window first: macOS holds back
-                  banners from the app you are looking at, and this app is the one you are looking at
-                  while you press the button.
+                  Sends in five seconds, so you can click another window first: the system may hold
+                  back banners from the app you are looking at, and this app is the one you are looking
+                  at while you press the button.
                 </div>
                 <div v-if="notifyTest" class="settings-description settings-notify-result" :class="{ 'is-warn': notifyTest.warn }">
                   {{ notifyTest.text }}
                 </div>
-                <div v-if="notifyDenied" class="settings-description settings-notify-result is-warn">
+                <div v-if="notifyDenied && isMac" class="settings-description settings-notify-result is-warn">
                   macOS is not showing them. In System Settings → Notifications → WootonPad,
                   <strong>Allow notifications</strong> has to be on — everything else here has no say over that.
+                </div>
+                <div v-else-if="notifyDenied && isWindows" class="settings-description settings-notify-result is-warn">
+                  Windows is not showing them. In Settings → System → Notifications, notifications have to be
+                  on, for WootonPad as well — and Do not disturb off.
+                </div>
+                <div v-else-if="notifyDenied" class="settings-description settings-notify-result is-warn">
+                  The system is not showing them — check its notification settings for WootonPad.
                 </div>
               </div>
               <div class="settings-field-control">
                 <button type="button" class="settings-reset-btn" :disabled="notifyTesting" @click="testNotification">
                   {{ notifyCountdown ? `Sending in ${notifyCountdown}…` : notifyTesting ? 'Sending…' : 'Send test' }}
                 </button>
-                <button v-if="isMac" type="button" class="settings-reset-btn" @click="openNotificationSettings">
-                  System Settings
+                <button v-if="isMac || isWindows" type="button" class="settings-reset-btn" @click="openNotificationSettings">
+                  {{ isMac ? 'System Settings' : 'Windows settings' }}
                 </button>
               </div>
             </div>
@@ -654,11 +661,10 @@
                 </button>
                 <!-- Two decisions, not three states in a picker: is it given at
                      all, and does it stop to ask. Off wins — a tool it does not
-                     have cannot ask. The same switches as everywhere else in
-                     Settings, at the size a list of thirty of them can take. -->
+                     have cannot ask. The same switch component as every other
+                     setting, untouched — a resized copy of it came out broken. -->
                 <span class="sbx-mcptool__opt">
                   <SbSwitch
-                    class="sb-switch--sm"
                     :model-value="toolState(tool) !== 'off'"
                     @update:model-value="on => setToolState(tool, on ? (tool.defaultState === 'off' ? 'auto' : tool.defaultState) : 'off')"
                   />
@@ -666,7 +672,6 @@
                 </span>
                 <span class="sbx-mcptool__opt" :class="{ 'is-disabled': toolState(tool) === 'off' }">
                   <SbSwitch
-                    class="sb-switch--sm"
                     :model-value="toolState(tool) === 'ask'"
                     :disabled="toolState(tool) === 'off'"
                     @update:model-value="ask => setToolState(tool, ask ? 'ask' : 'auto')"
@@ -806,6 +811,7 @@ import TerminalPreview from './TerminalPreview.vue';
 const isProject = computed(() => store.settingsScope === 'project');
 // The menu-bar icon is a macOS thing; elsewhere the setting would do nothing.
 const isMac = /Mac/.test(navigator.platform);
+const isWindows = /Win/.test(navigator.platform);
 
 // ── Test notification ─────────────────────────────────────────────
 // Goes through main's real path, and says which way it went: the app's own

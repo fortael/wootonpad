@@ -11,7 +11,8 @@
 
 /** The last path segment — what every view prints as the project's name. */
 export function projectName(projectPath) {
-  return String(projectPath || '').split('/').filter(Boolean).pop() || '';
+  // Either separator: a Windows project's path is written with `\`.
+  return String(projectPath || '').split(/[\\/]/).filter(Boolean).pop() || '';
 }
 
 /**

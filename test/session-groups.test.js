@@ -88,6 +88,30 @@ test('a path is a group path only under the groups root, and names its group', (
   assert.equal(groups.groupIdFromPath(root, '/repo/app'), null);
 });
 
+// Native Windows: the root comes from path.join (backslashes), the session's
+// cwd from the transcript, which may use either separator and either case of
+// drive letter. All of them are the same folder.
+test('on Windows a group path matches whichever way it is spelled', () => {
+  const root = 'C:\\Users\\u\\.claude\\groups';
+  assert.equal(groups.isGroupPath(root, 'C:\\Users\\u\\.claude\\groups\\group-2'), true);
+  assert.equal(groups.isGroupPath(root, 'C:/Users/u/.claude/groups/group-2'), true);
+  assert.equal(groups.isGroupPath(root, 'c:\\Users\\u\\.claude\\groups\\group-2'), true);
+  assert.equal(groups.isGroupPath(root, 'C:\\Users\\u\\.claude\\groups-old\\group-2'), false);
+  assert.equal(groups.groupIdFromPath(root, 'C:\\Users\\u\\.claude\\groups\\group-2'), 'group-2');
+  assert.equal(groups.groupIdFromPath(root + '\\', 'C:/Users/u/.claude/groups/group-2/'), 'group-2');
+  assert.equal(groups.groupIdFromPath(root, root), null);
+});
+
+// A WSL-backed account's root is POSIX even on Windows, and must stay so —
+// path.join there would turn it into \home\u\… (CLAUDE.md, WSL rule 2).
+test('a POSIX root is joined as POSIX', () => {
+  const seen = [];
+  const hostPath = (p) => { seen.push(p); return p; };
+  groups.readGroup('/home/u/.claude/groups', 'group-1', hostPath);
+  assert.deepEqual(seen, ['/home/u/.claude/groups/group-1/wooton-group.json']);
+  assert.equal(groups.groupsRoot('/home/u/.claude'), '/home/u/.claude/groups');
+});
+
 test('changing a group\'s projects rewrites CLAUDE.md from the manifest', () => {
   const { home, root } = tmpRoot();
   try {

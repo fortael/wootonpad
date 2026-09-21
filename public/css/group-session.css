@@ -1267,17 +1267,13 @@
 
 .sbx-mcptool__opt.is-disabled { opacity: 0.4; }
 
-/* Thirty rows of switches: the full-size one is a control for a settings row,
-   not for a list item. Same switch, two thirds of it. */
-.sb-switch--sm { width: 28px; height: 16px; }
-.sb-switch--sm .sb-switch-thumb { width: 12px; height: 12px; top: 2px; left: 2px; }
-.sb-switch--sm.sb-switch--on .sb-switch-thumb { transform: translateX(12px); }
-
 /* ─── Settings → Buddy: which robot the mascot is ───────────────── */
 
+/* The settings row this sits in is a column, so the direction is said out
+   loud: names on the left, the robot they name on the right. */
 .sbx-mascot {
   display: flex;
-  flex-wrap: wrap;
+  flex-flow: row wrap;
   align-items: flex-start;
   gap: var(--space-4);
 }
@@ -1286,8 +1282,8 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
-  flex: 1 1 220px;
-  align-content: flex-start;
+  flex: 1 1 200px;
+  align-self: flex-start;
 }
 
 .sbx-mascot__pick {
@@ -1313,6 +1309,7 @@
    sizing; here it only needs a lane of its own beside the names. */
 .sbx-mascot__preview {
   flex: 0 0 auto;
+  align-self: flex-start;
   display: flex;
   flex-direction: column;
   align-items: center;

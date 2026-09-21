@@ -13,9 +13,12 @@
 
 import { projectName } from './project-search.js';
 
+// Either separator: a Windows project's path is written with `\`.
+const segments = (p) => String(p || '').split(/[\\/]/).filter(Boolean);
+
 /** Everything above the project's own folder, as a hint under its name. */
 function folderOf(projectPath) {
-  return String(projectPath || '').split('/').filter(Boolean).slice(-3, -1).join('/');
+  return segments(projectPath).slice(-3, -1).join('/');
 }
 
 /**
@@ -40,7 +43,7 @@ export function matchProjects(projects, token, limit = 12) {
   for (const project of projects || []) {
     const projectPath = project?.projectPath;
     if (!projectPath || project.isGroupContainer) continue;
-    if (/\/\.claude\/(worktrees|groups)\//.test(projectPath)) continue;
+    if (/[\\/]\.claude[\\/](worktrees|groups)[\\/]/.test(projectPath)) continue;
     if (seen.has(projectPath)) continue;
     seen.add(projectPath);
 

@@ -887,7 +887,9 @@ async function launchGroupSession({ projects, name, prompt }) {
   const res = await window.api.createSessionGroup({ projects, name });
   if (!res?.ok) return res || { ok: false, error: 'Could not create the group' };
   const group = res.group;
-  const listPath = group.dir.slice(0, group.dir.lastIndexOf('/'));
+  // The groups root — the folder above the group's own. Either separator: on
+  // Windows main.js builds the path with `\`.
+  const listPath = group.dir.replace(/[\\/][^\\/]*[\\/]?$/, '');
   await launchNewSession({ projectPath: group.dir }, { mode: 'sdk' }, {
     group, listPath, name: group.name, prompt,
   });

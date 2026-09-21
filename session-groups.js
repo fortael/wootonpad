@@ -27,9 +27,27 @@ const MANIFEST = 'wooton-group.json';
 const MEMORY = 'MEMORY.md';
 const GROUPS_DIRNAME = 'groups';
 
+// A group's path is canonical in the form the session's transcript carries,
+// which on a WSL-backed account is POSIX even on Windows. `path.join` there
+// would rewrite it with backslashes (CLAUDE.md, "WSL-backed accounts" rule 2),
+// so a POSIX root is joined as POSIX; everything else as the host does.
+const join = (root, ...parts) =>
+  (String(root).startsWith('/') ? path.posix.join : path.join)(root, ...parts);
+
+// On Windows the same directory arrives spelled more than one way: `path.join`
+// writes `\`, a transcript's cwd may say `/`, and the drive letter comes in
+// either case. Compared in one spelling, a group is a group however it was
+// written. Identity for any path without a backslash or a drive letter.
+function comparable(p) {
+  return String(p)
+    .replace(/\\/g, '/')
+    .replace(/^([a-z]):/, (_, drive) => `${drive.toUpperCase()}:`)
+    .replace(/(.)\/+$/, '$1');
+}
+
 /** `groups` under a Claude home. Not created until the first group is. */
 function groupsRoot(configDir) {
-  return path.join(configDir, GROUPS_DIRNAME);
+  return join(configDir, GROUPS_DIRNAME);
 }
 
 /**
@@ -42,20 +60,21 @@ function groupsRoot(configDir) {
  */
 function isGroupPath(root, projectPath) {
   if (!root || !projectPath) return false;
-  const prefix = root.endsWith('/') ? root : root + '/';
-  return projectPath === root || projectPath.startsWith(prefix);
+  const top = comparable(root);
+  const at = comparable(projectPath);
+  return at === top || at.startsWith(top.endsWith('/') ? top : top + '/');
 }
 
 /** `group-3` from `…/groups/group-3`, or null if the path is not one. */
 function groupIdFromPath(root, projectPath) {
-  if (!isGroupPath(root, projectPath) || projectPath === root) return null;
-  const rest = projectPath.slice(root.length + 1);
-  const id = rest.split('/')[0];
+  if (!isGroupPath(root, projectPath)) return null;
+  const top = comparable(root).replace(/\/$/, '');
+  const id = comparable(projectPath).slice(top.length + 1).split('/')[0];
   return id || null;
 }
 
 function groupDir(root, id) {
-  return path.join(root, id);
+  return join(root, id);
 }
 
 /**
@@ -67,7 +86,7 @@ function groupDir(root, id) {
 function readGroup(root, id, hostPath = (p) => p) {
   try {
     const dir = groupDir(root, id);
-    const raw = fs.readFileSync(hostPath(path.join(dir, MANIFEST)), 'utf8');
+    const raw = fs.readFileSync(hostPath(join(dir, MANIFEST)), 'utf8');
     const parsed = JSON.parse(raw);
     return normalize(parsed, id, dir);
   } catch {
@@ -121,7 +140,7 @@ function nextGroupId(root, hostPath = (p) => p) {
   return `group-${highest + 1}`;
 }
 
-const basename = (p) => String(p).split('/').filter(Boolean).pop() || p;
+const basename = (p) => String(p).split(/[\\/]/).filter(Boolean).pop() || p;
 
 /**
  * The instructions the session opens with.
@@ -188,11 +207,11 @@ function writeGroupFiles(root, group, hostPath) {
   const dir = groupDir(root, group.id);
   fs.mkdirSync(hostPath(dir), { recursive: true });
   fs.writeFileSync(
-    hostPath(path.join(dir, MANIFEST)),
+    hostPath(join(dir, MANIFEST)),
     JSON.stringify({ id: group.id, name: group.name, created: group.created, projects: group.projects }, null, 2) + '\n',
     'utf8',
   );
-  fs.writeFileSync(hostPath(path.join(dir, 'CLAUDE.md')), buildClaudeMd(group), 'utf8');
+  fs.writeFileSync(hostPath(join(dir, 'CLAUDE.md')), buildClaudeMd(group), 'utf8');
   return dir;
 }
 

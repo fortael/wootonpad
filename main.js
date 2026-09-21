@@ -165,8 +165,11 @@ function activePlansDir() {
 // A group session's working directory, and the manager chat's. Both are real
 // directories holding real transcripts — the account owns them the way it owns
 // its plans, so they follow it rather than the Windows home. See CLAUDE.md.
+//
+// Canonical, like every other project path: on a WSL account the sessions in
+// it carry the POSIX form, and a UNC root would never match them.
 function activeGroupsRoot() {
-  return sessionGroups.groupsRoot(activeConfigDir());
+  return canonicalProjectPath(sessionGroups.groupsRoot(activeConfigDir()));
 }
 
 // The Chat tab's own session lives here. Hidden from the project list: it is
@@ -331,6 +334,12 @@ const liveNotifications = new Set();
 const BUNDLE_ID = 'ai.doctly.wootonpad';
 const selfBundleId = () => (app.isPackaged ? BUNDLE_ID : `${BUNDLE_ID}.dev`);
 
+// Windows puts up a toast only for an app it can name: the AppUserModelID of
+// its Start-menu shortcut, which the installer sets to the appId. From source
+// there is no shortcut, and the executable's path is the stand-in Electron's
+// own docs use.
+if (process.platform === 'win32') app.setAppUserModelId(app.isPackaged ? BUNDLE_ID : process.execPath);
+
 let nativeNotificationsRefused = false;
 // What the system has done with our notifications so far: 'unknown' until one
 // is sent, then 'allowed' once macOS says it showed one, or 'refused' when it
@@ -421,10 +430,20 @@ ipcMain.handle('notification-permission', () => ({
   bundleId: selfBundleId(),
 }));
 
-/** The row for this app in System Settings → Notifications, opened directly. */
+// Where each system keeps the switch. macOS can be sent straight to this
+// app's row; Windows only to the page that lists it. Elsewhere there is no
+// one place to send anyone.
+const NOTIFICATION_SETTINGS_URL = {
+  darwin: () => `x-apple.systempreferences:com.apple.preference.notifications?id=${selfBundleId()}`,
+  win32: () => 'ms-settings:notifications',
+};
+
+/** The system's notification settings, as close to this app's row as it goes. */
 ipcMain.handle('open-notification-settings', async () => {
+  const url = NOTIFICATION_SETTINGS_URL[process.platform]?.();
+  if (!url) return { ok: false, error: 'This system has no notification settings to open' };
   try {
-    await shell.openExternal(`x-apple.systempreferences:com.apple.preference.notifications?id=${selfBundleId()}`);
+    await shell.openExternal(url);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err.message };
@@ -1127,7 +1146,8 @@ function initSessionCache() {
     // at all — see session-groups.js.
     getGroupsRoot: () => activeGroupsRoot(),
     groupHostPath: (p) => accountHostPath(account, p),
-    getInternalPaths: () => [activeChatDir()],
+    // Both spellings: a WSL account's transcripts may carry the POSIX one.
+    getInternalPaths: () => [...new Set([activeChatDir(), canonicalProjectPath(activeChatDir())])],
     db: {
       deleteCachedFolder, getCachedByFolder, upsertCachedSessions, deleteCachedSession,
       deleteSearchFolder, deleteSearchSession, upsertSearchEntries,
@@ -1241,7 +1261,17 @@ ipcMain.handle('remove-project', (_event, projectPath) => {
 // du -sk is expensive; cache with a random long TTL so projects don't all expire at once
 const SIZE_TTL_OPTIONS_MS = [3 * 3600000, 20 * 3600000, 24 * 3600000];
 
-const DOCKER_PATH = (process.env.PATH || '') + ':/usr/local/bin:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin';
+// Docker Desktop on macOS puts its CLI where a GUI app's PATH does not reach.
+// Elsewhere the inherited environment already finds it — and on Windows the
+// separator is `;` and the variable is spelled `Path`, so appending
+// `:/usr/local/bin` there would only break the last entry of the real one.
+const DOCKER_ENV = process.platform === 'win32'
+  ? process.env
+  : {
+    ...process.env,
+    PATH: [process.env.PATH, '/usr/local/bin', '/opt/homebrew/bin', '/Applications/Docker.app/Contents/Resources/bin']
+      .filter(Boolean).join(path.delimiter),
+  };
 
 // Which projects are being worked in right now — a PTY session or an SDK one
 // counts the same. Their numbers are the only ones that are moving, so they
@@ -1310,7 +1340,7 @@ function fetchProjectInfo(projectPath, plan = { git: true, docker: true }, previ
     plan.git ? run(['git', 'diff', '--shortstat', 'HEAD'], { timeout: 5000 }) : skip,
     plan.docker ? run(['docker', 'compose', 'ps', '--format', 'json'], {
       timeout: 8000,
-      env: { ...process.env, PATH: DOCKER_PATH },
+      env: DOCKER_ENV,
     }) : skip,
   ]).then(([branch, stat, dockerOut]) => {
     if (plan.git) {
@@ -1605,7 +1635,7 @@ ipcMain.handle('get-project-detail', (_event, projectPath) => {
     try {
       const raw = sh(['docker', 'compose', 'ps', '--format', 'json'], {
         timeout: 8000,
-        env: { ...process.env, PATH: DOCKER_PATH },
+        env: DOCKER_ENV,
       });
       if (raw) {
         detail.containers = raw.split('\n').filter(Boolean).map(line => {
@@ -2576,7 +2606,7 @@ wootonMcp.configure({
 
     const { execFile } = require('child_process');
     const [file, args, options] = projectExecFile(argv, canonical, {
-      encoding: 'utf8', timeout: 120000, env: { ...process.env, PATH: DOCKER_PATH }, maxBuffer: 4 * 1024 * 1024,
+      encoding: 'utf8', timeout: 120000, env: DOCKER_ENV, maxBuffer: 4 * 1024 * 1024,
     });
     return new Promise((resolve) => {
       execFile(file, args, options, (err, stdout, stderr) => {
@@ -2623,9 +2653,15 @@ wootonMcp.configure({
       return error ? { ok: false, error } : { ok: true };
     }
     const resolved = APP_NAMES[String(appName).trim().toLowerCase()] || String(appName).trim();
+    // `open -a` is macOS. Elsewhere there is no one way to name an app, so it
+    // opens with the default one — and says so, rather than claiming the
+    // editor that was asked for.
     if (process.platform !== 'darwin') {
       const error = await shell.openPath(full);
-      return error ? { ok: false, error } : { ok: true, app: null };
+      return error ? { ok: false, error } : {
+        ok: true, app: null,
+        note: `opened with the default app — picking ${resolved} works on macOS only`,
+      };
     }
     // `open -a` names an application; the line number, where an editor takes
     // one, is its own argument after --args and is editor-specific, so only
@@ -2768,7 +2804,7 @@ wootonMcp.configure({
     const { execFile } = require('child_process');
     const run = (argv, timeout) => new Promise((resolve) => {
       const [file, args, options] = projectExecFile(argv, '/', {
-        encoding: 'utf8', timeout, env: { ...process.env, PATH: DOCKER_PATH }, maxBuffer: 8 * 1024 * 1024,
+        encoding: 'utf8', timeout, env: DOCKER_ENV, maxBuffer: 8 * 1024 * 1024,
       });
       execFile(file, args, options, (err, stdout, stderr) => resolve({ err, stdout, stderr }));
     });
@@ -2933,10 +2969,6 @@ function recordManagerSpend(sessionId, result) {
 
 ipcMain.handle('buddy-spend', () => managerSpend(chatAgent.current().sessionId));
 
-// The assistant's own tools run without asking, except these — see the
-// allowedTools below. One list, so the dev panel in Settings says the same.
-// create_todo is here for testing the approval flow end to end — Buddy's
-// reaction, the dialog — with something harmless. Take it out once done.
 // What a person calls an editor, and what macOS calls it. Anything not listed
 // is passed to `open -a` as typed, which is right for an app we have not heard
 // of and wrong for nothing.
@@ -3799,7 +3831,7 @@ function accountTokenInfo(account) {
 // Finder or the Dock inherits launchd's minimal PATH — /usr/bin:/bin:/usr/sbin:
 // /sbin — not the shell's, so `spawn('claude')` fails with ENOENT in a packaged
 // build while working fine under `npm start`, which is launched from a terminal.
-// Same reason DOCKER_PATH exists above.
+// Same reason DOCKER_ENV exists above.
 //
 // Order: ask a login shell first, since that is where nvm/mise/asdf/bun put the
 // binary, then fall back to the locations the installers actually use.

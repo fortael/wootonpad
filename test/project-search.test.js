@@ -52,6 +52,7 @@ test('projectName is the last segment, trailing slash or not', () => {
   assert.equal(projectName('/Users/zakhar/Projects/wootonpad'), 'wootonpad');
   assert.equal(projectName('/Users/zakhar/Projects/wootonpad/'), 'wootonpad');
   assert.equal(projectName(''), '');
+  assert.equal(projectName('C:\\Users\\u\\wootonpad'), 'wootonpad');
 });
 
 // The palette matches loosely (src/vue/fuzzy-match.js); the tabs do not. A

@@ -39,6 +39,12 @@ test('the folder a project sits in is offered as its hint, and matches too', () 
   assert.equal(found.folder, 'zakhar/work');
 });
 
+test('a Windows project is named and hinted from its backslashed path', () => {
+  const [hit] = matchProjects([{ projectPath: 'C:\\Users\\u\\work\\invoices' }], 'inv');
+  assert.equal(hit.name, 'invoices');
+  assert.equal(hit.folder, 'u/work');
+});
+
 test('the quick questions fall back one by one', () => {
   assert.deepEqual(promptButtons([]), DEFAULT_PROMPTS);
   assert.deepEqual(promptButtons(null), DEFAULT_PROMPTS);

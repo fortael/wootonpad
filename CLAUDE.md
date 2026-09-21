@@ -181,11 +181,13 @@ written with Write/Edit, Buddy keeps Read/Write/Edit, fenced to that folder by
 sdk-session.js — the only gate that also sees Read, which never prompts). The
 side panel's Memory pane lists the real files (`buddy-memory` IPC, folder
 watched for `buddy-memory-changed`). The mascot at the foot of its sidebar comes in several
-designs (`src/vue/buddy-designs.js`, each with its own palette, picked above
-it and remembered): the classic 16×16 robot acts pose by pose in
+designs (`src/vue/buddy-designs.js`, each with its own palette, picked in
+Settings → Buddy): the classic 16×16 robot acts pose by pose in
 PixelBuddy.vue, and every other design is rigged instead — its sprite is cut
 into eyes, mouth and lights, which `buddy-rig.js` blinks, looks, talks and
-bounces for whatever the session is doing. Over its
+bounces for whatever the session is doing. The drones (one per live session)
+and the context brain around it are switched off by `DRONES_ON` / `BRAIN_ON`
+in PixelBuddy.vue — the code is kept, only not drawn. Over its
 chat sit five quick questions (`buddyPrompts`, defaults in
 `src/vue/buddy-suggestions.js`, rewritten in Settings → Buddy); clicking one
 types it into the composer rather than sending it. It links

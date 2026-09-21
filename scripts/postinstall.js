@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -20,8 +20,9 @@ try {
 
 // macOS: the Electron in node_modules needs a real ad-hoc signature before
 // the notification centre will talk to it — see the script for why.
+// No-op anywhere else. Run without a shell, so no path has to survive quoting.
 try {
-  execSync('node ' + JSON.stringify(path.join(__dirname, 'sign-dev-electron.js')), { stdio: 'inherit' });
+  execFileSync(process.execPath, [path.join(__dirname, 'sign-dev-electron.js')], { stdio: 'inherit' });
 } catch (err) {
   console.error('sign-dev-electron failed:', err.message);
 }
