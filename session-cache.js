@@ -366,6 +366,7 @@ function buildProjectsFromCache(showArchived, snapshot = readProjectsSnapshot())
       name: meta?.name || null,
       starred: meta?.starred || 0,
       archived: meta?.archived || 0,
+      startedBy: meta?.startedBy || null,
       accountId: row.accountId || 'default',
     };
     if (!showArchived && s.archived) continue;
@@ -504,6 +505,15 @@ function logStatus(text, type) {
 
 // --- Worker-based cache population (non-blocking) ---
 let populatingCache = false;
+// Accounts a full scan has finished for, this run. The cache alone cannot say:
+// "populated" there means "holds a session", and an account without one —
+// every new account — would count as never scanned and get an empty list
+// forever, its first project included.
+const scannedAccounts = new Set();
+
+function hasScanned(id) {
+  return scannedAccounts.has(id || 'default');
+}
 
 function populateCacheViaWorker() {
   if (populatingCache) return;
@@ -565,6 +575,7 @@ function populateCacheViaWorker() {
     }
 
     populatingCache = false;
+    scannedAccounts.add(currentAccountId);
     logStatus(`Indexed ${sessionCount} sessions across ${msg.results.length} projects`, 'done');
     notifyRendererProjectsChanged();
   });
@@ -598,4 +609,5 @@ module.exports = {
   buildProjectSets,
   notifyRendererProjectsChanged,
   populateCacheViaWorker,
+  hasScanned,
 };

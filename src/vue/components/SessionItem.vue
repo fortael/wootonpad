@@ -22,6 +22,12 @@
         <div class="session-summary">
           <!-- eslint-disable-next-line vue/no-v-html -->
           <span v-if="session.type === 'terminal'" class="terminal-badge"><SbIcon name="terminal" :size="13" /></span>
+          <!-- Buddy started this one — the same sparkles as Buddy's own tab. -->
+          <span
+            v-if="session.startedBy === 'buddy'"
+            class="buddy-badge"
+            data-tooltip="Started by Buddy"
+          ><SbIcon name="sparkles" :size="12" /></span>
           <!-- The name is still being decided — see titlePending. The bar is
                the honest shape of "a title is coming", and the sentence that
                opened the conversation is already on the line below. -->
@@ -69,11 +75,13 @@
 
       <!-- Messages from Claude you have not seen — unread.js. A number that
            grows while the session works, so you can tell it is moving
-           without opening it. -->
+           without opening it: grey while it is still growing, the accent once
+           the turn is over or the session is waiting on you. -->
       <span
         v-if="unread"
         class="session-unread"
-        :data-tooltip="`${unread} new message${unread > 1 ? 's' : ''}`"
+        :class="{ 'session-unread--working': unreadComing }"
+        :data-tooltip="`${unread} new message${unread > 1 ? 's' : ''}${unreadComing ? ' — still working' : ''}`"
       >{{ formatUnread(unread) }}</span>
 
       <!-- One menu instead of the five hover buttons this row used to carry —
@@ -100,7 +108,7 @@ import {
   sessionTitle, sessionSubtitle, sessionFirstPrompt, titlePending,
 } from '../session-title.js';
 import { store } from '../store.js';
-import { unreadFor, formatUnread } from '../unread.js';
+import { unreadFor, formatUnread, unreadStillComing } from '../unread.js';
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -154,6 +162,7 @@ const msgSuffix = computed(() =>
 // Shared with the board's cards — see session-churn.js.
 const churn = computed(() => sessionChurn(props.session));
 const unread = computed(() => unreadFor(props.session));
+const unreadComing = computed(() => unreadStillComing(props.session.sessionId));
 
 const itemClasses = computed(() => ({
   active: props.isActive,

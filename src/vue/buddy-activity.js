@@ -17,6 +17,7 @@ const DOING = {
   list_sessions: 'Going through sessions',
   read_session: 'Reading a session',
   peek_active_sessions: 'Peeking at running sessions',
+  read_sessions: 'Reading sessions',
   search_sessions: 'Searching sessions',
   list_groups: 'Checking groups',
   git_status: 'Checking git',
@@ -63,7 +64,10 @@ export function toolActivity(name, input = {}) {
   if (isWootonTool(name)) {
     const own = wootonToolName(name);
     if (own === 'read_project_file' && input.path) return `Reading ${baseName(input.path)}`;
-    if (own === 'search_sessions' && input.query) return `Searching “${String(input.query).slice(0, 24)}”`;
+    if (own === 'search_sessions') {
+      const what = Array.isArray(input.terms) && input.terms.length ? input.terms.join(', ') : input.query;
+      if (what) return `Searching “${String(what).slice(0, 24)}”`;
+    }
     return DOING[own] || 'Working';
   }
   return BUILT_IN[name] || 'Working';

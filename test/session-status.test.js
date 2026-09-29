@@ -191,3 +191,20 @@ test('the settings blob subscribes every event to the authenticated endpoint', (
   // Round-trips as JSON — it is written to a file and read back by the CLI.
   assert.deepEqual(JSON.parse(JSON.stringify(settings)), settings);
 });
+
+test('a /compact the user asked for ends idle — no Stop hook follows it', () => {
+  const t = new SessionStatusTracker();
+  t.apply({ session_id: 'c', hook_event_name: 'Stop' });
+  t.apply({ session_id: 'c', hook_event_name: 'PreCompact', trigger: 'manual' });
+  assert.equal(t.get('c').state, 'running');
+  t.apply({ session_id: 'c', hook_event_name: 'PostCompact', trigger: 'manual', compact_summary: '…' });
+  assert.equal(t.get('c').state, 'idle');
+});
+
+test('an automatic compact happens mid-turn, and the turn carries on', () => {
+  const t = new SessionStatusTracker();
+  t.apply({ session_id: 'a', hook_event_name: 'UserPromptSubmit' });
+  t.apply({ session_id: 'a', hook_event_name: 'PreCompact', trigger: 'auto' });
+  t.apply({ session_id: 'a', hook_event_name: 'PostCompact', trigger: 'auto', compact_summary: '…' });
+  assert.equal(t.get('a').state, 'running');
+});

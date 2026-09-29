@@ -450,14 +450,14 @@
   50%      { opacity: 0.5; transform: scale(0.72); }
 }
 
-/* Always 1: one entry per session, and a session has one unread turn or none.
-   It is a mark, not arithmetic — but it reads as a count because that is the
-   shape every unread badge has, and it is the only thing on the avatar that
-   says "there is something here to read".
+/* The replies not yet seen, once the turn is over or the session is waiting
+   on you — UnreadRail.vue; "1" for an unopened turn when unread counters are
+   off. It is the only thing on the avatar that says "there is something here
+   to read".
 
-   Red in every lane, not the lane's own tone: this is the Dock's badge, and
-   the one thing it has always meant is "unread", never "which kind". The ring
-   around the avatar is where the lane is already said. */
+   The same orange as the number on the session's row and board card, so one
+   count reads as one thing wherever it appears. One tone in every lane: the
+   ring around the avatar is where the lane is already said. */
 .sbx-unread__badge {
   position: absolute;
   top: -4px;
@@ -470,10 +470,7 @@
   align-items: center;
   justify-content: center;
   border-radius: var(--radius-full);
-  /* The light theme steps the -500 accents down for white surfaces — see the
-     contrast rule at the top of theme-light.css — and --red-600 is only
-     defined there, so this is one declaration that is correct in both. */
-  background: var(--red-600, var(--red-500));
+  background: var(--orange-500);
   color: #fff;
   font-family: var(--font-mono);
   font-size: 9px;

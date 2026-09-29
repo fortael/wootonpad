@@ -55,7 +55,7 @@
             class="sbx-unread__pip"
             :class="`sbx-unread__pip--${row.status}`"
           ></span>
-          <span v-if="row.unread" class="sbx-unread__badge">1</span>
+          <span v-if="row.badge" class="sbx-unread__badge">{{ row.badge }}</span>
         </span>
         <!-- The session, not its project: a rail of four avatars from the same
              project is otherwise four identical labels. The project is still
@@ -75,6 +75,8 @@ import { computed, ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import ProjectAvatar from './ProjectAvatar.vue';
 import GroupAvatar from './GroupAvatar.vue';
 import { sessionTitle } from '../session-title.js';
+import { store } from '../store.js';
+import { unreadFor, formatUnread } from '../unread.js';
 
 // Four lanes now, not two — see activeSessions() in session-column.js. The
 // reason is the half of the answer the row cannot draw: why it is on the rail.
@@ -108,12 +110,22 @@ const rows = computed(() => (props.items || []).map((item) => {
   const unread = item.unread === undefined
     ? (status === 'waiting' || status === 'done')
     : !!item.unread;
+  // With unread counters on, the badge is the real number of replies not yet
+  // seen — and only once the turn is over or the session is waiting on you:
+  // while it works the number is still climbing, and the sidebar row already
+  // shows it climbing. Without counters there is no number to give, so it is
+  // the old mark for "a turn you have not opened".
+  const count = store.unreadCounters ? unreadFor(item.session) : 0;
+  const badge = store.unreadCounters
+    ? (status !== 'running' && count > 0 ? formatUnread(count) : '')
+    : (unread ? '1' : '');
   return {
     sessionId: item.sessionId,
     projectPath: item.projectPath || '',
     session: item.session,
     status,
     unread,
+    badge,
     name,
     // The hover label is short by design, so the tooltip carries what it left
     // out: which project, and why the session is on the rail at all.

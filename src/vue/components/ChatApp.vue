@@ -11,7 +11,6 @@
   >
     <div class="sbx-sesshead">
       <div class="sbx-sesshead__identity">
-        <span class="sbx-sesshead__avatar sbx-chatview__avatar"><SbIcon name="sparkles" :size="13" /></span>
         <div class="sbx-sesshead__text">
           <div class="sbx-sesshead__titlerow">
             <span class="sbx-sesshead__title">Buddy</span>

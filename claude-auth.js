@@ -179,12 +179,13 @@ async function probeUsage(configDir) {
   if (!oauth?.accessToken) return { tokenPresent: false, status: 0, ok: false, usage: null };
   const res = await fetch(USAGE_URL, usageRequestInit(oauth.accessToken));
   let usage = null;
+  let raw = null;
   if (res.ok) {
-    try { usage = transformUsageResponse(await res.json()); } catch { usage = null; }
+    try { raw = await res.json(); usage = transformUsageResponse(raw); } catch { usage = null; }
   }
   let retryAfterSeconds = 0;
   if (res.status === 429) retryAfterSeconds = parseInt(res.headers.get('retry-after') || '0', 10);
-  return { tokenPresent: true, status: res.status, ok: res.ok, usage, retryAfterSeconds };
+  return { tokenPresent: true, status: res.status, ok: res.ok, usage, raw, retryAfterSeconds };
 }
 
 async function fetchUsage(configDir) {
@@ -205,7 +206,9 @@ async function fetchUsage(configDir) {
   return await res.json();
 }
 
-async function fetchAndTransformUsage(configDir) {
+// `onRaw` gets the API's own answer before it is flattened for the meters —
+// the usage stats keep it as a reading of the plan's limits.
+async function fetchAndTransformUsage(configDir, { onRaw } = {}) {
   try {
     const raw = await fetchUsage(configDir);
     if (raw === null) {
@@ -214,10 +217,42 @@ async function fetchAndTransformUsage(configDir) {
     if (raw?._rateLimited) {
       return { _rateLimited: true, retryAfterSeconds: raw.retryAfterSeconds };
     }
+    if (onRaw) {
+      try { onRaw(raw); } catch {}
+    }
     return transformUsageResponse(raw);
   } catch (err) {
     return { _error: true, message: err.message };
   }
 }
 
-module.exports = { getOAuthToken, fetchUsage, probeUsage, fetchAndTransformUsage, getConfigDir };
+const MODELS_URL = 'https://api.anthropic.com/v1/models?limit=100';
+
+/**
+ * The models this account can use, newest first, as the API lists them — or
+ * null when there is no token or the API said no. See model-catalog.js for
+ * why the picker needs more than the SDK's own list.
+ */
+async function fetchModels(configDir) {
+  const oauth = getOAuthToken(configDir);
+  if (!oauth?.accessToken) return null;
+  try {
+    const res = await fetch(MODELS_URL, {
+      headers: {
+        'Authorization': `Bearer ${oauth.accessToken}`,
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'oauth-2025-04-20',
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return (body?.data || [])
+      .filter(m => m && typeof m.id === 'string')
+      .map(m => ({ id: m.id, displayName: m.display_name || m.id, createdAt: m.created_at || null }));
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { getOAuthToken, fetchUsage, probeUsage, fetchAndTransformUsage, getConfigDir, fetchModels };

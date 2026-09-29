@@ -53,7 +53,7 @@ const EVENT_STATE = {
   Elicitation: 'requires_action',
   ElicitationResult: 'running',
   PreCompact: 'running',
-  PostCompact: 'running',
+  PostCompact: 'running',      // unless the user asked for it — see apply()
   SubagentStart: 'running',
   SubagentStop: 'running',     // the parent turn is still going
   StopFailure: 'idle',         // turn died on an API error — idle, not busy
@@ -271,6 +271,14 @@ class SessionStatusTracker {
 
       case 'SessionEnd':
         entry.tool = null;
+        break;
+
+      case 'PostCompact':
+        // `/compact` is a command of its own, not part of a turn: no Stop hook
+        // closes it, so "running" here stayed on screen until the next prompt.
+        // A compact the CLI started by itself happens inside a turn that
+        // carries on, and keeps the default.
+        if (payload.trigger === 'manual') next = 'idle';
         break;
     }
 

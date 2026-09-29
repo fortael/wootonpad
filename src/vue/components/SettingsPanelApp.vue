@@ -72,6 +72,13 @@
                   <option value="opus">Opus</option>
                   <option value="sonnet">Sonnet</option>
                   <option value="haiku">Haiku</option>
+                  <!-- Exact models, from the API for this account — so a model
+                       released since the bundled SDK is pickable the same day. -->
+                  <optgroup v-if="apiModels.length" label="Exact model">
+                    <option v-for="m in apiModels" :key="m.id" :value="m.id">{{ modelName(m.id) || m.displayName }}</option>
+                  </optgroup>
+                  <!-- A saved id this account's list no longer has is still shown, not blanked. -->
+                  <option v-if="form.model && !['opus', 'sonnet', 'haiku'].includes(form.model) && !apiModels.some(m => m.id === form.model)" :value="form.model">{{ modelName(form.model) || form.model }}</option>
                 </select>
               </div>
             </div>
@@ -801,6 +808,7 @@ import { ref, reactive, computed, onMounted } from 'vue';
 import { store } from '../store.js';
 import { DEFAULT_PROMPTS as BUDDY_PROMPT_DEFAULTS } from '../buddy-suggestions.js';
 import { DESIGNS, designById } from '../buddy-designs.js';
+import { modelName } from '../model-name.js';
 import PixelBuddy from './PixelBuddy.vue';
 import SbSwitch from './SbSwitch.vue';
 import SbButton from './SbButton.vue';
@@ -932,6 +940,9 @@ const lightTerminalThemes = computed(() => themesByMode('light'));
 
 const COMMIT_MSG_PROMPT_DEFAULT = `Write a concise git commit message (max 72 chars for first line) for these changes. Use conventional commit format (feat/fix/refactor/docs/chore). Output ONLY the commit message, no explanation:`;
 const commitMsgPromptDefault = COMMIT_MSG_PROMPT_DEFAULT;
+
+/** The account's models, from the API — see model-catalog.js. */
+const apiModels = ref([]);
 
 const form = reactive({
   model: '',
@@ -1273,6 +1284,7 @@ function openReleasesPage() { window.api.openExternal('https://github.com/fortae
 
 // ── Lifecycle ─────────────────────────────────────────────────────
 onMounted(async () => {
+  window.api.apiModels?.().then((list) => { apiModels.value = Array.isArray(list) ? list : []; }).catch(() => {});
   await loadSettings();
   if (!isProject.value) {
     window.api.onUpdaterEvent((type, data) => {

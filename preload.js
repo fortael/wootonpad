@@ -95,7 +95,16 @@ contextBridge.exposeInMainWorld('api', {
   getAccountDetail: (id) => ipcRenderer.invoke('get-account-detail', id),
   readAccountConfigFile: (id, name) => ipcRenderer.invoke('read-account-config-file', id, name),
   checkAccountAuth: (id) => ipcRenderer.invoke('check-account-auth', id),
+  // `claude auth login` as that account — see account-login-start in main.js.
+  startAccountLogin: (id, opts) => ipcRenderer.invoke('account-login-start', id, opts),
+  sendAccountLoginCode: (id, code) => ipcRenderer.invoke('account-login-code', id, code),
+  cancelAccountLogin: (id) => ipcRenderer.invoke('account-login-cancel', id),
+  onAccountLoginEvent: (callback) => subscribe('account-login-event', callback),
   getAccountStats: (id) => ipcRenderer.invoke('get-account-stats', id),
+  // Tokens and plan-limit share per project (usage-stats.js). accountId null =
+  // the active account.
+  getUsageStats: (accountId, opts) => ipcRenderer.invoke('usage-stats', accountId, opts),
+  getUsageInterval: (accountId, from, to) => ipcRenderer.invoke('usage-interval', accountId, from, to),
   // MCP servers and plugins configured in that account's Claude home.
   // checkAccountMcp takes an inventory id, never a command: what runs is read
   // back from the account's own files in the main process.
@@ -114,6 +123,10 @@ contextBridge.exposeInMainWorld('api', {
 
   browseFolder: () => ipcRenderer.invoke('browse-folder'),
   addProject: (projectPath) => ipcRenderer.invoke('add-project', projectPath),
+  // Every subfolder of one folder, as projects — and the ~/*Projects folders
+  // worth offering for that.
+  addProjectsInFolder: (dir) => ipcRenderer.invoke('add-projects-in-folder', dir),
+  suggestProjectFolders: () => ipcRenderer.invoke('suggest-project-folders'),
   removeProject: (projectPath) => ipcRenderer.invoke('remove-project', projectPath),
   // `{ force: true }` overrides every polling interval — see project-polling.js.
   getProjectInfo: (projectPath, opts) => ipcRenderer.invoke('get-project-info', projectPath, opts),
@@ -211,6 +224,9 @@ contextBridge.exposeInMainWorld('api', {
   sdkSetPermissionMode: (sessionId, mode) => ipcRenderer.invoke('sdk-set-permission-mode', sessionId, mode),
   sdkCommands: (sessionId) => ipcRenderer.invoke('sdk-commands', sessionId),
   sdkModels: (sessionId) => ipcRenderer.invoke('sdk-models', sessionId),
+  apiModels: () => ipcRenderer.invoke('api-models'),
+  getUnreadSeen: () => ipcRenderer.invoke('unread-seen-get'),
+  setUnreadSeen: (map) => ipcRenderer.invoke('unread-seen-set', map),
   sdkSetModel: (sessionId, model) => ipcRenderer.invoke('sdk-set-model', sessionId, model),
   sdkSetEffort: (sessionId, effort) => ipcRenderer.invoke('sdk-set-effort', sessionId, effort),
   sdkContextUsage: (sessionId) => ipcRenderer.invoke('sdk-context-usage', sessionId),

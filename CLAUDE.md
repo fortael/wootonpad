@@ -72,6 +72,8 @@ WootonPad = **Electron app**. Session manager + IDE emulator for Claude Code CLI
 | `shell-profiles.js` | Shell discovery (zsh, bash, WSL) + argv construction for PTY spawn |
 | `schedule-runner.js` / `schedule-ipc.js` | Cron-style scheduled tasks |
 | `workers/scan-projects.js` | Worker thread for initial full scan of `~/.claude/projects/` |
+| `usage-ledger.js` | Usage stats arithmetic: token rows from transcripts, prices as weights, splitting each rise of a plan meter over the replies behind it, per-day/per-project summary. Pure |
+| `usage-stats.js` | Usage stats side effects: `workers/usage-scan.js` (incremental transcript read), limit readings (usage API poll + `rate_limit_event`), the queries behind `UsageStats.vue` |
 | `session-groups.js` | Group sessions: `<configDir>/groups/group-N` folders, `wooton-group.json` manifest, generated CLAUDE.md |
 | `chat-agent.js` | Chat tab assistant: persistent per-account SDK session in `<configDir>/wooton-chat`, its system prompt |
 | `wooton-mcp.js` | In-process MCP server (`mcp__wooton__*`) giving the assistant the app's own tools; formatting only, deps from `main.js` |
@@ -131,6 +133,15 @@ Firewall rule for inbound connections on the `vEthernet (WSL)` adapter, then a
 proxy configured inside the distribution. The CLI resolves a proxy for the IDE
 socket and honours `NO_PROXY`, so `HTTP_PROXY`/`ALL_PROXY` set in the distro
 captures the connection to the host address.
+
+### Signing an account in
+
+The Agent SDK has no login — it runs as whoever the CLI is signed in as. The
+account page's **Sign in** runs `claude auth login` as that account
+(`account-login-start` in main.js, same env as `runAccountClaude`): the CLI
+opens the browser and exits once the redirect reaches it; if the browser does
+not open, its fallback link ends in a code, which the page pipes to the CLI's
+stdin. Credentials stay where the CLI keeps them (Keychain on macOS).
 
 ### Session identity and fork detection
 
@@ -214,7 +225,10 @@ puts a note away: out of lists, badges and the agenda, still on disk.
   `read-session-file.js` folds consecutive blocks of one message id) minus the
   count seen when it was last on screen (localStorage `unreadSeen`). First
   sight and switching the feature on start at "all read". Buddy is counted from
-  its live stream (it has no cache row). Drawn on session rows and as tab badges.
+  its live stream (it has no cache row). Drawn on session rows, board cards and
+  as tab badges: grey while the session is mid-turn (`unreadStillComing`, the
+  board's own lanes), the accent once it is done or waiting on you. The Active
+  rail badge shows the same number, only in those two lanes.
 - **Notifications** (`session-alerts.js`, fed by the `SessionStatusTracker`
   onChange in main): `requires_action` always notifies (sound via
   `notifySound`); a turn ending notifies only after `notifyMinWorkSeconds`.
@@ -226,7 +240,25 @@ puts a note away: out of lists, badges and the agenda, still on disk.
   bundle ad-hoc, which is enough to make native notifications work and be
   clickable. It skips while that Electron is running; main.js keeps an
   AppleScript fallback for when the native path is refused anyway, and those
-  banners cannot open the session.
+  banners cannot open the session. The packaged app has the same problem
+  unless electron-builder signs it: `build.mac.identity` is `"-"` (ad-hoc —
+  there is no Developer ID). Without it the release job
+  (`CSC_IDENTITY_AUTO_DISCOVERY=false`) skips signing and ships a
+  linker-signed bundle that never gets a native notification.
+- **Usage stats** (`usage-ledger.js` + `usage-stats.js`, drawn by
+  `UsageStats.vue` on the account page and a project's Stats tab): tokens
+  per project per day come from the transcripts (subagents included) into
+  `usage_messages`, one row per API message id so forks and multi-line
+  replies count once; `usage_files` remembers how far each file was read.
+  The plan's `five_hour`/`seven_day` meters are recorded into
+  `limit_observations` — from every usage API answer the app gets, from SDK
+  `rate_limit_event`s, and from a poll of the active account (5 min while
+  busy, 30 idle; backs off on 429). Nothing else keeps them: no history before
+  the app first ran with this. A project's share of the limit is an estimate:
+  each rise between two readings of one window is split over the replies sent
+  in that interval, weighted by API price; a rise with no reply behind it is
+  "Outside this app". Worktrees count as their project, the chat folder as
+  Buddy, a group folder as its group.
 - **Menu bar** (`tray-status.js`, setting `trayIcon`, macOS): idle ring,
   spinning arc while any live session runs, orange disc while one waits; its
   menu lists them. Follows the setting on save (`set-setting` for `global`).

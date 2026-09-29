@@ -12,35 +12,27 @@
     <!-- Grouped sessions header. Not a project: it has no page to open, no
          settings of its own and no single project to start a session in —
          the + asks which projects the new one should span instead. -->
-    <div v-else-if="project.isGroupContainer" class="project-header project-header--groups" :class="{ collapsed, 'has-active-session': hasActiveSession }" :id="'ph-' + folderId" @click.self="toggle">
+    <div v-else-if="project.isGroupContainer" class="project-header project-header--groups" :class="{ collapsed, 'has-active-session': hasActiveSession }" :id="'ph-' + folderId" data-tooltip="Grouped sessions" @click.self="toggle">
       <span class="arrow" @click.stop="toggle">&#9660;</span>
       <span class="project-header-avatar project-header-avatar--groups" @click.stop="toggle"><SbIcon name="layers" :size="13" /></span>
       <span class="project-name" @click.stop="toggle">Grouped sessions</span>
-      <button
-        v-if="olderItems.length"
-        type="button"
-        class="project-older-btn"
-        :class="{ 'is-on': showOlder }"
-        :data-tooltip="showOlder ? 'Hide the older sessions' : `Show ${olderItems.length} older session${olderItems.length === 1 ? '' : 's'}`"
-        @click.stop="showOlder = !showOlder"
-      >{{ showOlder ? 'Hide older' : `Older (${olderItems.length})` }}</button>
-      <button class="project-archive-btn" data-tooltip="Archive all sessions" @click.stop="archiveAll"><SbIcon name="archive" :size="13" tone="muted" /></button>
-      <button class="project-new-btn" data-tooltip="New group session" @click.stop="newGroup"><SbIcon name="plus" :size="13" tone="muted" /></button>
+      <!-- Over the end of the name rather than beside it: hidden, they take no
+           width, so the name has the whole row; shown, the name runs on under
+           their fade. -->
+      <div class="project-header-actions">
+        <button class="project-archive-btn" data-tooltip="Archive all sessions" @click.stop="archiveAll"><SbIcon name="archive" :size="13" tone="muted" /></button>
+        <button class="project-new-btn" data-tooltip="New group session" @click.stop="newGroup"><SbIcon name="plus" :size="13" tone="muted" /></button>
+      </div>
     </div>
 
     <!-- Project header -->
-    <div v-else class="project-header" :class="{ collapsed, 'has-active-session': hasActiveSession }" :id="'ph-' + folderId" @click.self="toggle">
+    <!-- The tooltip is the full path: a narrow column can leave no room for
+         the name at all. -->
+    <div v-else class="project-header" :class="{ collapsed, 'has-active-session': hasActiveSession }" :id="'ph-' + folderId" :data-tooltip="project.projectPath" @click.self="toggle">
       <span class="arrow" @click.stop="toggle">&#9660;</span>
       <ProjectAvatar class="project-header-avatar" :project-path="project.projectPath" @click.stop="toggle" />
       <span class="project-name" @click.stop="toggle">{{ shortName }}</span>
-      <button
-        v-if="olderItems.length"
-        type="button"
-        class="project-older-btn"
-        :class="{ 'is-on': showOlder }"
-        :data-tooltip="showOlder ? 'Hide the older sessions' : `Show ${olderItems.length} older session${olderItems.length === 1 ? '' : 's'}`"
-        @click.stop="showOlder = !showOlder"
-      >{{ showOlder ? 'Hide older' : `Older (${olderItems.length})` }}</button>
+      <div class="project-header-actions">
       <!-- Jumps to the project view. Lives on the group header, not on the
            session rows: the target is the same for every row in the group,
            and this is where the other project-scoped controls already are.
@@ -58,6 +50,7 @@
       <button class="project-settings-btn" data-tooltip="Project settings" @click.stop="$emit('settings', project.projectPath)"><SbIcon name="settings" :size="13" tone="muted" /></button>
       <button class="project-archive-btn" data-tooltip="Archive all sessions" @click.stop="archiveAll"><SbIcon name="archive" :size="13" tone="muted" /></button>
       <button class="project-new-btn" data-tooltip="New session" @click.stop="$emit('new-session', project, $event.currentTarget)"><SbIcon name="plus" :size="13" tone="muted" /></button>
+      </div>
     </div>
 
     <!-- Sessions list -->

@@ -305,6 +305,15 @@ body.hide-avatars .sbx-board__avatar { display: none; }
   flex: none;
 }
 
+/* The row's unread badge (style.css .session-unread), a size down for the
+   card and pushed to the end of the meta line. */
+.sbx-board__unread {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  font-size: 9px;
+}
+
 .sbx-board__metatext {
   min-width: 0;
   font-family: var(--font-mono);

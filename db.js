@@ -251,6 +251,67 @@ const migrations = [
     try { db.exec('DELETE FROM session_cache'); } catch {}
     try { db.exec('DELETE FROM cache_meta'); } catch {}
   },
+  // Usage stats (usage-ledger.js, usage-stats.js).
+  //
+  // usage_messages: one row per API response, keyed by its message id within
+  // the account — the CLI writes a response as several lines, and a fork copies
+  // its parent's, so the id is what makes it count once. Separate from
+  // session_cache on purpose: this outlives the transcript it was read from,
+  // and the session cache is cleared by any migration that wants a re-index.
+  //
+  // usage_files: how far each transcript has been read.
+  //
+  // limit_observations: readings of the plan's meters, which nothing else
+  // keeps — the API only ever answers with the current value.
+  (db) => {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS usage_messages (
+        accountId TEXT NOT NULL,
+        messageId TEXT NOT NULL,
+        sessionId TEXT,
+        folder TEXT,
+        projectPath TEXT,
+        ts INTEGER NOT NULL,
+        model TEXT,
+        inputTokens INTEGER NOT NULL DEFAULT 0,
+        outputTokens INTEGER NOT NULL DEFAULT 0,
+        cacheWriteTokens INTEGER NOT NULL DEFAULT 0,
+        cacheWrite1hTokens INTEGER NOT NULL DEFAULT 0,
+        cacheReadTokens INTEGER NOT NULL DEFAULT 0,
+        sidechain INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (accountId, messageId)
+      );
+      CREATE INDEX IF NOT EXISTS idx_usage_messages_ts ON usage_messages(accountId, ts);
+      CREATE TABLE IF NOT EXISTS usage_files (
+        path TEXT PRIMARY KEY,
+        accountId TEXT NOT NULL,
+        ino INTEGER NOT NULL DEFAULT 0,
+        bytes INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE IF NOT EXISTS limit_observations (
+        accountId TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        ts INTEGER NOT NULL,
+        utilization REAL NOT NULL,
+        resetsAt INTEGER,
+        source TEXT,
+        PRIMARY KEY (accountId, kind, ts)
+      );
+    `);
+  },
+  // Who started a session, when it was not the user: 'buddy' for one Buddy
+  // started through its start_session tool. NULL for everything else — the
+  // sessions that predate this column were the user's own or cannot be told.
+  (db) => {
+    try { db.exec('ALTER TABLE session_meta ADD COLUMN startedBy TEXT'); } catch {}
+  },
+  // How many of Claude's messages were on screen the last time a session was
+  // looked at — the unread counter's baseline (src/vue/unread.js). It lived in
+  // the window's localStorage, which a dev build and the packaged app do not
+  // share: whichever one you did not use saw days of work as unread.
+  (db) => {
+    try { db.exec('ALTER TABLE session_meta ADD COLUMN unreadSeen INTEGER'); } catch {}
+  },
 ];
 
 const currentDbVersion = (() => {
@@ -300,6 +361,18 @@ const stmts = {
     INSERT INTO session_meta (sessionId, archived) VALUES (?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET archived = excluded.archived
   `),
+  upsertStartedBy: db.prepare(`
+    INSERT INTO session_meta (sessionId, startedBy) VALUES (?, ?)
+    ON CONFLICT(sessionId) DO UPDATE SET startedBy = excluded.startedBy
+  `),
+  // Only ever up: two windows (or a dev build beside the packaged app) each
+  // write what they saw, and the furthest anyone read is what was read.
+  upsertUnreadSeen: db.prepare(`
+    INSERT INTO session_meta (sessionId, unreadSeen) VALUES (?, ?)
+    ON CONFLICT(sessionId) DO UPDATE SET
+      unreadSeen = MAX(COALESCE(session_meta.unreadSeen, 0), excluded.unreadSeen)
+  `),
+  getUnreadSeen: db.prepare('SELECT sessionId, unreadSeen FROM session_meta WHERE unreadSeen IS NOT NULL'),
   metaDeleteSession: db.prepare('DELETE FROM session_meta WHERE sessionId = ?'),
   // Session cache statements
   cacheCountByAccount: db.prepare("SELECT COUNT(*) as cnt FROM session_cache WHERE accountId = ?"),
@@ -387,6 +460,36 @@ function toggleStar(sessionId) {
 
 function setArchived(sessionId, archived) {
   stmts.upsertArchived.run(sessionId, archived ? 1 : 0);
+}
+
+function setStartedBy(sessionId, startedBy) {
+  stmts.upsertStartedBy.run(sessionId, startedBy || null);
+}
+
+// A fork or a plan-accept is the same conversation under a new id; whoever
+// started the old one started this one too.
+function inheritStartedBy(oldId, newId) {
+  const startedBy = getMeta(oldId)?.startedBy;
+  if (startedBy) setStartedBy(newId, startedBy);
+}
+
+/** Every session's unread baseline, as { sessionId: count }. */
+function getUnreadSeen() {
+  const out = {};
+  for (const row of stmts.getUnreadSeen.all()) out[row.sessionId] = row.unreadSeen;
+  return out;
+}
+
+const setUnreadSeenBatch = db.transaction((entries) => {
+  for (const [sessionId, seen] of entries) {
+    const n = Number(seen);
+    if (sessionId && Number.isFinite(n) && n >= 0) stmts.upsertUnreadSeen.run(sessionId, Math.trunc(n));
+  }
+});
+
+/** Record baselines; each only moves up — see upsertUnreadSeen. */
+function setUnreadSeen(map) {
+  if (map && typeof map === 'object') setUnreadSeenBatch(Object.entries(map));
 }
 
 // The star/archive/name row. Only for a session being deleted outright — an
@@ -688,6 +791,105 @@ function setStoredAvatar(projectPath, avatarData, mimeType) {
   }
 }
 
+// --- Usage ledger ---
+
+let _us = null;
+function us() {
+  if (_us) return _us;
+  _us = {
+    // A response seen twice keeps the larger counts: while a response streams,
+    // an early line can carry a partial output count.
+    upsertMessage: db.prepare(`
+      INSERT INTO usage_messages (accountId, messageId, sessionId, folder, projectPath, ts, model,
+        inputTokens, outputTokens, cacheWriteTokens, cacheWrite1hTokens, cacheReadTokens, sidechain)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(accountId, messageId) DO UPDATE SET
+        inputTokens = MAX(inputTokens, excluded.inputTokens),
+        outputTokens = MAX(outputTokens, excluded.outputTokens),
+        cacheWriteTokens = MAX(cacheWriteTokens, excluded.cacheWriteTokens),
+        cacheWrite1hTokens = MAX(cacheWrite1hTokens, excluded.cacheWrite1hTokens),
+        cacheReadTokens = MAX(cacheReadTokens, excluded.cacheReadTokens)
+    `),
+    messagesBetween: db.prepare(`
+      SELECT messageId, sessionId, folder, projectPath, ts, model,
+        inputTokens AS input, outputTokens AS output, cacheWriteTokens AS cacheWrite,
+        cacheWrite1hTokens AS cacheWrite1h, cacheReadTokens AS cacheRead, sidechain
+      FROM usage_messages WHERE accountId = ? AND ts >= ? AND ts <= ? ORDER BY ts
+    `),
+    folderPaths: db.prepare('SELECT folder, projectPath FROM usage_messages WHERE accountId = ? GROUP BY folder'),
+    filesForAccount: db.prepare('SELECT path, ino, bytes FROM usage_files WHERE accountId = ?'),
+    upsertFile: db.prepare(`
+      INSERT INTO usage_files (path, accountId, ino, bytes) VALUES (?, ?, ?, ?)
+      ON CONFLICT(path) DO UPDATE SET accountId = excluded.accountId, ino = excluded.ino, bytes = excluded.bytes
+    `),
+    insertObservation: db.prepare(`
+      INSERT OR REPLACE INTO limit_observations (accountId, kind, ts, utilization, resetsAt, source)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `),
+    lastObservation: db.prepare(`
+      SELECT ts, utilization, resetsAt, source FROM limit_observations
+      WHERE accountId = ? AND kind = ? ORDER BY ts DESC LIMIT 1
+    `),
+    observationsBetween: db.prepare(`
+      SELECT ts, utilization, resetsAt FROM limit_observations
+      WHERE accountId = ? AND kind = ? AND ts >= ? AND ts <= ? ORDER BY ts
+    `),
+    firstObservation: db.prepare('SELECT MIN(ts) AS ts FROM limit_observations WHERE accountId = ?'),
+  };
+  return _us;
+}
+
+const storeUsageScanTx = db.transaction((accountId, rows, files) => {
+  const s = us();
+  for (const r of rows) {
+    s.upsertMessage.run(
+      accountId, r.messageId, r.sessionId || null, r.folder || null, r.projectPath || null, r.ts,
+      r.model || null, r.input || 0, r.output || 0, r.cacheWrite || 0, r.cacheWrite1h || 0,
+      r.cacheRead || 0, r.sidechain ? 1 : 0
+    );
+  }
+  for (const [p, st] of Object.entries(files || {})) s.upsertFile.run(p, accountId, st.ino || 0, st.bytes || 0);
+});
+
+/** One scan's rows and file offsets, in one transaction. */
+function storeUsageScan(accountId, rows, files) {
+  storeUsageScanTx(accountId, rows, files);
+}
+
+function getUsageMessages(accountId, from, to) {
+  return us().messagesBetween.all(accountId, from, to);
+}
+
+/** `{ [path]: { ino, bytes } }` — where the next scan of this account starts. */
+function getUsageFileStates(accountId) {
+  const out = {};
+  for (const r of us().filesForAccount.all(accountId)) out[r.path] = { ino: r.ino, bytes: r.bytes };
+  return out;
+}
+
+/** `{ [folder]: projectPath }` already resolved for this account. */
+function getUsageFolderPaths(accountId) {
+  const out = {};
+  for (const r of us().folderPaths.all(accountId)) if (r.folder && r.projectPath) out[r.folder] = r.projectPath;
+  return out;
+}
+
+function addLimitObservation(accountId, kind, ts, utilization, resetsAt, source) {
+  us().insertObservation.run(accountId, kind, ts, utilization, resetsAt ?? null, source || null);
+}
+
+function getLastLimitObservation(accountId, kind) {
+  return us().lastObservation.get(accountId, kind) || null;
+}
+
+function getLimitObservations(accountId, kind, from, to) {
+  return us().observationsBetween.all(accountId, kind, from, to);
+}
+
+function getFirstLimitObservationTs(accountId) {
+  return us().firstObservation.get(accountId)?.ts || null;
+}
+
 // --- Settings functions ---
 
 function getSetting(key) {
@@ -710,6 +912,7 @@ function closeDb() {
 
 module.exports = {
   getMeta, getAllMeta, setName, toggleStar, setArchived, deleteSessionMeta,
+  setStartedBy, inheritStartedBy, getUnreadSeen, setUnreadSeen,
   isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
@@ -719,5 +922,7 @@ module.exports = {
   searchByType, isSearchIndexPopulated, searchFtsRecreated,
   getSetting, setSetting, deleteSetting,
   getStoredAvatar, setStoredAvatar,
+  storeUsageScan, getUsageMessages, getUsageFileStates, getUsageFolderPaths,
+  addLimitObservation, getLastLimitObservation, getLimitObservations, getFirstLimitObservationTs,
   closeDb,
 };

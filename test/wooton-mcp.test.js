@@ -132,3 +132,67 @@ test('create_todo passes the list deadline through as a date', async () => {
   assert.equal(res.isError, false);
   assert.equal(calls.pop()[1].due, todoDue.addDays(today, 3));
 });
+
+test('list_sessions marks and filters the sessions Buddy started', async () => {
+  let query = null;
+  mcp.configure({
+    listSessions: (q) => {
+      query = q;
+      return [{ sessionId: 'a1', title: 'Fix login', projectPath: '/repo/app', startedByBuddy: true }];
+    },
+  });
+  const res = await mcp.runTool('list_sessions', { startedByYou: true });
+  assert.equal(res.ok, true);
+  assert.equal(query.buddyOnly, true);
+  assert.match(res.text, /started by you/);
+
+  await mcp.runTool('list_sessions', {});
+  assert.equal(query.buddyOnly, undefined);
+});
+
+test('read_sessions reads a period in one call, with each session\'s prompt and messages', async () => {
+  let args = null;
+  mcp.configure({
+    readSessions: (a) => {
+      args = a;
+      return {
+        ok: true, total: 3,
+        sessions: [{
+          sessionId: 's1', title: 'Auth cleanup', projectPath: '/repo/auth', firstPrompt: 'Remove old branches',
+          windowMessages: 9,
+          messages: [{ role: 'assistant', text: 'Deleted 12 branches', ts: null }],
+        }],
+      };
+    },
+  });
+  const res = await mcp.runTool('read_sessions', { from: '2026-09-28', to: '2026-09-28' });
+  assert.equal(res.ok, true);
+  assert.equal(args.from, '2026-09-28');
+  assert.equal(args.includeArchived, true);
+  assert.match(res.text, /asked: Remove old branches/);
+  assert.match(res.text, /9 message\(s\) in that period, last 1/);
+  assert.match(res.text, /Deleted 12 branches/);
+  assert.match(res.text, /2 more session\(s\) match/);
+});
+
+test('read_sessions refuses an unnarrowed read with the reason', async () => {
+  mcp.configure({ readSessions: () => ({ ok: false, error: 'Name the sessions' }) });
+  const res = await mcp.runTool('read_sessions', {});
+  assert.equal(res.isError, true);
+  assert.match(res.text, /Name the sessions/);
+});
+
+test('search_sessions splits a sentence into terms and shows what matched', async () => {
+  let args = null;
+  mcp.configure({
+    findSessions: (a) => {
+      args = a;
+      return { total: 1, hits: [{ sessionId: 's1', title: 'Login flow', projectPath: '/repo/app', matched: ['auth', 'login'], snippet: 'fixed the auth token refresh' }] };
+    },
+  });
+  const res = await mcp.runTool('search_sessions', { query: 'Auth login', terms: ['auth'] });
+  assert.deepEqual(args.terms, ['auth', 'login']);
+  assert.equal(args.titleOnly, false);
+  assert.match(res.text, /matched: auth, login/);
+  assert.match(res.text, /auth token refresh/);
+});

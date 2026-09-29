@@ -30,12 +30,14 @@ const {
 } = require('./transcript-window');
 const { createDockAttention } = require('./dock-attention');
 const { createSessionAlerts } = require('./session-alerts');
+const sessionFind = require('./session-find');
 const trayStatus = require('./tray-status');
 const {
   detectCompose, composeCheckDue, pollPlan, activeProjectPaths,
 } = require('./project-polling');
 const sdkSession = require('./sdk-session');
-const { fetchAndTransformUsage, getOAuthToken, probeUsage } = require('./claude-auth');
+const { fetchAndTransformUsage, fetchUsage, getOAuthToken, probeUsage, fetchModels } = require('./claude-auth');
+const modelCatalog = require('./model-catalog');
 const mcpInventory = require('./mcp-inventory');
 const gitPushLinks = require('./git-push-links');
 const gitStaging = require('./git-staging');
@@ -49,6 +51,7 @@ const chatAgent = require('./chat-agent');
 const { toolPolicy, sdkToolRules } = require('./tool-policy');
 const projectFiles = require('./project-files');
 const dockerStatus = require('./docker-status');
+const usageStats = require('./usage-stats');
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
@@ -108,6 +111,7 @@ if (app.isPackaged || process.env.FORCE_UPDATER) {
 }
 const {
   getMeta, getAllMeta, toggleStar, setName, setArchived, deleteSessionMeta,
+  setStartedBy, inheritStartedBy, getUnreadSeen, setUnreadSeen,
   isCachePopulated, getAllCached, getCachedByFolder, getCachedFolder, getCachedSession, upsertCachedSessions,
   deleteCachedSession, deleteCachedFolder,
   getFolderMeta, getAllFolderMeta, setFolderMeta,
@@ -839,6 +843,7 @@ function startSdkSessionFor(sessionId, projectPath, isNew, sessionOptions) {
     },
 
     onSessionId: (oldId, newId) => {
+      inheritStartedBy(oldId, newId);
       sessionStatus.rekey(oldId, newId);
       sessionAlerts.rekey(oldId, newId);
       // The manager chat remembers its id across restarts; a re-key has to
@@ -854,6 +859,10 @@ function startSdkSessionFor(sessionId, projectPath, isNew, sessionOptions) {
 
     onMessage: (id, message) => {
       if (message?.type === 'result') recordManagerSpend(id, message);
+      if (message?.type === 'rate_limit_event') {
+        usageStats.recordRateLimitEvent(getActiveAccount().id, message.rate_limit_info);
+      }
+      usageStats.noteActivity();
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('sdk-message', id, message);
       }
@@ -1158,7 +1167,7 @@ function initSessionCache() {
 
 initSessionCache();
 const { readSessionFile, readFolderFromFilesystem, refreshFolder, populateCacheFromFilesystem,
-        buildProjectSets, notifyRendererProjectsChanged, populateCacheViaWorker } = sessionCache;
+        buildProjectSets, notifyRendererProjectsChanged, populateCacheViaWorker, hasScanned } = sessionCache;
 
 
 // --- IPC: browse-folder ---
@@ -1172,7 +1181,15 @@ ipcMain.handle('browse-folder', async () => {
 });
 
 // --- IPC: add-project ---
-ipcMain.handle('add-project', (_event, rawProjectPath) => {
+ipcMain.handle('add-project', (_event, rawProjectPath) => addProject(rawProjectPath));
+
+/**
+ * Make a folder a project: its `projects/<encoded>` directory in the active
+ * account's Claude home, and the path recorded against it. Idempotent — adding
+ * one that is already there only unhides it. `existed` says which it was.
+ * `notify: false` for a batch, which tells the renderer once at the end.
+ */
+function addProject(rawProjectPath, { notify = true } = {}) {
   const projectPath = canonicalProjectPath(rawProjectPath);
   // A folder picked inside a distribution only belongs to that distribution's
   // account: its Claude home is the one that would record the sessions. Say so,
@@ -1200,7 +1217,8 @@ ipcMain.handle('add-project', (_event, rawProjectPath) => {
     // Create the corresponding folder in ~/.claude/projects/ so it persists
     const folder = encodeProjectPath(projectPath);
     const folderPath = path.join(activeProjectsDir(), folder);
-    if (!fs.existsSync(folderPath)) {
+    const existed = fs.existsSync(folderPath);
+    if (!existed) {
       fs.mkdirSync(folderPath, { recursive: true });
     }
 
@@ -1218,14 +1236,83 @@ ipcMain.handle('add-project', (_event, rawProjectPath) => {
     // their own.
     refreshFolder(folder);
 
-    notifyRendererProjectsChanged();
+    if (notify) notifyRendererProjectsChanged();
     // Kick off du -sk once on add; subsequent refreshes use the long random TTL
     cacheProjectSize(projectPath);
 
-    return { ok: true, folder, projectPath };
+    return { ok: true, folder, projectPath, existed };
   } catch (err) {
     return { error: err.message };
   }
+}
+
+// --- Folders of projects ---
+// ~/GolandProjects, ~/PhpstormProjects, ~/Projects: a folder whose every
+// subfolder is a project. Adding one adds each of those; the suggestions are
+// the ones sitting in the home directory, so a new account can be filled in
+// without a file picker.
+
+/** The subfolders of `dir` worth calling projects: not hidden, actually folders. */
+function projectCandidates(dir) {
+  let entries;
+  try { entries = fs.readdirSync(hostPath(dir), { withFileTypes: true }); } catch { return []; }
+  const out = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith('.')) continue;
+    const child = projectJoin(dir, entry.name);
+    // A symlink to a folder counts; a file, or a link to one, does not.
+    let isDir = entry.isDirectory();
+    if (!isDir && entry.isSymbolicLink()) {
+      try { isDir = fs.statSync(hostPath(child)).isDirectory(); } catch {}
+    }
+    if (isDir) out.push(child);
+  }
+  return out.sort((a, b) => a.localeCompare(b));
+}
+
+const isKnownProject = (projectPath) =>
+  fs.existsSync(path.join(activeProjectsDir(), encodeProjectPath(projectPath)));
+
+ipcMain.handle('add-projects-in-folder', (_event, rawDir) => {
+  const dir = canonicalProjectPath(String(rawDir || '').trim());
+  if (!dir) return { error: 'Please enter a folder path.' };
+  try {
+    if (!fs.statSync(hostPath(dir)).isDirectory()) return { error: 'Path is not a directory' };
+  } catch (err) {
+    return { error: err.message };
+  }
+  const children = projectCandidates(dir);
+  if (!children.length) return { error: 'There are no folders inside it to add.' };
+
+  const added = [];
+  const already = [];
+  const failed = [];
+  for (const child of children) {
+    const result = addProject(child, { notify: false });
+    if (result.error) failed.push({ projectPath: child, error: result.error });
+    else (result.existed ? already : added).push(result.projectPath);
+  }
+  notifyRendererProjectsChanged();
+  log.info(`[projects] added ${added.length} from ${dir} (${already.length} already there, ${failed.length} failed)`);
+  return { ok: true, dir, added, already, failed };
+});
+
+ipcMain.handle('suggest-project-folders', () => {
+  // A WSL account's home is inside the distribution; the Windows one is not
+  // where its projects are.
+  if (accountWslDistro(getActiveAccount())) return [];
+  const home = os.homedir();
+  let entries;
+  try { entries = fs.readdirSync(home, { withFileTypes: true }); } catch { return []; }
+  return entries
+    .filter(e => e.isDirectory() && !e.name.startsWith('.') && /projects$/i.test(e.name))
+    .map((e) => {
+      const dir = path.join(home, e.name);
+      const children = projectCandidates(dir);
+      return { dir, name: e.name, count: children.length, added: children.filter(isKnownProject).length };
+    })
+    .filter(s => s.count > 0)
+    .sort((a, b) => a.name.localeCompare(b.name));
 });
 
 // --- IPC: remove-project ---
@@ -2392,6 +2479,8 @@ function managerSessions() {
         status: managerStatus(s.sessionId, live, statuses),
         archived: s.archived ? 1 : 0,
         starred: s.starred ? 1 : 0,
+        startedByBuddy: s.startedBy === 'buddy',
+        firstPrompt: s.firstPrompt || '',
         group,
       });
     }
@@ -2432,6 +2521,125 @@ function transcriptTail(sessionId, limit = 20) {
   return messages.slice(-limit);
 }
 
+/** The transcript file of a cached session, or null. */
+function sessionTranscriptPath(sessionId) {
+  const folder = getCachedFolder(sessionId);
+  return folder ? path.join(activeProjectsDir(), folder, sessionId + '.jsonl') : null;
+}
+
+/** managerSessions() narrowed the way list/read/search tools all narrow it. */
+function managerSessionsWhere({ projectPath, win, buddyOnly, includeArchived = true } = {}) {
+  let sessions = managerSessions();
+  if (projectPath) sessions = sessions.filter(s => s.projectPath === projectPath
+    || (s.group?.projects || []).includes(projectPath));
+  if (!includeArchived) sessions = sessions.filter(s => !s.archived);
+  if (buddyOnly) sessions = sessions.filter(s => s.startedByBuddy);
+  if (win) sessions = sessions.filter(s => sessionFind.overlaps(s, win));
+  return sessions;
+}
+
+/**
+ * Many sessions at once, each with its opening prompt and its last messages —
+ * inside the window when there is one, so "what happened on Monday" reads
+ * Monday's messages, not whatever the session did since.
+ */
+function readManySessions({ sessionIds, from, to, withinDays, projectPath, buddyOnly, includeArchived, limit, messagesPerSession } = {}) {
+  const win = sessionFind.timeWindow({ from, to, withinDays });
+  let sessions;
+  if (Array.isArray(sessionIds) && sessionIds.length) {
+    const byId = new Map(managerSessions().map(s => [s.sessionId, s]));
+    sessions = sessionIds.map(id => byId.get(id)).filter(Boolean);
+  } else {
+    if (!win && !projectPath && !buddyOnly) {
+      return { ok: false, error: 'Name the sessions (sessionIds) or narrow them: from/to, withinDays, projectPath or startedByYou.' };
+    }
+    sessions = managerSessionsWhere({ projectPath, win, buddyOnly, includeArchived });
+  }
+  const total = sessions.length;
+  const per = Math.min(Math.max(Number(messagesPerSession) || 6, 1), 30);
+  sessions = sessions.slice(0, Math.min(Math.max(Number(limit) || 15, 1), 40));
+  return {
+    ok: true,
+    total,
+    sessions: sessions.map((s) => {
+      const file = sessionTranscriptPath(s.sessionId);
+      const records = file ? sessionFind.readTailRecords(file) : [];
+      const inWindow = sessionFind.messagesOf(records, win);
+      return { ...s, messages: inWindow.slice(-per), windowMessages: inWindow.length };
+    }),
+  };
+}
+
+/**
+ * Sessions matching any of `terms`, best first. Looks in three places,
+ * cheapest first: the title and opening prompt of every session; the search
+ * index (which only holds the start of each transcript); and the tail of the
+ * most recent transcripts, where a long session's later work is.
+ */
+function findSessionsByText({ terms, from, to, withinDays, projectPath, titleOnly, limit } = {}) {
+  const win = sessionFind.timeWindow({ from, to, withinDays });
+  const pool = managerSessionsWhere({ projectPath, win });
+  const byId = new Map(pool.map(s => [s.sessionId, s]));
+  const hits = new Map();
+  const hit = (s) => {
+    if (!hits.has(s.sessionId)) hits.set(s.sessionId, { ...s, matched: new Set(), snippet: '', inTitle: false, inPrompt: false });
+    return hits.get(s.sessionId);
+  };
+  const note = (s, found, where) => {
+    if (!found.matched.length) return;
+    const h = hit(s);
+    found.matched.forEach(t => h.matched.add(t));
+    if (where === 'title') h.inTitle = true;
+    if (where === 'prompt') h.inPrompt = true;
+    if (!h.snippet && found.snippet && where !== 'title') h.snippet = found.snippet;
+  };
+
+  for (const s of pool) {
+    note(s, sessionFind.matchTerms(s.title, terms), 'title');
+    if (!titleOnly) note(s, sessionFind.matchTerms(s.firstPrompt, terms), 'prompt');
+  }
+  if (!titleOnly) {
+    // Trigram index: a term under three characters cannot be looked up.
+    for (const term of terms.filter(t => t.length >= 3)) {
+      for (const row of searchByType('session', term, 60, false)) {
+        const s = byId.get(row.id);
+        if (!s) continue;
+        const h = hit(s);
+        h.matched.add(term);
+        if (!h.snippet) h.snippet = String(row.snippet || '').replace(/<\/?mark>/g, '').replace(/\s+/g, ' ').trim();
+      }
+    }
+    // The tails of the most recent sessions in scope — two months back when
+    // the question names no period.
+    const scanWin = win || sessionFind.timeWindow({ withinDays: 60 });
+    const recent = pool.filter(s => sessionFind.overlaps(s, scanWin))
+      .sort((a, b) => String(b.modified || '').localeCompare(String(a.modified || '')))
+      .slice(0, 80);
+    for (const s of recent) {
+      const file = sessionTranscriptPath(s.sessionId);
+      if (!file) continue;
+      const text = sessionFind.messagesOf(sessionFind.readTailRecords(file, 256 * 1024))
+        .map(m => m.text).join('\n');
+      note(s, sessionFind.matchTerms(text, terms), 'tail');
+    }
+  }
+  const ranked = sessionFind.rankHits([...hits.values()]);
+  return {
+    total: ranked.length,
+    hits: ranked.slice(0, Math.min(Math.max(Number(limit) || 15, 1), 40))
+      .map(h => ({ ...h, matched: [...h.matched] })),
+  };
+}
+
+/** `options` with the settings' model and effort filled in where it has none. */
+function withSettingsDefaults(projectPath, options) {
+  const effective = effectiveSettingsFor(projectPath);
+  const out = { ...(options || {}) };
+  if (!out.model && effective.model) out.model = effective.model;
+  if (!out.effort && effective.effort) out.effort = effective.effort;
+  return out;
+}
+
 /** The project's effective settings, as a new session from the UI would get them. */
 function effectiveSettingsFor(projectPath) {
   const global = getSetting('global') || {};
@@ -2470,12 +2678,15 @@ async function startManagedSession(projectPath, { prompt, name } = {}) {
 
   const result = await startSdkSessionFor(sessionId, projectPath, true, options);
   if (!result.ok) return result;
+  // Marked before the first prompt, so no sidebar build sees it unmarked.
+  setStartedBy(sessionId, 'buddy');
   if (name) setName(sessionId, name);
   if (prompt && String(prompt).trim()) sdkSession.sendSdkInput(sessionId, String(prompt));
 
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('external-session-started', {
       sessionId, projectPath, name: name || null, prompt: prompt || '', mode: 'sdk',
+      startedBy: 'buddy',
       // A group session's row belongs under the one "Grouped sessions" entry,
       // and draws its avatars from the manifest — see foldGroups.
       group, groupsRoot: group ? activeGroupsRoot() : null,
@@ -2544,7 +2755,7 @@ wootonMcp.configure({
       }));
   },
 
-  listSessions: ({ projectPath, limit, activeOnly, sinceMs, includeArchived, archivedOnly, groupsOnly } = {}) => {
+  listSessions: ({ projectPath, limit, activeOnly, sinceMs, includeArchived, archivedOnly, groupsOnly, buddyOnly } = {}) => {
     const root = activeGroupsRoot();
     let sessions = managerSessions();
     if (projectPath) sessions = sessions.filter(s => s.projectPath === projectPath
@@ -2553,6 +2764,7 @@ wootonMcp.configure({
     else if (!includeArchived) sessions = sessions.filter(s => !s.archived);
     if (activeOnly) sessions = sessions.filter(s => s.running);
     if (groupsOnly) sessions = sessions.filter(s => sessionGroups.isGroupPath(root, s.projectPath));
+    if (buddyOnly) sessions = sessions.filter(s => s.startedByBuddy);
     if (sinceMs) sessions = sessions.filter(s => new Date(s.modified).getTime() >= sinceMs);
     return sessions.slice(0, limit || 20);
   },
@@ -2563,20 +2775,9 @@ wootonMcp.configure({
     .filter(s => s.running)
     .map(s => ({ ...s, messages: transcriptTail(s.sessionId, limit || 3) })),
 
-  searchSessions: async (query, { titleOnly } = {}) => {
-    const byId = new Map(managerSessions().map(s => [s.sessionId, s]));
-    return searchByType('session', String(query || ''), 30, titleOnly !== false)
-      .map(hit => {
-        const s = byId.get(hit.id);
-        if (!s) return null;
-        return {
-          sessionId: s.sessionId, title: s.title, projectPath: s.projectPath, modified: s.modified,
-          archived: s.archived,
-          snippet: titleOnly === false ? String(hit.snippet || '').replace(/<\/?mark>/g, '') : '',
-        };
-      })
-      .filter(Boolean);
-  },
+  readSessions: async (args) => readManySessions(args),
+
+  findSessions: async (args) => findSessionsByText(args),
 
   createSession: async ({ projectPath, prompt, name }) => {
     const canonical = canonicalProjectPath(String(projectPath || '').trim());
@@ -3180,7 +3381,10 @@ ipcMain.handle('manager-chat-reset', async () => {
 // difference of one filter. See buildProjectSets.
 ipcMain.handle('get-project-sets', () => {
   try {
-    const needsPopulate = !isCachePopulated(getActiveAccount().id) || !isSearchIndexPopulated();
+    // Once scanned this run, an account's list is whatever the cache holds —
+    // nothing at all, for one with no sessions yet.
+    const id = getActiveAccount().id;
+    const needsPopulate = !hasScanned(id) && (!isCachePopulated(id) || !isSearchIndexPopulated());
 
     if (needsPopulate) {
       populateCacheViaWorker();
@@ -3456,7 +3660,7 @@ ipcMain.handle('refresh-stats', async () => {
     // Run /stats via PTY (for heatmap/chart data) and fetch usage via API in parallel
     const [, usage] = await Promise.all([
       runClaude('"/stats"', { waitFor: /streak/i, timeoutMs: 10000 }),
-      fetchAndTransformUsage(configDir).catch(() => ({})),
+      fetchAndTransformUsage(configDir, { onRaw: raw => usageStats.recordUsageApi(getActiveAccount().id, raw) }).catch(() => ({})),
     ]);
 
     // Read refreshed stats cache (written to active account's config dir)
@@ -3738,13 +3942,81 @@ ipcMain.handle('set-active-account-id', (_event, accountId) => {
   return { ok: true };
 });
 
+// --- Usage stats ---
+// Tokens per project per day from the transcripts, and the plan's limit
+// readings over time with each project's estimated share — usage-stats.js.
+// Per account: the account page asks for any account, a project page for the
+// active one (null).
+
+// The key a message is filed under: the assistant's folder is Buddy, a group
+// folder is its group, a CLI worktree is the project it was made from.
+function usageKeyContext(account) {
+  const chat = path.join(account.configDir, 'wooton-chat');
+  return {
+    chatDirs: [chat, canonicalProjectPath(chat)],
+    groupsRoot: canonicalProjectPath(sessionGroups.groupsRoot(account.configDir)),
+  };
+}
+
+function describeUsageKey(account, key) {
+  if (key === 'buddy') return { label: 'Buddy', kind: 'buddy' };
+  const root = canonicalProjectPath(sessionGroups.groupsRoot(account.configDir));
+  const groupId = sessionGroups.groupIdFromPath(root, key);
+  if (groupId) {
+    const group = sessionGroups.readGroup(root, groupId, p => accountHostPath(account, p));
+    return { label: group?.name || groupId, kind: 'group', path: key };
+  }
+  return { label: projectName(key), kind: 'project', path: key };
+}
+
+usageStats.configure({
+  log,
+  getAccounts,
+  getActiveAccount,
+  projectsDirOf: getProjectsDir,
+  fetchUsageRaw: (account) => fetchUsage(account.configDir),
+  keyContext: usageKeyContext,
+  describeKey: describeUsageKey,
+  sessionTitle: (sessionId, key) => {
+    if (key === 'buddy') return 'Buddy chat';
+    const cached = getCachedSession(sessionId);
+    return getMeta(sessionId)?.name || cached?.customTitle || cached?.aiTitle || cached?.summary || null;
+  },
+  isBusy: () => sessionStatus.all().some(s => s.state === 'running'),
+});
+
+function usageAccount(accountId) {
+  return accountId ? findAccount(accountId) : getActiveAccount();
+}
+
+ipcMain.handle('usage-stats', async (_event, accountId, opts) => {
+  const account = usageAccount(accountId);
+  if (!account) return { ok: false, error: 'unknown account' };
+  try {
+    return await usageStats.getStats(account, opts || {});
+  } catch (err) {
+    log.error('[usage] stats failed:', err);
+    return { ok: false, error: err.message };
+  }
+});
+
+ipcMain.handle('usage-interval', async (_event, accountId, from, to) => {
+  const account = usageAccount(accountId);
+  if (!account || !Number.isFinite(from) || !Number.isFinite(to)) return { ok: false, error: 'bad request' };
+  try {
+    return await usageStats.getInterval(account, from, to);
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+});
+
 ipcMain.handle('get-accounts-usage', async () => {
   const accounts = getAccounts();
   const results = {};
   await Promise.all(accounts.map(async (account) => {
     const cacheKey = 'usage:' + account.id;
     try {
-      const usage = await fetchAndTransformUsage(account.configDir);
+      const usage = await fetchAndTransformUsage(account.configDir, { onRaw: raw => usageStats.recordUsageApi(account.id, raw) });
       if (usage && !usage._error && !usage._rateLimited && Object.keys(usage).length) {
         setSetting(cacheKey, usage);
         results[account.id] = usage;
@@ -3947,6 +4219,113 @@ ipcMain.handle('get-account-detail', (_event, accountId) => {
   };
 });
 
+// --- Signing an account in ---
+// The Agent SDK has no login of its own — it runs as whoever the CLI is signed
+// in as — so this is the CLI's: `claude auth login`, as the account (the same
+// command runAccountClaude builds), with stdin kept open. The CLI opens the
+// browser itself and exits once the browser's redirect reaches it. When the
+// browser does not open, it prints a link instead, and the page behind that
+// link ends in a code to paste back — which is what `account-login-code`
+// carries to its stdin. The credentials land wherever the CLI keeps them for
+// that config dir (the Keychain on macOS), never in this process.
+const accountLogins = new Map();   // accountId → { child, timer }
+const ACCOUNT_LOGIN_TIMEOUT_MS = 10 * 60 * 1000;
+
+function sendAccountLoginEvent(accountId, event) {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('account-login-event', accountId, event);
+}
+
+const stripTerminalCodes = (text) => String(text || '').replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '');
+
+ipcMain.handle('account-login-start', (_event, accountId, opts = {}) => {
+  const account = findAccount(accountId);
+  if (!account) return { ok: false, error: 'unknown account' };
+  if (accountLogins.has(accountId)) return { ok: true, already: true };
+
+  const argv = ['auth', 'login', ...(opts.console ? ['--console'] : [])];
+  const [file, args, options] = accountClaudeCommand(account, argv);
+  let child;
+  try {
+    child = require('child_process').spawn(file, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+
+  let output = '';
+  const entry = {
+    child,
+    timer: setTimeout(() => {
+      entry.timedOut = true;
+      try { child.kill(); } catch {}
+    }, ACCOUNT_LOGIN_TIMEOUT_MS),
+  };
+  accountLogins.set(accountId, entry);
+
+  const onData = (data) => {
+    output += data;
+    // The link the CLI prints for when the browser did not open — the last
+    // one, in case it reprints.
+    const links = stripTerminalCodes(output).match(/https:\/\/\S+/g) || [];
+    sendAccountLoginEvent(accountId, { state: 'waiting', url: links[links.length - 1] || null });
+  };
+  child.stdout.on('data', onData);
+  child.stderr.on('data', onData);
+  child.stdin.on('error', () => {});   // an exited CLI, written to late
+
+  // 'error' and 'close' can both fire for one failed spawn; the first says it.
+  const finish = (event) => {
+    if (entry.finished) return;
+    entry.finished = true;
+    clearTimeout(entry.timer);
+    if (accountLogins.get(accountId) === entry) accountLogins.delete(accountId);
+    sendAccountLoginEvent(accountId, event);
+  };
+  child.on('error', (err) => finish({
+    state: 'failed',
+    error: err.code === 'ENOENT' ? 'The claude CLI was not found.' : err.message,
+  }));
+  child.on('close', (code) => {
+    if (code === 0) return finish({ state: 'done' });
+    if (entry.cancelled) return finish({ state: 'cancelled' });
+    // Its last line, without the paste prompt that the answer follows on.
+    const said = stripTerminalCodes(output).split('\n')
+      .map(line => line.replace(/^.*if prompted\s*>\s*/i, '').trim())
+      .filter(Boolean).pop() || '';
+    finish({
+      state: 'failed',
+      error: entry.timedOut ? 'Nobody finished signing in within ten minutes.' : (said || `claude exited with code ${code}.`),
+    });
+  });
+  log.info(`[accounts] signing in ${account.id}`);
+  return { ok: true };
+});
+
+ipcMain.handle('account-login-code', (_event, accountId, code) => {
+  const entry = accountLogins.get(accountId);
+  if (!entry) return { ok: false, error: 'No sign-in is waiting for a code.' };
+  const text = String(code || '').trim();
+  if (!text) return { ok: false, error: 'Paste the code first.' };
+  entry.child.stdin.write(text + '\n');
+  return { ok: true };
+});
+
+ipcMain.handle('account-login-cancel', (_event, accountId) => {
+  const entry = accountLogins.get(accountId);
+  if (!entry) return { ok: true };
+  entry.cancelled = true;
+  try { entry.child.kill(); } catch {}
+  return { ok: true };
+});
+
+// A CLI left waiting on a browser that will never answer would otherwise
+// outlive the app by up to ten minutes.
+function cancelAccountLogins() {
+  for (const entry of accountLogins.values()) {
+    entry.cancelled = true;
+    try { entry.child.kill(); } catch {}
+  }
+}
+
 // Read one allowlisted config file out of the account's own config dir.
 ipcMain.handle('read-account-config-file', (_event, accountId, name) => {
   const account = findAccount(accountId);
@@ -3978,12 +4357,13 @@ ipcMain.handle('check-account-auth', async (_event, accountId) => {
       return { ok: true, state: 'missing', status: 0, message: 'No OAuth token found for this account.' };
     }
     if (probe.ok) {
+      if (probe.raw) usageStats.recordUsageApi(account.id, probe.raw);
       const usage = probe.usage || {};
       if (Object.keys(usage).length) setSetting('usage:' + account.id, usage);
       return { ok: true, state: 'authorized', status: probe.status, message: 'Token accepted by the usage API.', usage };
     }
     if (probe.status === 401 || probe.status === 403) {
-      return { ok: true, state: 'expired', status: probe.status, message: 'The API rejected this token — sign in again with `claude` in this account.' };
+      return { ok: true, state: 'expired', status: probe.status, message: 'The API rejected this token — sign in again.' };
     }
     if (probe.status === 429) {
       const mins = Math.ceil((probe.retryAfterSeconds || 0) / 60);
@@ -4105,10 +4485,9 @@ const PLUGIN_COMMAND_TIMEOUT_MS = 180000;
 // `cwd` is for the commands that are about a checkout rather than the account:
 // `plugin enable --scope project` writes into the project the CLI finds from
 // where it is standing, so it has to stand in the right one.
-function runAccountClaude(account, argv, { timeoutMs = PLUGIN_COMMAND_TIMEOUT_MS, cwd = null } = {}) {
-  const { spawn } = require('child_process');
+function accountClaudeCommand(account, argv, cwd = null) {
   const distro = accountWslDistro(account);
-  const [file, args, options] = distro
+  return distro
     ? ['wsl.exe', wslExecArgs(distro, cwd || account.wslHome || null, ['claude', ...argv]), {}]
     : [resolveClaudeBinary(), argv, {
       cwd: (cwd && accountHostPath(account, cwd)) || os.homedir(),
@@ -4121,6 +4500,11 @@ function runAccountClaude(account, argv, { timeoutMs = PLUGIN_COMMAND_TIMEOUT_MS
         ...(account.configDir === DEFAULT_CLAUDE_DIR ? {} : { CLAUDE_CONFIG_DIR: account.configDir }),
       },
     }];
+}
+
+function runAccountClaude(account, argv, { timeoutMs = PLUGIN_COMMAND_TIMEOUT_MS, cwd = null } = {}) {
+  const { spawn } = require('child_process');
+  const [file, args, options] = accountClaudeCommand(account, argv, cwd);
 
   return new Promise((resolve) => {
     let child;
@@ -4710,6 +5094,12 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   // UUID, and the CLI refuses it.
   const isShell = sessionOptions?.type === 'terminal' || !!sessionOptions?.ephemeral;
   const groupId = isShell ? null : sessionGroups.groupIdFromPath(activeGroupsRoot(), projectPath);
+
+  // The settings' model and effort, for any chat whose caller did not choose.
+  // Several doors lead here — the + menu, "New session with config…", a group
+  // session, a resume — and only some of them put the settings in the options;
+  // the rest started on the SDK's own default whatever Settings said.
+  if (!isShell) sessionOptions = withSettingsDefaults(projectPath, sessionOptions);
   if (groupId) {
     const group = sessionGroups.readGroup(activeGroupsRoot(), groupId, hostPath);
     const options = {
@@ -5208,7 +5598,33 @@ ipcMain.handle('sdk-set-permission-mode', async (_event, sessionId, mode) => {
 
 // --- IPC: sdk session controls (model / effort / context) ---
 ipcMain.handle('sdk-commands', (_event, sessionId) => sdkSession.listSdkCommands(sessionId));
-ipcMain.handle('sdk-models', (_event, sessionId) => sdkSession.listSdkModels(sessionId));
+// The account's models from the API, per config dir, for an hour. A failed
+// fetch keeps the last good list; with none, the picker is the SDK's alone.
+const apiModelsCache = new Map();
+const API_MODELS_TTL_MS = 3600 * 1000;
+async function accountApiModels() {
+  const dir = activeConfigDir();
+  const cached = apiModelsCache.get(dir);
+  if (cached && Date.now() - cached.at < API_MODELS_TTL_MS) return cached.models;
+  const models = await fetchModels(dir);
+  if (models) {
+    apiModelsCache.set(dir, { at: Date.now(), models });
+    return models;
+  }
+  return cached?.models || [];
+}
+
+ipcMain.handle('sdk-models', async (_event, sessionId) => {
+  const res = await sdkSession.listSdkModels(sessionId);
+  if (!res?.ok) return res;
+  return { ok: true, value: modelCatalog.mergeModels(res.value, await accountApiModels()) };
+});
+
+ipcMain.handle('api-models', () => accountApiModels());
+
+// The unread counter's baselines — see src/vue/unread.js.
+ipcMain.handle('unread-seen-get', () => getUnreadSeen());
+ipcMain.handle('unread-seen-set', (_event, map) => { setUnreadSeen(map); return true; });
 ipcMain.handle('sdk-set-model', (_event, sessionId, model) => sdkSession.setSdkModel(sessionId, model));
 ipcMain.handle('sdk-set-effort', (_event, sessionId, effort) => sdkSession.setSdkEffort(sessionId, effort));
 ipcMain.handle('sdk-context-usage', (_event, sessionId) => sdkSession.getSdkContextUsage(sessionId));
@@ -5264,6 +5680,7 @@ sessionTransitions.init({
   // follow it, or it keeps reporting under an id the renderer has retired —
   // and the hooks arriving from the forked CLI would open a second entry.
   rekeyMcpServer: (oldId, newId) => {
+    inheritStartedBy(oldId, newId);
     rekeyMcpServer(oldId, newId);
     sessionStatus.rekey(oldId, newId);
     sessionAlerts.rekey(oldId, newId);
@@ -5353,6 +5770,7 @@ function startProjectsWatcher() {
 
     if (changed) {
       notifyRendererProjectsChanged();
+      usageStats.noteActivity();
     }
   }
 
@@ -5426,6 +5844,7 @@ app.whenReady().then(() => {
   applyTraySetting();
   startProjectsWatcher();
   startActiveProjectPolling();
+  usageStats.start();
 
   // Both schedule modules resolve their directories per call, so schedules
   // follow the active account instead of the Windows home, and project paths
@@ -5524,5 +5943,7 @@ app.on('before-quit', () => {
 
 // Close SQLite after all windows are closed to avoid "connection is not open" errors
 app.on('will-quit', () => {
+  cancelAccountLogins();
+  usageStats.stop();
   closeDb();
 });

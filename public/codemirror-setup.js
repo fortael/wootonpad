@@ -390,7 +390,7 @@ function getLanguageExt(filename) {
 
 // ── Read-Only File Viewer ───────────────────────────────────────────
 
-function createReadOnlyViewer(parent, content, filename) {
+function createReadOnlyViewer(parent, content, filename, { wrap = false } = {}) {
   const langExt = getLanguageExt(filename);
   const state = EditorState.create({
     doc: content,
@@ -412,6 +412,9 @@ function createReadOnlyViewer(parent, content, filename) {
       dracula,
       syntaxHighlighting(markdownExtras),
       appThemePatch,
+      // Prose is read, not scanned by column: a note or a README should
+      // soft-wrap rather than scroll sideways.
+      ...(wrap ? [EditorView.lineWrapping] : []),
     ],
   });
   return new EditorView({ state, parent });

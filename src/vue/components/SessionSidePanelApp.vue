@@ -220,7 +220,8 @@
            as the CLI loads them (chat-agent.js): the MEMORY.md index first,
            then one file per fact. Buddy writes them itself as it learns about
            your projects, ongoing work and how you like things. Each card opens
-           the file in the read-only viewer. -->
+           the file in the read-only viewer, soft-wrapped; the list itself shows
+           only the cards, so it stays short however much Buddy remembers. -->
       <div v-else-if="tab === 'memory'" class="sbx-sidepanel__pane sbx-grouppane">
         <div class="sbx-sidepanel__seclabel">
           Buddy's memory
@@ -243,7 +244,6 @@
             <span class="sbx-grouppane__filemeta">{{ lineCount(file.content) }} lines · {{ relTime(file.modified) }}</span>
             <span v-if="file.name === 'MEMORY.md'" class="sbx-grouppane__filehint">the index — loaded into every conversation</span>
           </button>
-          <pre class="sbx-memory__text">{{ file.content }}</pre>
         </div>
 
         <div v-if="memory.dir" class="sbx-grouppane__dir" :title="memory.dir">{{ memory.dir }}</div>
@@ -1076,8 +1076,13 @@ watch(viewedFile, async (file) => {
   el.innerHTML = '';
   // The same read-only CodeMirror the Projects tab and the MCP panel use, so
   // the syntax highlighting cannot differ between the three places.
-  fileView = window.createReadOnlyViewer?.(el, res.content, file);
+  fileView = window.createReadOnlyViewer?.(el, res.content, file, { wrap: isProse(file) });
 }, { immediate: true });
+
+/** Notes and docs — read as text, so they wrap in a pane this narrow. */
+function isProse(file) {
+  return /\.(md|markdown|mdx|txt|rst)$/i.test(String(file || ''));
+}
 
 // A file belongs to the project it was opened from; switching sessions to
 // another project leaves a path that means nothing here.

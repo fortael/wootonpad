@@ -22,6 +22,7 @@
 
 const { z } = require('zod');
 const todoDue = require('./todo-due');
+const { normalizeTerms } = require('./session-find');
 
 // The SDK ships as ESM and this process is CommonJS — same dynamic import,
 // same lazy caching as sdk-session.js. A user who never opens the Chat tab
@@ -160,6 +161,7 @@ function sessionLine(s) {
   if (s.group?.name) bits.push(`group "${s.group.name}"`);
   if (s.starred) bits.push('starred');
   if (s.archived) bits.push('archived');
+  if (s.startedByBuddy) bits.push('started by you');
   return `${sessionRef(s.sessionId)} — ${quoted(s.title)} · ${bits.join(' · ')}`;
 }
 
@@ -283,15 +285,16 @@ const SPECS = [
 
   {
     name: 'list_sessions',
-    description: 'Sessions, newest first — archived ones included and marked, because users archive what they have finished, and "what did I work on" means those too. Narrow with projectPath, activeWithinSeconds, or scope: "all" (default), "active" (running now), "open" (not archived), "archived" (only archived), "groups" (multi-project sessions only).',
+    description: 'Sessions, newest first — archived ones included and marked, because users archive what they have finished, and "what did I work on" means those too. Sessions you started yourself (create_session) are marked "started by you"; startedByYou: true lists only those. Narrow with projectPath, activeWithinSeconds, or scope: "all" (default), "active" (running now), "open" (not archived), "archived" (only archived), "groups" (multi-project sessions only).',
     schema: {
       projectPath: z.string().optional().describe('Absolute project path; omit for every project.'),
       limit: z.number().int().optional().describe('How many sessions to return (default 20).'),
       scope: z.enum(['all', 'recent', 'active', 'open', 'archived', 'groups']).optional()
         .describe('"all" (default, archived included) · "recent" same as all · "active" running now · "open" not archived · "archived" only archived · "groups" group sessions.'),
       activeWithinSeconds: z.number().int().optional().describe('Only sessions touched in the last N seconds.'),
+      startedByYou: z.boolean().optional().describe('Only sessions you started with create_session. Combines with scope.'),
     },
-    async handler({ projectPath, limit, scope, activeWithinSeconds }) {
+    async handler({ projectPath, limit, scope, activeWithinSeconds, startedByYou }) {
       const take = Math.min(Math.max(Number(limit) || 20, 1), 100);
       // Archived by default: an archived session is a finished one, not a
       // deleted one, and leaving them out answered "what did I work on this
@@ -300,6 +303,7 @@ const SPECS = [
       if (scope === 'active') query.activeOnly = true;
       if (scope === 'archived') query.archivedOnly = true;
       if (scope === 'groups') query.groupsOnly = true;
+      if (startedByYou) query.buddyOnly = true;
       // sinceMs is a cutoff instant, not a duration — the caller thinks in
       // "the last ten minutes", the cache thinks in timestamps.
       if (activeWithinSeconds) query.sinceMs = Date.now() - activeWithinSeconds * 1000;
@@ -348,21 +352,69 @@ const SPECS = [
   },
 
   {
-    name: 'search_sessions',
-    description: 'Find sessions by text, archived ones included (and marked). Titles only by default, which is fast and usually enough; set titleOnly false for a full-text search of transcripts.',
+    name: 'read_sessions',
+    description: 'Many sessions in one call, each with the prompt that opened it and its last messages. Pick them by date — from/to (YYYY-MM-DD, local, inclusive) or withinDays — and/or projectPath / startedByYou, or pass sessionIds from a list or search. With a date window a session counts if it was alive then, and its messages are the ones from that window. This is the tool for "what did I work on today / yesterday / this week" and for reading several search hits at once — never read_session one by one for that.',
     schema: {
-      query: z.string().describe('What to look for.'),
-      titleOnly: z.boolean().optional().describe('Search titles only (default true).'),
+      sessionIds: z.array(z.string()).optional().describe('Exact sessions to read (from list_sessions / search_sessions). Other filters are ignored when given.'),
+      from: z.string().optional().describe('First day, YYYY-MM-DD, local time.'),
+      to: z.string().optional().describe('Last day, YYYY-MM-DD, inclusive. Alone = just that day.'),
+      withinDays: z.number().int().optional().describe('Sessions active in the last N days (when no from/to).'),
+      projectPath: z.string().optional().describe('Only this project (and groups containing it).'),
+      startedByYou: z.boolean().optional().describe('Only sessions you started with create_session.'),
+      includeArchived: z.boolean().optional().describe('Include archived sessions (default true — they are finished work).'),
+      limit: z.number().int().optional().describe('Max sessions (default 15, max 40), newest first.'),
+      messagesPerSession: z.number().int().optional().describe('Trailing messages per session (default 6, max 30).'),
     },
-    async handler({ query, titleOnly }) {
-      const hits = await dep('searchSessions')(query, { titleOnly: titleOnly !== false }) || [];
-      if (!hits.length) return `Nothing matches "${query}".`;
-      return capped(hits.map((h) => {
-        const bits = [baseName(h.projectPath), relativeTime(h.modified)];
-        if (h.archived) bits.push('archived');
-        const snippet = h.snippet ? ` — ${oneLine(h.snippet, 140)}` : '';
-        return `${sessionRef(h.sessionId)} — ${quoted(h.title)} · ${bits.join(' · ')}${snippet}`;
-      }));
+    async handler({ sessionIds, from, to, withinDays, projectPath, startedByYou, includeArchived, limit, messagesPerSession }) {
+      const result = await dep('readSessions')({
+        sessionIds, from, to, withinDays, projectPath,
+        buddyOnly: !!startedByYou, includeArchived: includeArchived !== false, limit, messagesPerSession,
+      });
+      if (result?.ok === false) throw new Error(result.error);
+      const sessions = result?.sessions || [];
+      if (!sessions.length) return 'No sessions match.';
+      const windowed = !!(from || to || withinDays) && !(sessionIds && sessionIds.length);
+      const blocks = sessions.map((s) => {
+        const head = sessionLine(s);
+        const lines = [head];
+        if (s.firstPrompt) lines.push(`  asked: ${oneLine(s.firstPrompt, 240)}`);
+        if (windowed) lines.push(`  ${s.windowMessages || 0} message(s) in that period${s.windowMessages > s.messages.length ? `, last ${s.messages.length}:` : ':'}`);
+        const body = (s.messages || []).map(m => messageLine(m, '  '));
+        lines.push(...(body.length ? body : ['  (no messages in range)']));
+        return lines.join('\n');
+      });
+      const more = result.total > sessions.length
+        ? `\n\n… ${result.total - sessions.length} more session(s) match — narrow the window or raise limit.`
+        : '';
+      return blocks.join('\n\n') + more;
+    },
+  },
+
+  {
+    name: 'search_sessions',
+    description: 'Find sessions by what they were about, archived included. Looks at titles, opening prompts, the transcript index and the tail of recent transcripts; a session matching more terms ranks higher. Pass several short terms — word stems, in every language the user may have worked in, plus synonyms and identifiers (e.g. for authorization: "авториз", "auth", "login", "oauth", "token", "jwt"). Substring match, so a stem finds every form of a word. Narrow with from/to/withinDays or projectPath. Then read the best hits with read_sessions.',
+    schema: {
+      terms: z.array(z.string()).optional().describe('Terms to look for — any of them; stems and synonyms, several languages.'),
+      query: z.string().optional().describe('Same as terms, space-separated. Use terms when you can.'),
+      from: z.string().optional().describe('First day, YYYY-MM-DD, local time.'),
+      to: z.string().optional().describe('Last day, YYYY-MM-DD, inclusive.'),
+      withinDays: z.number().int().optional().describe('Only sessions active in the last N days.'),
+      projectPath: z.string().optional().describe('Only this project.'),
+      titleOnly: z.boolean().optional().describe('Titles only — fast, shallow (default false).'),
+      limit: z.number().int().optional().describe('Max hits (default 15, max 40).'),
+    },
+    async handler({ terms, query, from, to, withinDays, projectPath, titleOnly, limit }) {
+      const words = normalizeTerms({ terms, query });
+      if (!words.length) throw new Error('give terms (or a query) to search for');
+      const result = await dep('findSessions')({ terms: words, from, to, withinDays, projectPath, titleOnly: !!titleOnly, limit }) || {};
+      const hits = result.hits || [];
+      if (!hits.length) return `Nothing matches ${words.map(w => `"${w}"`).join(', ')}. Try other stems, synonyms or the other language, or widen the period.`;
+      const rows = hits.map((h) => {
+        const snippet = h.snippet ? `\n  … ${oneLine(h.snippet, 200)}` : '';
+        return `${sessionLine(h)} · matched: ${h.matched.join(', ')}${snippet}`;
+      });
+      const more = result.total > hits.length ? `\n… and ${result.total - hits.length} more` : '';
+      return rows.join('\n') + more;
     },
   },
 
@@ -816,7 +868,7 @@ const TOOL_NAMES = SPECS.map(s => s.name);
  * note — and are not a thing to fire from a debugging form.
  */
 const READ_ONLY_TOOLS = new Set([
-  'list_projects', 'list_sessions', 'read_session', 'peek_active_sessions', 'search_sessions',
+  'list_projects', 'list_sessions', 'read_session', 'read_sessions', 'peek_active_sessions', 'search_sessions',
   'list_groups', 'git_status', 'unpushed_work', 'account_limits', 'list_todos', 'todo_agenda',
   'list_project_files', 'read_project_file', 'list_containers',
 ]);

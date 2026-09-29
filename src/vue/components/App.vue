@@ -859,6 +859,7 @@ const projectsCallbacks = {
   openProject: (p) => window.__sb?.openProject?.(p),
   newSession: (p, btn) => window.__sb?.newSession?.(p, btn),
   addProject: () => window.__sb?.addProject?.(),
+  addProjectsFolder: () => window.__sb?.addProjectsFolder?.(),
   projectRemoved: () => window.__sb?.projectRemoved?.(),
 };
 

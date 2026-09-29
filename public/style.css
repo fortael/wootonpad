@@ -1159,12 +1159,52 @@ body { display: flex; flex-direction: column; }
   color: var(--text-secondary);
 }
 
+.project-header {
+  position: relative;
+  /* What the actions' fade blends into — the header's own background in
+     whichever state it is in while hovered. */
+  --ph-bg: var(--surface-panel-raised);
+}
+
+.project-header.has-active-session { --ph-bg: var(--surface-card); }
+
+/* No ellipsis: a name cut to "c4s/aut…" loses exactly the part that tells two
+   projects apart. It runs to the edge and fades out instead. */
 .project-header .project-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+}
+
+/* The header's buttons float over the end of the row. Hidden, they take no
+   width; shown on hover, the name slides under a blurred fade instead of
+   being cut off where they begin. */
+.project-header-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-3) 0 var(--space-7, 28px);
+  background: linear-gradient(to right, transparent, var(--ph-bg) var(--space-6, 24px));
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--space-6, 24px));
+  mask-image: linear-gradient(to right, transparent, #000 var(--space-6, 24px));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.project-header:hover .project-header-actions,
+.project-header:focus-within .project-header-actions {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .project-archive-btn,
@@ -1667,6 +1707,13 @@ body { display: flex; flex-direction: column; }
   transition: opacity var(--duration-fast) var(--ease-standard);
 }
 .session-item:hover .session-unread { opacity: 0; }
+/* Still working: the number is a count of progress, not a reply waiting —
+   grey until the turn ends or the session asks you something. Semantic tokens,
+   so it reads in both themes. */
+.session-unread--working {
+  background: var(--text-tertiary);
+  color: var(--surface-panel);
+}
 
 /* ---- What this session changed ----
    The same pair the board's cards carry, from the same numbers — counted from
@@ -3339,6 +3386,55 @@ body { display: flex; flex-direction: column; }
   line-height: var(--leading-normal);
 }
 
+/* ~/*Projects folders offered above the path field — one click adds all. */
+.add-project-suggest {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.add-project-suggest__label {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.add-project-suggest__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.add-project-suggest__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-family: var(--font-ui);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  background: var(--surface-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full, 999px);
+  padding: var(--space-1) var(--space-3);
+  cursor: pointer;
+}
+
+.add-project-suggest__chip:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+  background: var(--surface-card-hover);
+}
+
+.add-project-suggest__chip:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.add-project-suggest__count {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
 .add-project-dialog .folder-input-row {
   display: flex;
   gap: var(--space-2);
@@ -4090,6 +4186,16 @@ body { display: flex; flex-direction: column; }
   top: -1px;
 }
 
+.buddy-badge {
+  display: inline-flex;
+  align-items: center;
+  color: var(--orange-500);
+  margin-right: var(--space-1);
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
+}
+
 /* Terminal sessions: green status dot */
 .session-item.is-terminal .session-status-dot.running {
   background: var(--status-running);
@@ -4534,6 +4640,9 @@ body.hide-avatars .grid-card-avatar {
 }
 
 .projects-add-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
   padding: var(--space-3) var(--space-3) var(--space-4);
 }
 

@@ -129,6 +129,14 @@
           <SbIcon name="plus" :size="12" tone="muted" />
           Add project
         </button>
+        <button
+          class="projects-add-btn"
+          data-tooltip="Pick a folder like ~/GolandProjects — every folder inside it becomes a project"
+          @click="callbacks.addProjectsFolder?.()"
+        >
+          <SbIcon name="folder-plus" :size="12" tone="muted" />
+          Add projects folder
+        </button>
       </div>
     </section>
 

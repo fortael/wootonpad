@@ -224,11 +224,41 @@
   <Teleport to="body">
     <div v-if="addProjectOpen" class="add-project-overlay" @mousedown.self="closeAddProject">
       <div class="add-project-dialog">
-        <h3>Add Project</h3>
-        <div class="add-project-hint">Select a folder to create a new project. To start a session in an existing project, use the + on its project header.</div>
+        <h3>{{ addMode === 'folder' ? 'Add projects folder' : 'Add Project' }}</h3>
+        <div class="add-project-hint">
+          <template v-if="addMode === 'folder'">
+            Pick a folder of projects — every folder inside it becomes a project. Ones already added are left as they are.
+          </template>
+          <template v-else>
+            Select a folder to create a new project. To start a session in an existing project, use the + on its project header.
+          </template>
+        </div>
+
+        <!-- The ~/*Projects folders, one click each: every folder inside is
+             added. The quick way to fill in a new account. -->
+        <div v-if="projectFolders.length" class="add-project-suggest">
+          <div class="add-project-suggest__label">Add everything in</div>
+          <div class="add-project-suggest__chips">
+            <button
+              v-for="f in projectFolders"
+              :key="f.dir"
+              type="button"
+              class="add-project-suggest__chip"
+              :disabled="addingFolder || f.added >= f.count"
+              :data-tooltip="f.added >= f.count ? `All ${f.count} are added already` : `${f.dir} — ${f.count - f.added} of ${f.count} not added yet`"
+              @click="addFolder(f.dir)"
+            >
+              <SbIcon name="folder" :size="12" tone="muted" />
+              <span>{{ f.name }}</span>
+              <span class="add-project-suggest__count">{{ f.added >= f.count ? '✓' : `+${f.count - f.added}` }}</span>
+            </button>
+          </div>
+        </div>
+
         <div class="folder-input-row">
           <input ref="addPathInputRef" type="text" id="add-project-path" v-model="addProjectPath"
-            placeholder="/path/to/project" autocomplete="off" spellcheck="false">
+            :placeholder="addMode === 'folder' ? '/path/to/folder-of-projects' : '/path/to/project'"
+            autocomplete="off" spellcheck="false">
           <button class="add-project-browse-btn" @click="browseProject">Browse</button>
         </div>
         <div class="add-project-error" v-show="addProjectError">{{ addProjectError }}</div>
@@ -244,6 +274,7 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue';
 import SbSwitch from './SbSwitch.vue';
+import SbIcon from './SbIcon.vue';
 import ProjectAvatar from './ProjectAvatar.vue';
 import GroupAvatar from './GroupAvatar.vue';
 import { sessionTitle } from '../session-title.js';
@@ -508,18 +539,46 @@ const addProjectOpen = ref(false);
 const addProjectPath = ref('');
 const addProjectError = ref('');
 const addPathInputRef = ref(null);
+const addMode = ref('project');          // 'project' | 'folder'
+const projectFolders = ref([]);          // ~/*Projects — suggest-project-folders
+const addingFolder = ref(false);
 let apOnAdd = null;
 
-async function openAddProject(onAdd) {
+async function openAddProject(onAdd, { mode = 'project' } = {}) {
   addProjectOpen.value = true;
+  addMode.value = mode;
   addProjectPath.value = '';
   addProjectError.value = '';
+  projectFolders.value = [];
   apOnAdd = onAdd;
+  window.api.suggestProjectFolders?.()
+    .then((list) => { if (addProjectOpen.value) projectFolders.value = list || []; })
+    .catch(() => {});
   await nextTick();
   addPathInputRef.value?.focus();
 }
 
 function closeAddProject() { addProjectOpen.value = false; apOnAdd = null; }
+
+/** Every folder inside `dir`, as projects. Closes on success, like Add. */
+async function addFolder(dir) {
+  if (addingFolder.value) return;
+  addingFolder.value = true;
+  addProjectError.value = '';
+  try {
+    const result = await window.api.addProjectsInFolder(dir);
+    if (result?.error) { addProjectError.value = result.error; return; }
+    if (result?.failed?.length && !result.added.length) {
+      addProjectError.value = `Nothing added: ${result.failed[0].error}`;
+      return;
+    }
+    const cb = apOnAdd;
+    closeAddProject();
+    cb?.();
+  } finally {
+    addingFolder.value = false;
+  }
+}
 
 async function browseProject() {
   const folder = await window.api.browseFolder();
@@ -529,6 +588,7 @@ async function browseProject() {
 async function doAddProject() {
   const path = addProjectPath.value.trim();
   if (!path) { addProjectError.value = 'Please enter a folder path.'; return; }
+  if (addMode.value === 'folder') return addFolder(path);
   addProjectError.value = '';
   const result = await window.api.addProject(path);
   if (result.error) { addProjectError.value = result.error; return; }

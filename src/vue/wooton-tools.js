@@ -107,6 +107,14 @@ function startDetail(input) {
 //
 // Icons must exist in lucide-icons.js — only those glyphs are bundled.
 
+/** "2026-09-28", "2026-09-21 – 2026-09-28" or "last 7 days" — a tool's period. */
+function periodLabel(input = {}) {
+  if (input.from && input.to && input.from !== input.to) return `${input.from} – ${input.to}`;
+  if (input.from || input.to) return String(input.to || input.from) + (input.to ? '' : ' – now');
+  if (Number(input.withinDays) > 0) return `last ${Math.round(Number(input.withinDays))} days`;
+  return '';
+}
+
 const TOOLS = {
   // ── Read ──
   list_projects: {
@@ -131,9 +139,24 @@ const TOOLS = {
       ? `${Math.round(Number(input.messagesPerSession))} messages each`
       : ''),
   },
+  read_sessions: {
+    verb: 'Read sessions', icon: 'messages-square', kind: 'read',
+    detail: (input) => joinDetail(
+      Array.isArray(input.sessionIds) && input.sessionIds.length
+        ? `${input.sessionIds.length} session${input.sessionIds.length > 1 ? 's' : ''}`
+        : periodLabel(input),
+      input.startedByYou ? 'started by Buddy' : '',
+    ),
+  },
   search_sessions: {
     verb: 'Searched sessions', icon: 'search', kind: 'read',
-    detail: (input) => joinDetail(quoted(input.query), input.titleOnly === false ? 'full text' : ''),
+    detail: (input) => joinDetail(
+      Array.isArray(input.terms) && input.terms.length
+        ? input.terms.slice(0, 4).map(t => quoted(t, 20)).join(' ')
+        : quoted(input.query),
+      input.titleOnly === true ? 'titles only' : '',
+      periodLabel(input),
+    ),
   },
   list_groups: { verb: 'Listed groups', icon: 'layers', kind: 'read' },
   git_status: { verb: 'Checked git', icon: 'git-branch', kind: 'read' },

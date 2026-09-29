@@ -28,7 +28,9 @@ function readFolderFromFilesystem(folder) {
 
 // Scan all folders
 try {
-  const folders = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+  // A new account has no projects directory until its first project or
+  // session makes one — that is an empty account, not a failed scan.
+  const folders = (fs.existsSync(PROJECTS_DIR) ? fs.readdirSync(PROJECTS_DIR, { withFileTypes: true }) : [])
     .filter(d => d.isDirectory() && d.name !== '.git')
     .map(d => d.name);
 

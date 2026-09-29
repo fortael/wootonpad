@@ -94,8 +94,10 @@ test('a list of sessions names its scope and its window', () => {
 test('a search shows the query it ran, quoted', () => {
   const call = describeWootonCall('mcp__wooton__search_sessions', { query: 'login bug' });
   assert.equal(call.detail, '“login bug”');
-  const full = describeWootonCall('mcp__wooton__search_sessions', { query: 'x', titleOnly: false });
-  assert.equal(full.detail, '“x” · full text');
+  const shallow = describeWootonCall('mcp__wooton__search_sessions', { query: 'x', titleOnly: true });
+  assert.equal(shallow.detail, '“x” · titles only');
+  const terms = describeWootonCall('mcp__wooton__search_sessions', { terms: ['auth', 'login'], withinDays: 7 });
+  assert.equal(terms.detail, '“auth” “login” · last 7 days');
 });
 
 test('what was sent is shown, flattened and cut to fit a header', () => {

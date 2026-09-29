@@ -953,6 +953,7 @@ window.api.onExternalSessionStarted?.((info) => {
     projectPath: info.projectPath,
     name: info.name || null,
     starred: 0, archived: 0, messageCount: 0,
+    startedBy: info.startedBy || null,
     modified: now, created: now,
     accountId: activeAccountId,
   };
@@ -1734,6 +1735,7 @@ window.__sb = {
   resort: () => loadProjects({ resort: true }),
 
   addProject: () => showAddProjectDialog(),
+  addProjectsFolder: () => showAddProjectDialog('folder'),
 
   openGlobalSettings: () => openSettingsViewer('global'),
 

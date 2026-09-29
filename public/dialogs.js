@@ -119,6 +119,7 @@ async function showResumeSessionDialog(session) {
   });
 }
 
-function showAddProjectDialog() {
-  window.vueDialogs?.openAddProject(async () => { await loadProjects(); });
+// mode 'project' adds one folder; 'folder' adds every folder inside one.
+function showAddProjectDialog(mode = 'project') {
+  window.vueDialogs?.openAddProject(async () => { await loadProjects(); }, { mode });
 }

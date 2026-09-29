@@ -435,6 +435,13 @@
           </template>
         </template>
 
+        <!-- ── STATS TAB ─────────────────────────────────────────────
+             Tokens and plan-limit share of this project alone, worktrees
+             included — the same view the account page has, pinned to it. -->
+        <template v-else-if="activeTab === 'stats'">
+          <UsageStats :project-path="project.projectPath" />
+        </template>
+
         <!-- ── README TAB ────────────────────────────────────────── -->
         <template v-else-if="activeTab === 'readme'">
           <div v-if="readmeHtml" class="pv-card pv-readme" v-html="readmeHtml"></div>
@@ -544,6 +551,7 @@ import { withoutNoise, countNoise } from '../git-noise.js';
 import ProjectAvatar from './ProjectAvatar.vue';
 import ViewerContentApp from './ViewerContentApp.vue';
 import SessionCard from './SessionCard.vue';
+import UsageStats from './UsageStats.vue';
 // Aliased: this file already has a `sessionTitle` of its own in the template.
 import { sessionTitle as titleOfSession } from '../session-title.js';
 
@@ -552,6 +560,7 @@ const TABS = computed(() => [
   { id: 'commits', label: unpushedCount.value ? `Commits (${unpushedCount.value})` : 'Commits' },
   { id: 'files', label: 'Files' },
   { id: 'sessions', label: liveSessions.value.length ? `Sessions (${liveSessions.value.length})` : 'Sessions' },
+  { id: 'stats', label: 'Stats' },
   { id: 'agents', label: 'Agent files' },
   { id: 'terminal', label: 'Terminal' },
   ...(detail.value?.readmePath ? [{ id: 'readme', label: 'README' }] : []),

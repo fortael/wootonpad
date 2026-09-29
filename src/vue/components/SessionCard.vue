@@ -23,6 +23,12 @@
         :project-paths="session.groupProjects"
         :size="16"
       />
+      <!-- Buddy started this one — as on its sidebar row. -->
+      <span
+        v-if="session.startedBy === 'buddy'"
+        class="buddy-badge"
+        data-tooltip="Started by Buddy"
+      ><SbIcon name="sparkles" :size="11" /></span>
       <span
         v-if="pending"
         class="session-title-wait sbx-board__cardtitle--wait"
@@ -68,6 +74,15 @@
       >
         <SbIcon name="bot" :size="10" />{{ runningAgents }}
       </span>
+      <!-- The sidebar row's unread number, with the same two tones: grey while
+           the session is still working, the accent once there is a reply to
+           read. See unread.js. -->
+      <span
+        v-if="unread"
+        class="session-unread sbx-board__unread"
+        :class="{ 'session-unread--working': unreadComing }"
+        :data-tooltip="`${unread} new message${unread > 1 ? 's' : ''}${unreadComing ? ' — still working' : ''}`"
+      >{{ formatUnread(unread) }}</span>
     </div>
     <div v-if="churn" class="sbx-board__churn">
       <span class="sbx-board__added">+{{ churn.added }}</span>
@@ -89,6 +104,7 @@ import { freshnessOpacity } from '../freshness.js';
 import { sessionChurn } from '../session-churn.js';
 import { sessionTitle, sessionSubtitle, sessionFirstPrompt, titlePending } from '../session-title.js';
 import { tick, fastTick } from '../time-tick.js';
+import { unreadFor, formatUnread, unreadStillComing } from '../unread.js';
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -105,6 +121,8 @@ const id = computed(() => props.session.sessionId);
 const isRunning = computed(() => store.activePtyIds.has(id.value));
 const isActive = computed(() => store.activeSessionId === id.value);
 const isBusy = computed(() => store.sessionBusyState.get(id.value) || false);
+const unread = computed(() => unreadFor(props.session));
+const unreadComing = computed(() => unreadStillComing(id.value));
 
 // app.js writes into window.lastActivityTime outside Vue; tick is what makes a
 // card re-read it. See src/vue/time-tick.js.

@@ -95,16 +95,49 @@
                 · {{ detail.token.expired ? 'expired' : 'expires' }} {{ formatWhen(detail.token.expiresAt) }}
               </span>
               <span class="acct-viewer__spacer"></span>
-              <button class="acct-btn" :disabled="checking" @click="check">
+              <button
+                v-if="!login"
+                class="acct-btn"
+                data-tooltip="Runs `claude auth login` as this account"
+                @click="startLogin"
+              >{{ detail.token.present ? 'Sign in again' : 'Sign in' }}</button>
+              <button class="acct-btn" :disabled="checking || !!login" @click="check">
                 {{ checking ? 'Checking…' : 'Check' }}
               </button>
+            </div>
+
+            <!-- Signing in: the CLI's own login, as this account. The browser
+                 does the work; the code box is for when it could not be
+                 opened and the page hands back a code instead. -->
+            <div v-if="login" class="acct-login">
+              <p class="acct-login__lead">
+                <SbIcon name="refresh-cw" :size="14" class="acct-login__spin" />
+                Finish signing in in the browser — this picks it up on its own.
+              </p>
+              <p v-if="login.url" class="acct-section__hint">
+                Browser did not open, or you want another profile?
+                <a href="#" class="acct-login__link" @click.prevent="openLoginPage">Open the sign-in page</a>
+                — and if it ends with a code, paste it here.
+              </p>
+              <div class="acct-form__row">
+                <input
+                  v-model="loginCode"
+                  class="acct-input"
+                  placeholder="Code from the sign-in page (only if it shows one)"
+                  spellcheck="false"
+                  autocomplete="off"
+                  @keydown.enter="sendLoginCode"
+                />
+                <button class="acct-btn" :disabled="!loginCode.trim()" @click="sendLoginCode">Send code</button>
+                <button class="acct-btn" @click="cancelLogin">Cancel</button>
+              </div>
             </div>
             <div v-if="authResult" class="acct-auth__result" :class="'acct-auth__result--' + authTone">
               <SbIcon :name="authIcon" :size="14" />
               <span class="acct-auth__state">{{ AUTH_LABELS[authResult.state] || authResult.state }}</span>
               <span class="acct-auth__msg">{{ authResult.message }}</span>
             </div>
-            <p v-else class="acct-section__hint">
+            <p v-else-if="!login" class="acct-section__hint">
               A token can sit on disk long after the API stops accepting it — check to be sure.
             </p>
           </div>
@@ -414,6 +447,17 @@
           </div>
         </section>
 
+        <!-- ── Usage by project ──────────────────────────────────────
+             Tokens per project per day from the transcripts, and the plan's
+             limit readings over time with each project's share of them. -->
+        <section class="acct-section">
+          <h3 class="acct-section__title">
+            <SbIcon name="chart-no-axes-column" :size="14" tone="muted" />
+            Usage by project
+          </h3>
+          <UsageStats :account-id="accountId" :sessions-openable="!!detail.isActive" />
+        </section>
+
         <!-- ── Activity ──────────────────────────────────────────────
              Everything the Stats tab used to show, scoped to this account
              instead of to whichever one happens to be active. -->
@@ -541,9 +585,10 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue';
+import { ref, computed, watch, onBeforeUnmount } from 'vue';
 import SbIcon from './SbIcon.vue';
 import ActivityHeatmap from './ActivityHeatmap.vue';
+import UsageStats from './UsageStats.vue';
 
 // ── State ─────────────────────────────────────────────────────────
 const accountId = ref(null);
@@ -591,6 +636,7 @@ const AUTH_LABELS = {
   authorized: 'Authorized',
   expired: 'Signed out',
   missing: 'No token',
+  'login-failed': 'Sign-in failed',
   'rate-limited': 'Rate limited',
   network: 'Network error',
   error: 'API error',
@@ -618,7 +664,7 @@ const tokenChipClass = computed(() => {
 const authTone = computed(() => {
   const s = authResult.value?.state;
   if (s === 'authorized') return 'ok';
-  if (s === 'expired' || s === 'missing') return 'bad';
+  if (s === 'expired' || s === 'missing' || s === 'login-failed') return 'bad';
   return 'warn';
 });
 
@@ -1177,6 +1223,69 @@ async function check() {
   }
   checking.value = false;
 }
+
+// ── Signing in ────────────────────────────────────────────────────
+// `claude auth login` runs in main (account-login-start) and reports back here:
+// 'waiting' with the fallback link once the CLI prints it, then 'done',
+// 'failed' or 'cancelled'. One at a time per account; switching to another
+// account's page leaves it running, and coming back picks the events up again.
+const login = ref(null);       // { accountId, url } while one is running
+const loginCode = ref('');
+
+async function startLogin() {
+  const id = accountId.value;
+  if (!id || login.value) return;
+  authResult.value = null;
+  loginCode.value = '';
+  login.value = { accountId: id, url: null };
+  const res = await window.api.startAccountLogin(id).catch(err => ({ ok: false, error: err?.message }));
+  if (!res?.ok) {
+    login.value = null;
+    authResult.value = { state: 'error', message: res?.error || 'Could not start signing in.' };
+  }
+}
+
+function openLoginPage() {
+  if (login.value?.url) window.api.openExternal(login.value.url);
+}
+
+async function sendLoginCode() {
+  const code = loginCode.value.trim();
+  if (!login.value || !code) return;
+  const res = await window.api.sendAccountLoginCode(login.value.accountId, code);
+  if (res?.ok) loginCode.value = '';
+  else authResult.value = { state: 'error', message: res?.error || 'Could not send the code.' };
+}
+
+function cancelLogin() {
+  if (login.value) window.api.cancelAccountLogin(login.value.accountId);
+}
+
+const stopLoginEvents = window.api.onAccountLoginEvent?.((id, event) => {
+  if (id !== accountId.value) return;
+  if (event.state === 'waiting') {
+    login.value = { accountId: id, url: event.url || login.value?.url || null };
+    return;
+  }
+  login.value = null;
+  loginCode.value = '';
+  if (event.state === 'done') {
+    // The token is new on disk: re-read the card, then ask the API about it.
+    reload();
+    check();
+  } else if (event.state === 'failed') {
+    authResult.value = { state: 'login-failed', message: event.error || 'Signing in did not finish.' };
+  }
+});
+onBeforeUnmount(() => stopLoginEvents?.());
+
+// Another account's page shows its own state, not this one's.
+watch(accountId, (id) => {
+  if (login.value && login.value.accountId !== id) {
+    login.value = null;
+    loginCode.value = '';
+  }
+});
 
 defineExpose({ load, reload });
 </script>

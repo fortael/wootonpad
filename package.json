@@ -21,7 +21,7 @@
     "preview:landing": "node scripts/serve-docs.mjs",
     "generate-icons": "node scripts/generate-icons.js && node scripts/generate-dmg-background.js",
     "build": "npm run bundle:codemirror && npm run bundle:vue && electron-builder",
-    "build:mac": "npm run bundle:codemirror && npm run bundle:vue && electron-builder --mac && node scripts/postinstall.js && codesign --sign - --force --deep dist/mac-arm64/WootonPad.app 2>/dev/null; true",
+    "build:mac": "npm run bundle:codemirror && npm run bundle:vue && electron-builder --mac && node scripts/postinstall.js",
     "build:mac:arm64": "npm run bundle:vue && electron-builder --mac --arm64 2>/dev/null; true",
     "build:win": "npm run bundle:codemirror && npm run bundle:vue && electron-builder --win",
     "build:linux": "npm run bundle:codemirror && npm run bundle:vue && electron-builder --linux",
@@ -122,6 +122,7 @@
       "releaseType": "release"
     },
     "mac": {
+      "identity": "-",
       "protocols": [
         {
           "name": "WootonPad",

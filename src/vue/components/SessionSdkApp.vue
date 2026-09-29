@@ -261,6 +261,7 @@ import { isExternalPathToken, relativeTime } from '../chat-text.js';
 import { matchProjects, projectMention } from '../project-mentions.js';
 import { promptButtons } from '../buddy-suggestions.js';
 import { openSidePanelFile } from '../side-panel-tabs.js';
+import { lastPromptAt } from '../turn-start.js';
 
 const bodyRef = ref(null);
 const inputRef = ref(null);
@@ -300,6 +301,8 @@ const model = ref('');
 // Set once the user picks a row by hand. Until then the picker is only ever
 // showing a guess, and every later report of what is running may correct it.
 let modelPinned = false;
+/** The model Settings launched this session on, until it reports its own. */
+let launchModel = '';
 const effort = ref('high');
 const models = ref([]);
 const context = ref(null);
@@ -939,6 +942,40 @@ function noteTurnActivity() {
   if (turnWatchdog) { clearTimeout(turnWatchdog); turnWatchdog = null; }
 }
 
+// ── Opened in the middle of a turn ────────────────────────────────
+//
+// `busy` is switched on by what arrives while the view is open: a message, a
+// streamed frame, a status change. A view opened while a tool is already
+// running sees none of those until the tool comes back — and a test run can
+// take ten minutes — so the working row stayed missing for exactly as long as
+// it mattered, while the sidebar, reading the tracker, said "working" all
+// along. So on mount the view asks the same tracker.
+
+/** When the last prompt in the loaded history was sent — see turn-start.js. */
+let historyPromptAt = 0;
+const TURN_START_TRUST_MS = 12 * 3600 * 1000;
+/** Bumped by every status event, so a seed that lost a race can tell. */
+let statusEvents = 0;
+
+async function seedBusyFromTracker() {
+  const id = sessionId.value;
+  const seenBefore = statusEvents;
+  let status = null;
+  try {
+    const all = await window.api.getSessionStatuses?.();
+    status = (all || []).find(s => s.sessionId === id) || null;
+  } catch { return; }
+  // A status event since the question was asked is newer than the answer.
+  if (sessionId.value !== id || statusEvents !== seenBefore) return;
+  if (busy.value || status?.state !== 'running') return;
+  // No turn runs for half a day: a prompt that old belongs to a turn long
+  // over, and the tracker's last event is the better guess.
+  const promptIsRecent = historyPromptAt && Date.now() - historyPromptAt < TURN_START_TRUST_MS;
+  turnStartedAt = (promptIsRecent && historyPromptAt) || status.updatedAt || Date.now();
+  if (status.tool) activity.value = `Running ${shortToolName(status.tool)}`;
+  busy.value = true;
+}
+
 /** Nothing came back at all — say so rather than spin forever. */
 function startTurnWatchdog() {
   if (turnWatchdog) clearTimeout(turnWatchdog);
@@ -1297,6 +1334,7 @@ async function launchDefaults() {
         ? 'bypassPermissions'
         : (effective.permissionMode || null),
       effort: effective.effort || null,
+      model: effective.model || null,
     };
   } catch {
     return {};
@@ -1314,6 +1352,15 @@ async function applyStoredControls(entries) {
 
   const defaults = await launchDefaults();
   if (sessionId.value !== id) return;             // switched away mid-read
+
+  // Until the session reports what it runs, show what Settings launched it on
+  // — replacing the "Default" placeholder the model list may already have put
+  // in the picker.
+  if (defaults.model && !launchModel) {
+    launchModel = defaults.model;
+    const row = !modelPinned && !liveModel.value && !found.model ? launchModelRow() : '';
+    if (row) model.value = row;
+  }
 
   // The transcript is asked for, because it can disagree with the settings: it
   // records what the session was last actually running, which may be a mode
@@ -1443,7 +1490,20 @@ function syncSelectedModel() {
   // has a model, and a picker showing an empty box reads as broken rather than
   // as "not chosen". Show the row it will actually use until init says
   // otherwise.
-  if (!model.value) model.value = defaultModelValue(models.value);
+  if (!model.value) model.value = launchModelRow() || defaultModelValue(models.value);
+}
+
+/**
+ * The picker row for the model Settings started this session on — an alias
+ * ("opus") or an exact id ("claude-opus-5-5"). Without it a fresh chat showed
+ * "Default" until its first turn, whatever it was actually launched with.
+ */
+function launchModelRow() {
+  const wanted = String(launchModel || '').replace(/\[1m\]$/, '');
+  if (!wanted) return '';
+  const row = models.value.find(m => m.value === launchModel)
+    || models.value.find(m => wireId(m) === wanted);
+  return row?.value || '';
 }
 
 watch(liveModel, syncSelectedModel);
@@ -2087,6 +2147,7 @@ async function loadHistory() {
 
     // The same entries carry what the session was last running as.
     applyControls(result.entries || []);
+    historyPromptAt = lastPromptAt(result.entries || []);
 
     const body = bodyRef.value;
     if (!body) return;
@@ -2353,6 +2414,7 @@ onMounted(() => {
     // The same status the board draws from — see applySessionStatus in app.js.
     window.api.onSessionStatus?.((id, status) => {
       if (id !== sessionId.value || !status) return;
+      statusEvents++;
       if (status.state === 'running') { noteTurnActivity(); busy.value = true; return; }
       if (status.state !== 'idle' && status.state !== 'exited') return;
       if (turnGraceUntil && Date.now() < turnGraceUntil) return;   // too early to believe
@@ -2397,7 +2459,8 @@ onMounted(() => {
   // A prompt that was written before this view existed — the new group
   // session dialog asks for one. Sent through send() once the (empty) history
   // is on screen, so it is echoed and tracked like one typed here.
-  Promise.resolve(loadHistory()).then(sendQueuedPrompt);
+  // After the history, so the working row lands under it rather than above.
+  Promise.resolve(loadHistory()).then(sendQueuedPrompt).then(seedBusyFromTracker);
   loadLandmarks();
   loadPending();
   loadModels();
