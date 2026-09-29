@@ -1,6 +1,6 @@
 {
   "name": "wootonpad",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "description": "A desktop app for browsing, searching, and managing CLI coding sessions",
   "author": "Zakhar Morozov <tinkly.quill-8p@icloud.com>",
